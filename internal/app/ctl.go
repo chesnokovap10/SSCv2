@@ -44,7 +44,7 @@ func tailFile(path string, n int) string {
 // Control API: the running tray accepts commands on a per-user named pipe,
 // so everything the menu does can be scripted ("ssc.exe ctl <cmd> [arg]").
 //
-//	status | info | debug on|off | restore <mode> | mode off|aac | import windows | service install|remove
+//	status | info | debug on|off | restore <mode> | mode off|aac|ssc | import windows | service install|remove
 //	virtual install|remove
 //	scan | connect <addr> | headphones <addr> | mouse <addr|none>
 
@@ -179,8 +179,10 @@ func (a *App) ctl(args []string) string {
 			go a.disable()
 		case "aac":
 			go a.enable(config.ModeAAC)
+		case "ssc":
+			go a.enable(config.ModeSSC)
 		default:
-			return "error: mode off|aac"
+			return "error: mode off|aac|ssc"
 		}
 		return "ok"
 	case "import":

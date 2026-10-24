@@ -174,7 +174,7 @@ func (e *engine) run() error {
 		Logf:          logf,
 		Verbose:       e.cfg.Verbose,
 		Debug:         e.cfg.Debug,
-		ForceMediaMTU: map[bool]int{true: overMTU}[e.cfg.AACMode == "over"],
+		ForceMediaMTU: map[bool]int{true: overMTU}[e.cfg.Codec != "ssc" && e.cfg.AACMode == "over"],
 		USBIDs:        [][2]uint16{{e.cfg.VID, e.cfg.PID}},
 	}
 	if e.cfg.Mouse != "" {
@@ -250,9 +250,6 @@ func (e *engine) run() error {
 		err := e.session(e.target)
 		if e.ctx.Err() != nil {
 			return e.ctx.Err()
-		}
-		if errors.Is(err, ErrSSCNotReady) {
-			return err
 		}
 		msg := "ожидание наушников"
 		switch {
@@ -377,8 +374,12 @@ func (e *engine) session(addrStr string) error {
 		if !caps.SSC && !remoteCfg {
 			return errors.New("наушники не поддерживают SSC")
 		}
+		if caps.SSC && caps.SSCCap&0x04 == 0 {
+			// the phone would go 16-bit 44.1 kHz here; we only do 24-bit 48 kHz
+			return fmt.Errorf("наушники не поддерживают 24-битный SSC (cap 0x%02X) - выберите AAC", caps.SSCCap)
+		}
 		codec, mk = bt.CodecSSC, newSSC
-		if _, err := newSSC(e.srate, 0); err != nil {
+		if err := sscRateOK(e.srate); err != nil {
 			return err
 		}
 	default:
@@ -390,6 +391,12 @@ func (e *engine) session(addrStr string) error {
 
 	var mtu int
 	if rc, rmtu, ok := bt.RemoteConfigured(); ok {
+		if rc == bt.CodecSSC && bt.SSCConfig()&0x02 != 0 {
+			// UHQ (96 kHz) chosen by them: we encode the 48 kHz basic mode.
+			logf("headphones chose SSC UHQ (cap 0x%02X) themselves - reconnecting for basic SSC", bt.SSCConfig())
+			bt.Disconnect()
+			return errReconnect
+		}
 		if rc != codec {
 			// They connected by themselves and chose another codec: reconnect
 			// from our side, where we pick the codec.

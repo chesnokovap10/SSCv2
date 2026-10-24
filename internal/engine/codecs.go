@@ -1,18 +1,29 @@
 package engine
 
 import (
-	"errors"
+	"fmt"
 
+	"sscv2/internal/bt"
 	"sscv2/internal/codec/aac"
+	"sscv2/internal/codec/ssc"
 )
 
-type aacEnc struct{ e *aac.Encoder }
+type aacEnc struct {
+	e   *aac.Encoder
+	buf []int16
+}
 
-func (a *aacEnc) FrameLen() int                      { return a.e.FrameLen }
-func (a *aacEnc) Encode(pcm []int16) ([]byte, error) { return a.e.Encode(pcm) }
-func (a *aacEnc) BitrateKbps() int                   { return a.e.Bitrate / 1000 }
-func (a *aacEnc) Close()                             { a.e.Close() }
-func (a *aacEnc) Bandwidth() int                     { return a.e.Bandwidth() }
+func (a *aacEnc) FrameLen() int { return a.e.FrameLen }
+func (a *aacEnc) Encode(pcm []float32) ([]byte, error) {
+	a.buf = a.buf[:0]
+	for _, v := range pcm {
+		a.buf = append(a.buf, clamp16(v))
+	}
+	return a.e.Encode(a.buf)
+}
+func (a *aacEnc) BitrateKbps() int { return a.e.Bitrate / 1000 }
+func (a *aacEnc) Close()           { a.e.Close() }
+func (a *aacEnc) Bandwidth() int   { return a.e.Bandwidth() }
 
 // AAC packetisation:
 //   - "fit" (default): every LATM frame fits one AVDTP packet, the bitrate is
@@ -43,11 +54,71 @@ func newAAC(sampleRate, mtu int) (Encoder, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &aacEnc{e}, nil
+	return &aacEnc{e: e}, nil
 }
 
-// ErrSSCNotReady: the Samsung Scalable Codec mode is a placeholder for now.
-var ErrSSCNotReady = errors.New("режим SSC пока не реализован (заготовка)")
+type sscEnc struct{ e *ssc.Encoder }
 
-// newSSC is the hook for the future SSC encoder.
-func newSSC(sampleRate, mtu int) (Encoder, error) { return nil, ErrSSCNotReady }
+// framePerPacket: SSC packets like the phone (a2dp_vendor_ssc_send_frames),
+// one frame per packet, RTP timestamp = packet counter.
+func (s *sscEnc) framePerPacket() {}
+
+func (s *sscEnc) FrameLen() int                        { return ssc.FrameLen }
+func (s *sscEnc) Encode(pcm []float32) ([]byte, error) { return s.e.Encode(pcm) }
+func (s *sscEnc) BitrateKbps() int                     { return s.e.Bitrate / 1000 }
+func (s *sscEnc) Close()                               { s.e.Close() }
+
+// SSC bitrate like the phone (SscBitrateByBusyLevel, 24-bit 48 kHz): 192k,
+// 128k when the headphones lack the "no bitrate limit" bit (0x08). The phone
+// steps down to 128k/88k when the controller reports a busy link; we stay
+// at the top. 229/256/328k exist in the encoder but the phone does not use
+// them at 48 kHz.
+const (
+	sscBitrateFull    = 192000
+	sscBitrateLimited = 128000
+)
+
+// sscRateOK: SSC goes 24-bit 48 kHz (the phone's 16-bit mode is 44.1 kHz
+// only, and we capture float).
+func sscRateOK(sampleRate int) error {
+	if sampleRate != 48000 {
+		return fmt.Errorf("SSC: частота вывода %d Гц, нужна 48000 Гц - выберите её в настройках звука", sampleRate)
+	}
+	return nil
+}
+
+// sscBitrate: the phone's choice for this configuration byte, lowered if a
+// frame (CBR, 4-byte header included) would not fit one packet.
+func sscBitrate(sampleRate, mtu int, cfg uint8) (int, error) {
+	top := sscBitrateFull
+	if cfg != 0 && cfg&0x08 == 0 {
+		top = sscBitrateLimited
+	}
+	best := 0
+	for _, b := range ssc.BasicBitrates {
+		if ssc.FrameBytes(sampleRate, b) <= mtu && b <= top && b > best {
+			best = b
+		}
+	}
+	if best == 0 {
+		return 0, fmt.Errorf("SSC: канал %d байт меньше самого малого кадра", mtu)
+	}
+	return best, nil
+}
+
+func newSSC(sampleRate, mtu int) (Encoder, error) {
+	if err := sscRateOK(sampleRate); err != nil {
+		return nil, err
+	}
+	br, err := sscBitrate(sampleRate, mtu, bt.SSCConfig())
+	if err != nil {
+		return nil, err
+	}
+	e, err := ssc.New(sampleRate, br)
+	if err != nil {
+		return nil, err
+	}
+	logf("ssc: %d bps (config 0x%02X), frame %d bytes / %d ms, payload %d", br, bt.SSCConfig(),
+		ssc.FrameBytes(sampleRate, br), ssc.FrameLen*1000/sampleRate, mtu)
+	return &sscEnc{e}, nil
+}

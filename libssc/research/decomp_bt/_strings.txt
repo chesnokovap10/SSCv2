@@ -1,0 +1,443 @@
+0010e2af <- 00a9322c setPeerCodecCapabilities : A2DP_BuildInfoSsc
+0010e2af <- 00a9219c A2DP_VendorInitCodecConfigSsc : A2DP_BuildInfoSsc
+0010e2af <- 00a92bf4 setCodecConfig : A2DP_BuildInfoSsc
+0010e2af <- 00a92cc8 setCodecConfig : A2DP_BuildInfoSsc
+0010e2af <- 00a92e40 setCodecConfig : A2DP_BuildInfoSsc
+0010e2af <- 00a92d50 setCodecConfig : A2DP_BuildInfoSsc
+00111408 <- 0051915c dbfwPlusScoDumpNative : dbfwPlusScoDumpNative
+00111408 <- 00f97e48 ? : dbfwPlusScoDumpNative
+001150f4 <- 009012c0 setup_codec : SscVendorGetTrackBitrateLimitation
+001150f4 <- 009565d8 setup_codec : SscVendorGetTrackBitrateLimitation
+001157f2 <- 009774dc toString : const auto &aidl::vendor::samsung::hardware::bluetooth::audio::SehCodecCapabilities::Capabilities::get() const [_tag = aidl::vendor::samsung::hardware::bluetooth::audio::SehCodecCapabilities::Capabilities::Tag::sscCapabilities]
+001160d0 <- 00a933d0 A2DP_VendorLoadEncoderSsc : ssc_encoder_create
+001160d0 <- 00a93508 A2DP_VendorLoadEncoderSsc : ssc_encoder_create
+00118bf5 <- 00d5c834 ToString : LeSetAdvertisingSetRandomAddressComplete { 
+00119cc6 <- 00519230 dbfwPlusScoDebugInfoNative : dbfwPlusScoDebugInfoNative
+00119cc6 <- 00f97e60 ? : dbfwPlusScoDebugInfoNative
+0011d91b <- 009766c8 A2dpSscToHalConfig : Unknown ssc channel_mode={}
+0011dd35 <- 0095d030 toString : SehSscConfiguration{
+0011dd4a <- 00956d94 setup_codec : auto &aidl::vendor::samsung::hardware::bluetooth::audio::SehCodecConfiguration::CodecSpecific::get() [_tag = aidl::vendor::samsung::hardware::bluetooth::audio::SehCodecConfiguration::CodecSpecific::Tag::sscConfig]
+0011e298 <- 009b8310 toString : .sscCapabilities = 
+0011e6ac <- 00a943dc a2dp_vendor_ssc_send_frames : a2dp_ssc_get_num_frame
+0011e6ac <- 00a94448 a2dp_vendor_ssc_send_frames : a2dp_ssc_get_num_frame
+0011e6ac <- 00a9457c a2dp_vendor_ssc_send_frames : a2dp_ssc_get_num_frame
+0011e6ac <- 00a94360 a2dp_vendor_ssc_send_frames : a2dp_ssc_get_num_frame
+0012314f <- 006766a0 ProcessGattCtpNotification : processCommonCtpFailed
+0012598b <- 0094a41c getHalCodecConfiguration : A2dpSscToHalConfig
+0012598b <- 0094a3cc getHalCodecConfiguration : A2dpSscToHalConfig
+0012598b <- 0094a7b0 getHalCodecConfiguration : A2dpSscToHalConfig
+0012598b <- 00976700 A2dpSscToHalConfig : A2dpSscToHalConfig
+0012598b <- 00976698 A2dpSscToHalConfig : A2dpSscToHalConfig
+0012598b <- 00976768 A2dpSscToHalConfig : A2dpSscToHalConfig
+00126369 <- 00a939d4 a2dp_vendor_ssc_encoder_init : packages/modules/Bluetooth/system/stack/a2dp/a2dp_vendor_ssc_encoder.cc
+00126369 <- 00a93aa4 a2dp_vendor_ssc_encoder_init : packages/modules/Bluetooth/system/stack/a2dp/a2dp_vendor_ssc_encoder.cc
+00126369 <- 00a93b1c a2dp_vendor_ssc_encoder_init : packages/modules/Bluetooth/system/stack/a2dp/a2dp_vendor_ssc_encoder.cc
+00126369 <- 00a93be4 a2dp_vendor_ssc_encoder_init : packages/modules/Bluetooth/system/stack/a2dp/a2dp_vendor_ssc_encoder.cc
+00126369 <- 00a93d48 a2dp_vendor_ssc_encoder_init : packages/modules/Bluetooth/system/stack/a2dp/a2dp_vendor_ssc_encoder.cc
+00126369 <- 00a93c84 a2dp_vendor_ssc_encoder_init : packages/modules/Bluetooth/system/stack/a2dp/a2dp_vendor_ssc_encoder.cc
+00126369 <- 00a93e24 a2dp_vendor_ssc_set_current_encoder_info : packages/modules/Bluetooth/system/stack/a2dp/a2dp_vendor_ssc_encoder.cc
+00126369 <- 00a94064 a2dp_vendor_ssc_feeding_reset : packages/modules/Bluetooth/system/stack/a2dp/a2dp_vendor_ssc_encoder.cc
+00126369 <- 00a940bc a2dp_vendor_ssc_feeding_reset : packages/modules/Bluetooth/system/stack/a2dp/a2dp_vendor_ssc_encoder.cc
+00126369 <- 00a93fa8 a2dp_vendor_ssc_encoder_cleanup : packages/modules/Bluetooth/system/stack/a2dp/a2dp_vendor_ssc_encoder.cc
+00126369 <- 00a9348c A2DP_VendorLoadEncoderSsc : packages/modules/Bluetooth/system/stack/a2dp/a2dp_vendor_ssc_encoder.cc
+00126369 <- 00a93848 A2DP_VendorLoadEncoderSsc : packages/modules/Bluetooth/system/stack/a2dp/a2dp_vendor_ssc_encoder.cc
+00126369 <- 00a9388c A2DP_VendorLoadEncoderSsc : packages/modules/Bluetooth/system/stack/a2dp/a2dp_vendor_ssc_encoder.cc
+00126369 <- 00a93708 A2DP_VendorLoadEncoderSsc : packages/modules/Bluetooth/system/stack/a2dp/a2dp_vendor_ssc_encoder.cc
+00126369 <- 00a93798 A2DP_VendorLoadEncoderSsc : packages/modules/Bluetooth/system/stack/a2dp/a2dp_vendor_ssc_encoder.cc
+00126369 <- 00a935f8 A2DP_VendorLoadEncoderSsc : packages/modules/Bluetooth/system/stack/a2dp/a2dp_vendor_ssc_encoder.cc
+00126369 <- 00a93688 A2DP_VendorLoadEncoderSsc : packages/modules/Bluetooth/system/stack/a2dp/a2dp_vendor_ssc_encoder.cc
+00126369 <- 00a934f4 A2DP_VendorLoadEncoderSsc : packages/modules/Bluetooth/system/stack/a2dp/a2dp_vendor_ssc_encoder.cc
+00126369 <- 00a93584 A2DP_VendorLoadEncoderSsc : packages/modules/Bluetooth/system/stack/a2dp/a2dp_vendor_ssc_encoder.cc
+00126369 <- 00a94194 a2dp_vendor_ssc_feeding_flush : packages/modules/Bluetooth/system/stack/a2dp/a2dp_vendor_ssc_encoder.cc
+00126369 <- 00a9428c a2dp_vendor_ssc_send_frames : packages/modules/Bluetooth/system/stack/a2dp/a2dp_vendor_ssc_encoder.cc
+00126369 <- 00a943d8 a2dp_vendor_ssc_send_frames : packages/modules/Bluetooth/system/stack/a2dp/a2dp_vendor_ssc_encoder.cc
+00126369 <- 00a9443c a2dp_vendor_ssc_send_frames : packages/modules/Bluetooth/system/stack/a2dp/a2dp_vendor_ssc_encoder.cc
+00126369 <- 00a94578 a2dp_vendor_ssc_send_frames : packages/modules/Bluetooth/system/stack/a2dp/a2dp_vendor_ssc_encoder.cc
+00126369 <- 00a945f8 a2dp_vendor_ssc_send_frames : packages/modules/Bluetooth/system/stack/a2dp/a2dp_vendor_ssc_encoder.cc
+00126369 <- 00a94770 a2dp_vendor_ssc_send_frames : packages/modules/Bluetooth/system/stack/a2dp/a2dp_vendor_ssc_encoder.cc
+00126369 <- 00a95a44 a2dp_vendor_ssc_send_frames : packages/modules/Bluetooth/system/stack/a2dp/a2dp_vendor_ssc_encoder.cc
+00126369 <- 00a95adc a2dp_vendor_ssc_send_frames : packages/modules/Bluetooth/system/stack/a2dp/a2dp_vendor_ssc_encoder.cc
+00126369 <- 00a95cc8 a2dp_vendor_ssc_send_frames : packages/modules/Bluetooth/system/stack/a2dp/a2dp_vendor_ssc_encoder.cc
+00126369 <- 00a95d4c a2dp_vendor_ssc_send_frames : packages/modules/Bluetooth/system/stack/a2dp/a2dp_vendor_ssc_encoder.cc
+00126369 <- 00a96064 a2dp_vendor_ssc_send_frames : packages/modules/Bluetooth/system/stack/a2dp/a2dp_vendor_ssc_encoder.cc
+00126369 <- 00a965c8 a2dp_vendor_ssc_send_frames : packages/modules/Bluetooth/system/stack/a2dp/a2dp_vendor_ssc_encoder.cc
+00126369 <- 00a9622c a2dp_vendor_ssc_send_frames : packages/modules/Bluetooth/system/stack/a2dp/a2dp_vendor_ssc_encoder.cc
+00126369 <- 00a9635c a2dp_vendor_ssc_send_frames : packages/modules/Bluetooth/system/stack/a2dp/a2dp_vendor_ssc_encoder.cc
+00126369 <- 00a960ec a2dp_vendor_ssc_send_frames : packages/modules/Bluetooth/system/stack/a2dp/a2dp_vendor_ssc_encoder.cc
+00126369 <- 00a96174 a2dp_vendor_ssc_send_frames : packages/modules/Bluetooth/system/stack/a2dp/a2dp_vendor_ssc_encoder.cc
+00126369 <- 00a95e3c a2dp_vendor_ssc_send_frames : packages/modules/Bluetooth/system/stack/a2dp/a2dp_vendor_ssc_encoder.cc
+00126369 <- 00a95efc a2dp_vendor_ssc_send_frames : packages/modules/Bluetooth/system/stack/a2dp/a2dp_vendor_ssc_encoder.cc
+00126369 <- 00a95fd0 a2dp_vendor_ssc_send_frames : packages/modules/Bluetooth/system/stack/a2dp/a2dp_vendor_ssc_encoder.cc
+00126369 <- 00a95c2c a2dp_vendor_ssc_send_frames : packages/modules/Bluetooth/system/stack/a2dp/a2dp_vendor_ssc_encoder.cc
+00126369 <- 00a948cc a2dp_vendor_ssc_send_frames : packages/modules/Bluetooth/system/stack/a2dp/a2dp_vendor_ssc_encoder.cc
+00126369 <- 00a94b0c a2dp_vendor_ssc_send_frames : packages/modules/Bluetooth/system/stack/a2dp/a2dp_vendor_ssc_encoder.cc
+00126369 <- 00a94e2c a2dp_vendor_ssc_send_frames : packages/modules/Bluetooth/system/stack/a2dp/a2dp_vendor_ssc_encoder.cc
+00126369 <- 00a94ee4 a2dp_vendor_ssc_send_frames : packages/modules/Bluetooth/system/stack/a2dp/a2dp_vendor_ssc_encoder.cc
+00126369 <- 00a950b0 a2dp_vendor_ssc_send_frames : packages/modules/Bluetooth/system/stack/a2dp/a2dp_vendor_ssc_encoder.cc
+00126369 <- 00a95120 a2dp_vendor_ssc_send_frames : packages/modules/Bluetooth/system/stack/a2dp/a2dp_vendor_ssc_encoder.cc
+00126369 <- 00a94cc8 a2dp_vendor_ssc_send_frames : packages/modules/Bluetooth/system/stack/a2dp/a2dp_vendor_ssc_encoder.cc
+00126369 <- 00a951c8 a2dp_vendor_ssc_send_frames : packages/modules/Bluetooth/system/stack/a2dp/a2dp_vendor_ssc_encoder.cc
+00126369 <- 00a955e0 a2dp_vendor_ssc_send_frames : packages/modules/Bluetooth/system/stack/a2dp/a2dp_vendor_ssc_encoder.cc
+00126369 <- 00a94fec a2dp_vendor_ssc_send_frames : packages/modules/Bluetooth/system/stack/a2dp/a2dp_vendor_ssc_encoder.cc
+00126369 <- 00a959b0 a2dp_vendor_ssc_send_frames : packages/modules/Bluetooth/system/stack/a2dp/a2dp_vendor_ssc_encoder.cc
+00126369 <- 00a947fc a2dp_vendor_ssc_send_frames : packages/modules/Bluetooth/system/stack/a2dp/a2dp_vendor_ssc_encoder.cc
+00126369 <- 00a9435c a2dp_vendor_ssc_send_frames : packages/modules/Bluetooth/system/stack/a2dp/a2dp_vendor_ssc_encoder.cc
+00126782 <- 00add658 ToString : LeReadPeerResolvableAddressComplete { 
+0012ba08 <- 007517cc bta_av_co_audio_close : ProcessClose
+0012ba08 <- 00751900 bta_av_co_audio_close : ProcessClose
+0012ba08 <- 00751860 bta_av_co_audio_close : ProcessClose
+0012ba08 <- 007b6018 bta_av_sink_co_audio_close : ProcessClose
+0012ba08 <- 007b60c4 bta_av_sink_co_audio_close : ProcessClose
+0012ce99 <- 009593b0 toString : , isScmstEnabled: 
+0012ce99 <- 00904a98 toString : , isScmstEnabled: 
+0012da72 <- 00a934ac A2DP_VendorLoadEncoderSsc : ssc_encoder_create_func ({})
+0012da8f <- 00a933f0 A2DP_VendorLoadEncoderSsc : ssc_encoder_destroy
+0012da8f <- 00a9360c A2DP_VendorLoadEncoderSsc : ssc_encoder_destroy
+0012fd5e <- 00d4ae34 ToString : LeSetRandomAddressComplete { 
+00131140 <- 00538870 setIsScoManagedByAudioNative : setIsScoManagedByAudioNative
+00131140 <- 00538904 setIsScoManagedByAudioNative : setIsScoManagedByAudioNative
+00131140 <- 00f99c70 ? : setIsScoManagedByAudioNative
+0013cb13 <- 00a9209c A2DP_VendorAdjustCodecSsc : A2DP_VendorAdjustCodecSsc
+0013cb3e <- 00a93e24 a2dp_vendor_ssc_set_current_encoder_info : a2dp_vendor_ssc_set_current_encoder_info
+00144f1c <- 00a921f4 A2DP_VendorInitCodecConfigSsc : A2DP_VendorInitCodecConfigSsc
+0014ca87 <- 00a94770 a2dp_vendor_ssc_send_frames : a2dp_ssc_encode_frames
+0014ca87 <- 00a95a44 a2dp_vendor_ssc_send_frames : a2dp_ssc_encode_frames
+0014ca87 <- 00a95adc a2dp_vendor_ssc_send_frames : a2dp_ssc_encode_frames
+0014ca87 <- 00a95ccc a2dp_vendor_ssc_send_frames : a2dp_ssc_encode_frames
+0014ca87 <- 00a95d4c a2dp_vendor_ssc_send_frames : a2dp_ssc_encode_frames
+0014ca87 <- 00a965d0 a2dp_vendor_ssc_send_frames : a2dp_ssc_encode_frames
+0014ca87 <- 00a9622c a2dp_vendor_ssc_send_frames : a2dp_ssc_encode_frames
+0014ca87 <- 00a9635c a2dp_vendor_ssc_send_frames : a2dp_ssc_encode_frames
+0014ca87 <- 00a95c30 a2dp_vendor_ssc_send_frames : a2dp_ssc_encode_frames
+001542fc <- 00a93fa8 a2dp_vendor_ssc_encoder_cleanup : a2dp_vendor_ssc_encoder_cleanup
+0015431c <- 00a94e60 a2dp_vendor_ssc_send_frames : SSC output_pos :  [ {} ]!!!
+0015b6be <- 00901894 setup_codec : No ssc_data_parcel
+0015c4e4 <- 00a93b1c a2dp_vendor_ssc_encoder_init : A2DP_VendorUnloadEncoderSsc
+0015c4e4 <- 00a93798 A2DP_VendorLoadEncoderSsc : A2DP_VendorUnloadEncoderSsc
+0015c4e4 <- 00a93688 A2DP_VendorLoadEncoderSsc : A2DP_VendorUnloadEncoderSsc
+0015c4e4 <- 00a93584 A2DP_VendorLoadEncoderSsc : A2DP_VendorUnloadEncoderSsc
+0015e7dc <- 00d88fa4 ToString : LeAdvFilterBroadcasterAddressComplete { 
+00162214 <- 0075567c ContentProtectIsScmst : ContentProtectIsScmst
+00162214 <- 007556c8 ContentProtectIsScmst : ContentProtectIsScmst
+00162214 <- 007557e8 AudioProtectHasScmst : ContentProtectIsScmst
+00162214 <- 00755834 AudioProtectHasScmst : ContentProtectIsScmst
+00164599 <- 00a90c60 A2DP_VendorCodecTypeEqualsSsc : A2DP_VendorCodecTypeEqualsSsc
+00164599 <- 00a90ca4 A2DP_VendorCodecTypeEqualsSsc : A2DP_VendorCodecTypeEqualsSsc
+00164599 <- 00a90e08 A2DP_VendorCodecTypeEqualsSsc : A2DP_VendorCodecTypeEqualsSsc
+00164599 <- 00a90e24 A2DP_VendorCodecTypeEqualsSsc : A2DP_VendorCodecTypeEqualsSsc
+00164599 <- 00a90fcc A2DP_VendorCodecTypeEqualsSsc : A2DP_VendorCodecTypeEqualsSsc
+001645b7 <- 00a9109c A2DP_VendorCodecEqualsSsc : A2DP_VendorCodecEqualsSsc
+001645b7 <- 00a910e0 A2DP_VendorCodecEqualsSsc : A2DP_VendorCodecEqualsSsc
+001645b7 <- 00a91260 A2DP_VendorCodecEqualsSsc : A2DP_VendorCodecEqualsSsc
+001645b7 <- 00a9127c A2DP_VendorCodecEqualsSsc : A2DP_VendorCodecEqualsSsc
+001645b7 <- 00a91420 A2DP_VendorCodecEqualsSsc : A2DP_VendorCodecEqualsSsc
+001645d1 <- 00a93834 A2DP_VendorLoadEncoderSsc : ssc_encoder_create_func for 2nd ({})
+0016a419 <- 0079f830 btif_av_need_dual_play_for_ssc : btif_av_need_dual_play_for_ssc
+0016c573 <- 00a948cc a2dp_vendor_ssc_send_frames : a2dp_ssc_encode_frames_on_dual_play
+0016c573 <- 00a94b0c a2dp_vendor_ssc_send_frames : a2dp_ssc_encode_frames_on_dual_play
+0016c573 <- 00a94e2c a2dp_vendor_ssc_send_frames : a2dp_ssc_encode_frames_on_dual_play
+0016c573 <- 00a94ee4 a2dp_vendor_ssc_send_frames : a2dp_ssc_encode_frames_on_dual_play
+0016c573 <- 00a950b4 a2dp_vendor_ssc_send_frames : a2dp_ssc_encode_frames_on_dual_play
+0016c573 <- 00a95124 a2dp_vendor_ssc_send_frames : a2dp_ssc_encode_frames_on_dual_play
+0016c573 <- 00a94ccc a2dp_vendor_ssc_send_frames : a2dp_ssc_encode_frames_on_dual_play
+0016c573 <- 00a951c8 a2dp_vendor_ssc_send_frames : a2dp_ssc_encode_frames_on_dual_play
+0016c573 <- 00a955e0 a2dp_vendor_ssc_send_frames : a2dp_ssc_encode_frames_on_dual_play
+0016c573 <- 00a94fec a2dp_vendor_ssc_send_frames : a2dp_ssc_encode_frames_on_dual_play
+0016c573 <- 00a959b4 a2dp_vendor_ssc_send_frames : a2dp_ssc_encode_frames_on_dual_play
+0016f93b <- 00529068 getOwnAddressCb : getOwnAddressCb
+0017b54d <- 0094b694 SscBitrateByBusyLevel : SscBitrateByBusyLevel
+0017b54d <- 00975978 SscBitrateByBusyLevel : SscBitrateByBusyLevel
+0017bd7f <- 00a91680 A2DP_VendorGetTrackBitsPerSampleSsc : A2DP_VendorGetTrackBitsPerSampleSsc
+0017bda3 <- 00a91858 A2DP_VendorGetSscType : A2DP_VendorGetSscType
+0017bdf0 <- 00a94064 a2dp_vendor_ssc_feeding_reset : a2dp_vendor_ssc_feeding_reset
+0017bdf0 <- 00a940bc a2dp_vendor_ssc_feeding_reset : a2dp_vendor_ssc_feeding_reset
+0017be81 <- 00a97840 btm_brcm_enable_dbfwplus_linkloss_cmpl : [BTCORE][DBFW+]btm_brcm_enable_dbfwpluslinklosscmpl: p_params->opcode:0x{:04x}, param_len:0x{:04x}
+0017ec21 <- 00f98570 ? : linkLossCallback
+0018308f <- 00a91774 A2DP_VendorGetTrackBitrateLimitationSsc : A2DP_VendorGetTrackBitrateLimitationSsc
+00183103 <- 00a938c8 log : a2dp_vendor_ssc_encoder
+00183103 <- 00a939c4 a2dp_vendor_ssc_encoder_init : a2dp_vendor_ssc_encoder
+00183103 <- 00a93ac4 a2dp_vendor_ssc_encoder_init : a2dp_vendor_ssc_encoder
+00183103 <- 00a93af4 a2dp_vendor_ssc_encoder_init : a2dp_vendor_ssc_encoder
+00183103 <- 00a93bc8 a2dp_vendor_ssc_encoder_init : a2dp_vendor_ssc_encoder
+00183103 <- 00a93d20 a2dp_vendor_ssc_encoder_init : a2dp_vendor_ssc_encoder
+00183103 <- 00a93c70 a2dp_vendor_ssc_encoder_init : a2dp_vendor_ssc_encoder
+00183103 <- 00a93df8 a2dp_vendor_ssc_set_current_encoder_info : a2dp_vendor_ssc_encoder
+00183103 <- 00a94050 a2dp_vendor_ssc_feeding_reset : a2dp_vendor_ssc_encoder
+00183103 <- 00a940b4 a2dp_vendor_ssc_feeding_reset : a2dp_vendor_ssc_encoder
+00183103 <- 00a93f70 a2dp_vendor_ssc_encoder_cleanup : a2dp_vendor_ssc_encoder
+00183103 <- 00a934a4 A2DP_VendorLoadEncoderSsc : a2dp_vendor_ssc_encoder
+00183103 <- 00a93758 A2DP_VendorLoadEncoderSsc : a2dp_vendor_ssc_encoder
+00183103 <- 00a93790 A2DP_VendorLoadEncoderSsc : a2dp_vendor_ssc_encoder
+00183103 <- 00a93648 A2DP_VendorLoadEncoderSsc : a2dp_vendor_ssc_encoder
+00183103 <- 00a93680 A2DP_VendorLoadEncoderSsc : a2dp_vendor_ssc_encoder
+00183103 <- 00a93544 A2DP_VendorLoadEncoderSsc : a2dp_vendor_ssc_encoder
+00183103 <- 00a9357c A2DP_VendorLoadEncoderSsc : a2dp_vendor_ssc_encoder
+00183103 <- 00a9415c a2dp_vendor_ssc_feeding_flush : a2dp_vendor_ssc_encoder
+00183103 <- 00a942ac a2dp_vendor_ssc_send_frames : a2dp_vendor_ssc_encoder
+00183103 <- 00a943d0 a2dp_vendor_ssc_send_frames : a2dp_vendor_ssc_encoder
+00183103 <- 00a94434 a2dp_vendor_ssc_send_frames : a2dp_vendor_ssc_encoder
+00183103 <- 00a94564 a2dp_vendor_ssc_send_frames : a2dp_vendor_ssc_encoder
+00183103 <- 00a945d0 a2dp_vendor_ssc_send_frames : a2dp_vendor_ssc_encoder
+00183103 <- 00a94738 a2dp_vendor_ssc_send_frames : a2dp_vendor_ssc_encoder
+00183103 <- 00a95a28 a2dp_vendor_ssc_send_frames : a2dp_vendor_ssc_encoder
+00183103 <- 00a95ad4 a2dp_vendor_ssc_send_frames : a2dp_vendor_ssc_encoder
+00183103 <- 00a95cb8 a2dp_vendor_ssc_send_frames : a2dp_vendor_ssc_encoder
+00183103 <- 00a95d48 a2dp_vendor_ssc_send_frames : a2dp_vendor_ssc_encoder
+00183103 <- 00a96080 a2dp_vendor_ssc_send_frames : a2dp_vendor_ssc_encoder
+00183103 <- 00a965ac a2dp_vendor_ssc_send_frames : a2dp_vendor_ssc_encoder
+00183103 <- 00a96240 a2dp_vendor_ssc_send_frames : a2dp_vendor_ssc_encoder
+00183103 <- 00a96390 a2dp_vendor_ssc_send_frames : a2dp_vendor_ssc_encoder
+00183103 <- 00a960dc a2dp_vendor_ssc_send_frames : a2dp_vendor_ssc_encoder
+00183103 <- 00a96160 a2dp_vendor_ssc_send_frames : a2dp_vendor_ssc_encoder
+00183103 <- 00a95e4c a2dp_vendor_ssc_send_frames : a2dp_vendor_ssc_encoder
+00183103 <- 00a95f1c a2dp_vendor_ssc_send_frames : a2dp_vendor_ssc_encoder
+00183103 <- 00a95fe8 a2dp_vendor_ssc_send_frames : a2dp_vendor_ssc_encoder
+00183103 <- 00a95c1c a2dp_vendor_ssc_send_frames : a2dp_vendor_ssc_encoder
+00183103 <- 00a94894 a2dp_vendor_ssc_send_frames : a2dp_vendor_ssc_encoder
+00183103 <- 00a94ad8 a2dp_vendor_ssc_send_frames : a2dp_vendor_ssc_encoder
+00183103 <- 00a94e58 a2dp_vendor_ssc_send_frames : a2dp_vendor_ssc_encoder
+00183103 <- 00a94f14 a2dp_vendor_ssc_send_frames : a2dp_vendor_ssc_encoder
+00183103 <- 00a950a0 a2dp_vendor_ssc_send_frames : a2dp_vendor_ssc_encoder
+00183103 <- 00a95110 a2dp_vendor_ssc_send_frames : a2dp_vendor_ssc_encoder
+00183103 <- 00a94cb8 a2dp_vendor_ssc_send_frames : a2dp_vendor_ssc_encoder
+00183103 <- 00a951f8 a2dp_vendor_ssc_send_frames : a2dp_vendor_ssc_encoder
+00183103 <- 00a95604 a2dp_vendor_ssc_send_frames : a2dp_vendor_ssc_encoder
+00183103 <- 00a9501c a2dp_vendor_ssc_send_frames : a2dp_vendor_ssc_encoder
+00183103 <- 00a95984 a2dp_vendor_ssc_send_frames : a2dp_vendor_ssc_encoder
+00183103 <- 00a947cc a2dp_vendor_ssc_send_frames : a2dp_vendor_ssc_encoder
+00183103 <- 00a94340 a2dp_vendor_ssc_send_frames : a2dp_vendor_ssc_encoder
+0018a280 <- 0080f674 SetIsScoManagedByAudio : SetIsScoManagedByAudio
+0018a280 <- 0080f6c8 SetIsScoManagedByAudio : SetIsScoManagedByAudio
+0018bc81 <- 00a91f48 A2DP_VendorGetEncoderInterfaceSsc : A2DP_IsVendorSourceCodecValidSsc
+0018bc81 <- 00a907e0 A2DP_IsVendorSourceCodecValidSsc : A2DP_IsVendorSourceCodecValidSsc
+00193bb6 <- 00a94f1c a2dp_vendor_ssc_send_frames : SSC output_pos_2nd : [ {} ]!!!
+00193bd5 <- 00a97888 btm_brcm_enable_dbfwplus_linkloss_cmpl : [BTCORE][DBFW+]btm_brcm_enable_dbfwpluslinklosscmpl status = 0x{:02x}
+00198ab9 <- 0067724c ProcessGattNotifEvent : AseStateMachineProcessCodecConfigured
+00198ab9 <- 006772ec ProcessGattNotifEvent : AseStateMachineProcessCodecConfigured
+00198ab9 <- 0067a32c ProcessGattNotifEvent : AseStateMachineProcessCodecConfigured
+00198ab9 <- 00679238 ProcessGattNotifEvent : AseStateMachineProcessCodecConfigured
+00198ab9 <- 00678a34 ProcessGattNotifEvent : AseStateMachineProcessCodecConfigured
+00198ab9 <- 00678040 ProcessGattNotifEvent : AseStateMachineProcessCodecConfigured
+00198ab9 <- 00677778 ProcessGattNotifEvent : AseStateMachineProcessCodecConfigured
+00198ab9 <- 00679ab0 ProcessGattNotifEvent : AseStateMachineProcessCodecConfigured
+00198ab9 <- 0067a4c4 ProcessGattNotifEvent : AseStateMachineProcessCodecConfigured
+00198ab9 <- 00679b40 ProcessGattNotifEvent : AseStateMachineProcessCodecConfigured
+00198ab9 <- 00679bf4 ProcessGattNotifEvent : AseStateMachineProcessCodecConfigured
+00198ab9 <- 0067a5c4 ProcessGattNotifEvent : AseStateMachineProcessCodecConfigured
+00198ab9 <- 0067a6c8 ProcessGattNotifEvent : AseStateMachineProcessCodecConfigured
+00198ab9 <- 0067a62c ProcessGattNotifEvent : AseStateMachineProcessCodecConfigured
+00198ab9 <- 0067a05c ProcessGattNotifEvent : AseStateMachineProcessCodecConfigured
+00198ab9 <- 0067a2fc ProcessGattNotifEvent : AseStateMachineProcessCodecConfigured
+00198ab9 <- 0067a7a8 ProcessGattNotifEvent : AseStateMachineProcessCodecConfigured
+00198ab9 <- 0067a54c ProcessGattNotifEvent : AseStateMachineProcessCodecConfigured
+00198ab9 <- 0067a828 ProcessGattNotifEvent : AseStateMachineProcessCodecConfigured
+00198ab9 <- 0067a86c ProcessGattNotifEvent : AseStateMachineProcessCodecConfigured
+00198ab9 <- 0067a970 ProcessGattNotifEvent : AseStateMachineProcessCodecConfigured
+00198ab9 <- 0067a8c4 ProcessGattNotifEvent : AseStateMachineProcessCodecConfigured
+00198ab9 <- 0067a9d4 ProcessGattNotifEvent : AseStateMachineProcessCodecConfigured
+00198ab9 <- 0067a18c ProcessGattNotifEvent : AseStateMachineProcessCodecConfigured
+00198ab9 <- 006774b0 ProcessGattNotifEvent : AseStateMachineProcessCodecConfigured
+0019b60b <- 00959a88 toString : sscConfig: 
+0019bb0e <- 009b9ba8 IsCodecOffloadingEnabled : .sscConfig = 
+0019bfcc <- 00a94194 a2dp_vendor_ssc_feeding_flush : a2dp_vendor_ssc_feeding_flush
+0019bfea <- 00a942b0 a2dp_vendor_ssc_send_frames : a2dp_vendor_ssc_send_frames
+0019bfea <- 00a945f8 a2dp_vendor_ssc_send_frames : a2dp_vendor_ssc_send_frames
+0019bfea <- 00a947fc a2dp_vendor_ssc_send_frames : a2dp_vendor_ssc_send_frames
+0019c006 <- 00a93aa4 a2dp_vendor_ssc_encoder_init : a2dp_vendor_ssc_reset_encoder
+001a3980 <- 00a91b60 A2DP_VendorCodecInfoStringSsc : A2DP_ParseInfoSsc fail: 
+001a39b1 <- 00a939d4 a2dp_vendor_ssc_encoder_init : a2dp_vendor_ssc_encoder_init
+001a93b4 <- 00755788 AudioProtectHasScmst : AudioProtectHasScmst
+001a93b4 <- 00755870 AudioProtectHasScmst : AudioProtectHasScmst
+001b38f1 <- 009b9b1c IsCodecOffloadingEnabled : , .isScmstEnabled = 
+001b3df7 <- 00a9213c A2DP_VendorInitCodecConfigSsc : A2DPSM-SSC HiFi 1st is disabled
+001b3e50 <- 00a9348c A2DP_VendorLoadEncoderSsc : A2DP_VendorLoadEncoderSsc
+001b3e50 <- 00a93848 A2DP_VendorLoadEncoderSsc : A2DP_VendorLoadEncoderSsc
+001b3e50 <- 00a9388c A2DP_VendorLoadEncoderSsc : A2DP_VendorLoadEncoderSsc
+001b3e50 <- 00a93708 A2DP_VendorLoadEncoderSsc : A2DP_VendorLoadEncoderSsc
+001b3e50 <- 00a935f8 A2DP_VendorLoadEncoderSsc : A2DP_VendorLoadEncoderSsc
+001b3e50 <- 00a934f4 A2DP_VendorLoadEncoderSsc : A2DP_VendorLoadEncoderSsc
+001b3e6a <- 00a93410 A2DP_VendorLoadEncoderSsc : ssc_encode
+001b3e6a <- 00a9371c A2DP_VendorLoadEncoderSsc : ssc_encode
+001bb692 <- 00976738 A2dpSscToHalConfig : Unknown ssc bits_per_sample={}
+001c16c7 <- 006f1280 GattWriteCallback : All vendor specific reply write complete, size {} successCounter {}
+001cc009 <- 009b9c60 IsCodecOffloadingEnabled : ssc_offloading_capability_match
+001cc009 <- 009ba35c IsCodecOffloadingEnabled : ssc_offloading_capability_match
+001cc427 <- 00a90b70 A2DP_VendorUsesRtpHeaderSsc : A2DP_VendorUsesRtpHeaderSsc
+001cc443 <- 00a92324 A2dpCodecConfigSsc : A2dpCodecConfigSsc
+001cf824 <- 00528820 parseParams : isScannable
+001d496c <- 00a91980 A2DP_VendorGetPacketTimestampSsc : A2DP_VendorGetPacketTimestampSsc
+001dc79d <- 00a91bd8 A2DP_VendorCodecInfoStringSsc : 	name: SSC
+
+001dc7d3 <- 00a908e4 A2DP_ParseInfoSsc : A2DP_ParseInfoSsc
+001e2854 <- 0072f334 GattcCallback : ProcessCtpNotificationQueue
+001e2854 <- 0072fcf4 GattcCallback : ProcessCtpNotificationQueue
+001e2854 <- 0072f834 GattcCallback : ProcessCtpNotificationQueue
+001e4d6a <- 00a930cc setPeerCodecCapabilities : packages/modules/Bluetooth/system/stack/a2dp/a2dp_vendor_ssc.cc
+001e4d6a <- 00a93158 setPeerCodecCapabilities : packages/modules/Bluetooth/system/stack/a2dp/a2dp_vendor_ssc.cc
+001e4d6a <- 00a9322c setPeerCodecCapabilities : packages/modules/Bluetooth/system/stack/a2dp/a2dp_vendor_ssc.cc
+001e4d6a <- 00a9219c A2DP_VendorInitCodecConfigSsc : packages/modules/Bluetooth/system/stack/a2dp/a2dp_vendor_ssc.cc
+001e4d6a <- 00a921f4 A2DP_VendorInitCodecConfigSsc : packages/modules/Bluetooth/system/stack/a2dp/a2dp_vendor_ssc.cc
+001e4d6a <- 00a9209c A2DP_VendorAdjustCodecSsc : packages/modules/Bluetooth/system/stack/a2dp/a2dp_vendor_ssc.cc
+001e4d6a <- 00a92324 A2dpCodecConfigSsc : packages/modules/Bluetooth/system/stack/a2dp/a2dp_vendor_ssc.cc
+001e4d6a <- 00a923c4 init : packages/modules/Bluetooth/system/stack/a2dp/a2dp_vendor_ssc.cc
+001e4d6a <- 00a92484 setCodecConfig : packages/modules/Bluetooth/system/stack/a2dp/a2dp_vendor_ssc.cc
+001e4d6a <- 00a92578 setCodecConfig : packages/modules/Bluetooth/system/stack/a2dp/a2dp_vendor_ssc.cc
+001e4d6a <- 00a925b8 setCodecConfig : packages/modules/Bluetooth/system/stack/a2dp/a2dp_vendor_ssc.cc
+001e4d6a <- 00a92730 setCodecConfig : packages/modules/Bluetooth/system/stack/a2dp/a2dp_vendor_ssc.cc
+001e4d6a <- 00a92a08 setCodecConfig : packages/modules/Bluetooth/system/stack/a2dp/a2dp_vendor_ssc.cc
+001e4d6a <- 00a92b88 setCodecConfig : packages/modules/Bluetooth/system/stack/a2dp/a2dp_vendor_ssc.cc
+001e4d6a <- 00a92bf4 setCodecConfig : packages/modules/Bluetooth/system/stack/a2dp/a2dp_vendor_ssc.cc
+001e4d6a <- 00a92cc8 setCodecConfig : packages/modules/Bluetooth/system/stack/a2dp/a2dp_vendor_ssc.cc
+001e4d6a <- 00a92e40 setCodecConfig : packages/modules/Bluetooth/system/stack/a2dp/a2dp_vendor_ssc.cc
+001e4d6a <- 00a92d50 setCodecConfig : packages/modules/Bluetooth/system/stack/a2dp/a2dp_vendor_ssc.cc
+001e4d6a <- 00a92ae0 setCodecConfig : packages/modules/Bluetooth/system/stack/a2dp/a2dp_vendor_ssc.cc
+001e4d6a <- 00a92ef4 setCodecConfig : packages/modules/Bluetooth/system/stack/a2dp/a2dp_vendor_ssc.cc
+001e4d6a <- 00a92f74 setCodecConfig : packages/modules/Bluetooth/system/stack/a2dp/a2dp_vendor_ssc.cc
+001e4d6a <- 00a92828 setCodecConfig : packages/modules/Bluetooth/system/stack/a2dp/a2dp_vendor_ssc.cc
+001e4d6a <- 00a928e0 setCodecConfig : packages/modules/Bluetooth/system/stack/a2dp/a2dp_vendor_ssc.cc
+001e4d6a <- 00a92938 setCodecConfig : packages/modules/Bluetooth/system/stack/a2dp/a2dp_vendor_ssc.cc
+001e4d6a <- 00a92ff0 setCodecConfig : packages/modules/Bluetooth/system/stack/a2dp/a2dp_vendor_ssc.cc
+001e4d6a <- 00a91980 A2DP_VendorGetPacketTimestampSsc : packages/modules/Bluetooth/system/stack/a2dp/a2dp_vendor_ssc.cc
+001e4d6a <- 00a91f48 A2DP_VendorGetEncoderInterfaceSsc : packages/modules/Bluetooth/system/stack/a2dp/a2dp_vendor_ssc.cc
+001e4d6a <- 00a91fe0 A2DP_VendorGetEncoderInterfaceSsc : packages/modules/Bluetooth/system/stack/a2dp/a2dp_vendor_ssc.cc
+001e4d6a <- 00a914c4 A2DP_VendorGetTrackSampleRateSsc : packages/modules/Bluetooth/system/stack/a2dp/a2dp_vendor_ssc.cc
+001e4d6a <- 00a91534 A2DP_VendorGetTrackSampleRateSsc : packages/modules/Bluetooth/system/stack/a2dp/a2dp_vendor_ssc.cc
+001e4d6a <- 00a91680 A2DP_VendorGetTrackBitsPerSampleSsc : packages/modules/Bluetooth/system/stack/a2dp/a2dp_vendor_ssc.cc
+001e4d6a <- 00a91858 A2DP_VendorGetSscType : packages/modules/Bluetooth/system/stack/a2dp/a2dp_vendor_ssc.cc
+001e4d6a <- 00a91774 A2DP_VendorGetTrackBitrateLimitationSsc : packages/modules/Bluetooth/system/stack/a2dp/a2dp_vendor_ssc.cc
+001e4d6a <- 00a908e4 A2DP_ParseInfoSsc : packages/modules/Bluetooth/system/stack/a2dp/a2dp_vendor_ssc.cc
+001e4d6a <- 00a90aa4 A2DP_IsVendorPeerSinkCodecValidSsc : packages/modules/Bluetooth/system/stack/a2dp/a2dp_vendor_ssc.cc
+001e4d6a <- 00a90c60 A2DP_VendorCodecTypeEqualsSsc : packages/modules/Bluetooth/system/stack/a2dp/a2dp_vendor_ssc.cc
+001e4d6a <- 00a90ca4 A2DP_VendorCodecTypeEqualsSsc : packages/modules/Bluetooth/system/stack/a2dp/a2dp_vendor_ssc.cc
+001e4d6a <- 00a90e08 A2DP_VendorCodecTypeEqualsSsc : packages/modules/Bluetooth/system/stack/a2dp/a2dp_vendor_ssc.cc
+001e4d6a <- 00a90e24 A2DP_VendorCodecTypeEqualsSsc : packages/modules/Bluetooth/system/stack/a2dp/a2dp_vendor_ssc.cc
+001e4d6a <- 00a90fcc A2DP_VendorCodecTypeEqualsSsc : packages/modules/Bluetooth/system/stack/a2dp/a2dp_vendor_ssc.cc
+001e4d6a <- 00a90b70 A2DP_VendorUsesRtpHeaderSsc : packages/modules/Bluetooth/system/stack/a2dp/a2dp_vendor_ssc.cc
+001e4d6a <- 00a9109c A2DP_VendorCodecEqualsSsc : packages/modules/Bluetooth/system/stack/a2dp/a2dp_vendor_ssc.cc
+001e4d6a <- 00a910e0 A2DP_VendorCodecEqualsSsc : packages/modules/Bluetooth/system/stack/a2dp/a2dp_vendor_ssc.cc
+001e4d6a <- 00a91260 A2DP_VendorCodecEqualsSsc : packages/modules/Bluetooth/system/stack/a2dp/a2dp_vendor_ssc.cc
+001e4d6a <- 00a9127c A2DP_VendorCodecEqualsSsc : packages/modules/Bluetooth/system/stack/a2dp/a2dp_vendor_ssc.cc
+001e4d6a <- 00a91420 A2DP_VendorCodecEqualsSsc : packages/modules/Bluetooth/system/stack/a2dp/a2dp_vendor_ssc.cc
+001e4d6a <- 00a907e0 A2DP_IsVendorSourceCodecValidSsc : packages/modules/Bluetooth/system/stack/a2dp/a2dp_vendor_ssc.cc
+001e4daa <- 00a930f4 setPeerCodecCapabilities : a2dp_vendor_ssc
+001e4daa <- 00a93184 setPeerCodecCapabilities : a2dp_vendor_ssc
+001e4daa <- 00a931fc setPeerCodecCapabilities : a2dp_vendor_ssc
+001e4daa <- 00a92190 A2DP_VendorInitCodecConfigSsc : a2dp_vendor_ssc
+001e4daa <- 00a921d4 A2DP_VendorInitCodecConfigSsc : a2dp_vendor_ssc
+001e4daa <- 00a92080 A2DP_VendorAdjustCodecSsc : a2dp_vendor_ssc
+001e4daa <- 00a922fc A2dpCodecConfigSsc : a2dp_vendor_ssc
+001e4daa <- 00a923a8 init : a2dp_vendor_ssc
+001e4daa <- 00a9245c setCodecConfig : a2dp_vendor_ssc
+001e4daa <- 00a9255c setCodecConfig : a2dp_vendor_ssc
+001e4daa <- 00a92598 setCodecConfig : a2dp_vendor_ssc
+001e4daa <- 00a926f8 setCodecConfig : a2dp_vendor_ssc
+001e4daa <- 00a92a20 setCodecConfig : a2dp_vendor_ssc
+001e4daa <- 00a92b64 setCodecConfig : a2dp_vendor_ssc
+001e4daa <- 00a92bd8 setCodecConfig : a2dp_vendor_ssc
+001e4daa <- 00a92ca8 setCodecConfig : a2dp_vendor_ssc
+001e4daa <- 00a92e20 setCodecConfig : a2dp_vendor_ssc
+001e4daa <- 00a92d30 setCodecConfig : a2dp_vendor_ssc
+001e4daa <- 00a92af0 setCodecConfig : a2dp_vendor_ssc
+001e4daa <- 00a92f00 setCodecConfig : a2dp_vendor_ssc
+001e4daa <- 00a92f70 setCodecConfig : a2dp_vendor_ssc
+001e4daa <- 00a92834 setCodecConfig : a2dp_vendor_ssc
+001e4daa <- 00a928c0 setCodecConfig : a2dp_vendor_ssc
+001e4daa <- 00a92908 setCodecConfig : a2dp_vendor_ssc
+001e4daa <- 00a92fd4 setCodecConfig : a2dp_vendor_ssc
+001e4daa <- 00a9194c A2DP_VendorGetPacketTimestampSsc : a2dp_vendor_ssc
+001e4daa <- 00a91f28 A2DP_VendorGetEncoderInterfaceSsc : a2dp_vendor_ssc
+001e4daa <- 00a91fb8 A2DP_VendorGetEncoderInterfaceSsc : a2dp_vendor_ssc
+001e4daa <- 00a914ec A2DP_VendorGetTrackSampleRateSsc : a2dp_vendor_ssc
+001e4daa <- 00a91554 A2DP_VendorGetTrackSampleRateSsc : a2dp_vendor_ssc
+001e4daa <- 00a916a8 A2DP_VendorGetTrackBitsPerSampleSsc : a2dp_vendor_ssc
+001e4daa <- 00a91880 A2DP_VendorGetSscType : a2dp_vendor_ssc
+001e4daa <- 00a91788 A2DP_VendorGetTrackBitrateLimitationSsc : a2dp_vendor_ssc
+001e4daa <- 00a90978 A2DP_ParseInfoSsc : a2dp_vendor_ssc
+001e4daa <- 00a90a70 A2DP_IsVendorPeerSinkCodecValidSsc : a2dp_vendor_ssc
+001e4daa <- 00a90c58 A2DP_VendorCodecTypeEqualsSsc : a2dp_vendor_ssc
+001e4daa <- 00a90c98 A2DP_VendorCodecTypeEqualsSsc : a2dp_vendor_ssc
+001e4daa <- 00a90e00 A2DP_VendorCodecTypeEqualsSsc : a2dp_vendor_ssc
+001e4daa <- 00a90e54 A2DP_VendorCodecTypeEqualsSsc : a2dp_vendor_ssc
+001e4daa <- 00a90fb0 A2DP_VendorCodecTypeEqualsSsc : a2dp_vendor_ssc
+001e4daa <- 00a90b38 A2DP_VendorUsesRtpHeaderSsc : a2dp_vendor_ssc
+001e4daa <- 00a91094 A2DP_VendorCodecEqualsSsc : a2dp_vendor_ssc
+001e4daa <- 00a910d4 A2DP_VendorCodecEqualsSsc : a2dp_vendor_ssc
+001e4daa <- 00a91258 A2DP_VendorCodecEqualsSsc : a2dp_vendor_ssc
+001e4daa <- 00a912ac A2DP_VendorCodecEqualsSsc : a2dp_vendor_ssc
+001e4daa <- 00a91404 A2DP_VendorCodecEqualsSsc : a2dp_vendor_ssc
+001e4daa <- 00a907bc A2DP_IsVendorSourceCodecValidSsc : a2dp_vendor_ssc
+001ec4ef <- 009767a0 A2dpSscToHalConfig : Unknown ssc sample_rate={}
+001f4166 <- 009796e0 toString : SehSscCapabilities{
+001f485a <- 00a914c4 A2DP_VendorGetTrackSampleRateSsc : A2DP_VendorGetTrackSampleRateSsc
+001f485a <- 00a91534 A2DP_VendorGetTrackSampleRateSsc : A2DP_VendorGetTrackSampleRateSsc
+001f487b <- 00a9210c A2DP_VendorInitCodecConfigSsc : SSC_HIFI_DISABLED_1
+001fbed7 <- 0097723c toString : sscCapabilities: 
+001fc497 <- 00a90aa4 A2DP_IsVendorPeerSinkCodecValidSsc : A2DP_IsVendorPeerSinkCodecValidSsc
+001fc4c9 <- 00a95cc0 a2dp_vendor_ssc_send_frames : a2dp_ssc_encode_frames, under flow!
+001ff977 <- 00f98370 ? : addressConsolidateCallback
+002035bf <- 00959d28 toString : const auto &aidl::vendor::samsung::hardware::bluetooth::audio::SehCodecConfiguration::CodecSpecific::get() const [_tag = aidl::vendor::samsung::hardware::bluetooth::audio::SehCodecConfiguration::CodecSpecific::Tag::sscConfig]
+002035bf <- 00976380 HalConfigToA2dpConfig : const auto &aidl::vendor::samsung::hardware::bluetooth::audio::SehCodecConfiguration::CodecSpecific::get() const [_tag = aidl::vendor::samsung::hardware::bluetooth::audio::SehCodecConfiguration::CodecSpecific::Tag::sscConfig]
+002040d2 <- 00a91fe0 A2DP_VendorGetEncoderInterfaceSsc : A2DP_VendorGetEncoderInterfaceSsc
+002040f4 <- 00a93be4 a2dp_vendor_ssc_encoder_init : a2dp_vendor_ssc_encoder_update
+002040f4 <- 00a93d48 a2dp_vendor_ssc_encoder_init : a2dp_vendor_ssc_encoder_update
+002040f4 <- 00a93c84 a2dp_vendor_ssc_encoder_init : a2dp_vendor_ssc_encoder_update
+0022ecd0 <- 004ca578 print_raw_with_column :       <unknown>must specify at least one of read, write, or append accesscreating or truncating a file requires write or append accessBox<dyn Any>thread caused non-unwinding panic. aborting.
+ï¿½failed to write whole bufferLazyLock instance has previously been poisoneduse of std::thread::current() is not possible after the thread's local data has been destroyedfatal runtime error: init_current() was re-entrant, which indicates a bug in the Rust threading implementation, aborting
+failed to open /dev/randomfailed to generate random data/dev/random
+0022ecd6 <- 004cbce8 output_filename :       <unknown>must specify at least one of read, write, or append accesscreating or truncating a file requires write or append accessBox<dyn Any>thread caused non-unwinding panic. aborting.
+ï¿½failed to write whole bufferLazyLock instance has previously been poisoneduse of std::thread::current() is not possible after the thread's local data has been destroyedfatal runtime error: init_current() was re-entrant, which indicates a bug in the Rust threading implementation, aborting
+failed to open /dev/randomfailed to generate random data/dev/random
+0022ecd6 <- 004cbcac output_filename :       <unknown>must specify at least one of read, write, or append accesscreating or truncating a file requires write or append accessBox<dyn Any>thread caused non-unwinding panic. aborting.
+ï¿½failed to write whole bufferLazyLock instance has previously been poisoneduse of std::thread::current() is not possible after the thread's local data has been destroyedfatal runtime error: init_current() was re-entrant, which indicates a bug in the Rust threading implementation, aborting
+failed to open /dev/randomfailed to generate random data/dev/random
+0022ecd6 <- 004cbcbc output_filename :       <unknown>must specify at least one of read, write, or append accesscreating or truncating a file requires write or append accessBox<dyn Any>thread caused non-unwinding panic. aborting.
+ï¿½failed to write whole bufferLazyLock instance has previously been poisoneduse of std::thread::current() is not possible after the thread's local data has been destroyedfatal runtime error: init_current() was re-entrant, which indicates a bug in the Rust threading implementation, aborting
+failed to open /dev/randomfailed to generate random data/dev/random
+0022ecd6 <- 004ca658 print_raw_with_column :       <unknown>must specify at least one of read, write, or append accesscreating or truncating a file requires write or append accessBox<dyn Any>thread caused non-unwinding panic. aborting.
+ï¿½failed to write whole bufferLazyLock instance has previously been poisoneduse of std::thread::current() is not possible after the thread's local data has been destroyedfatal runtime error: init_current() was re-entrant, which indicates a bug in the Rust threading implementation, aborting
+failed to open /dev/randomfailed to generate random data/dev/random
+0022ecdf <- 004cad98 open_c :       <unknown>must specify at least one of read, write, or append accesscreating or truncating a file requires write or append accessBox<dyn Any>thread caused non-unwinding panic. aborting.
+ï¿½failed to write whole bufferLazyLock instance has previously been poisoneduse of std::thread::current() is not possible after the thread's local data has been destroyedfatal runtime error: init_current() was re-entrant, which indicates a bug in the Rust threading implementation, aborting
+failed to open /dev/randomfailed to generate random data/dev/random
+0022ed19 <- 004cac94 open_c :       <unknown>must specify at least one of read, write, or append accesscreating or truncating a file requires write or append accessBox<dyn Any>thread caused non-unwinding panic. aborting.
+ï¿½failed to write whole bufferLazyLock instance has previously been poisoneduse of std::thread::current() is not possible after the thread's local data has been destroyedfatal runtime error: init_current() was re-entrant, which indicates a bug in the Rust threading implementation, aborting
+failed to open /dev/randomfailed to generate random data/dev/random
+0022ed19 <- 004cadac open_c :       <unknown>must specify at least one of read, write, or append accesscreating or truncating a file requires write or append accessBox<dyn Any>thread caused non-unwinding panic. aborting.
+ï¿½failed to write whole bufferLazyLock instance has previously been poisoneduse of std::thread::current() is not possible after the thread's local data has been destroyedfatal runtime error: init_current() was re-entrant, which indicates a bug in the Rust threading implementation, aborting
+failed to open /dev/randomfailed to generate random data/dev/random
+0022ed56 <- 004cb714 payload_as_str :       <unknown>must specify at least one of read, write, or append accesscreating or truncating a file requires write or append accessBox<dyn Any>thread caused non-unwinding panic. aborting.
+ï¿½failed to write whole bufferLazyLock instance has previously been poisoneduse of std::thread::current() is not possible after the thread's local data has been destroyedfatal runtime error: init_current() was re-entrant, which indicates a bug in the Rust threading implementation, aborting
+failed to open /dev/randomfailed to generate random data/dev/random
+0022ed62 <- 004cb8f8 panic_with_hook :       <unknown>must specify at least one of read, write, or append accesscreating or truncating a file requires write or append accessBox<dyn Any>thread caused non-unwinding panic. aborting.
+ï¿½failed to write whole bufferLazyLock instance has previously been poisoneduse of std::thread::current() is not possible after the thread's local data has been destroyedfatal runtime error: init_current() was re-entrant, which indicates a bug in the Rust threading implementation, aborting
+failed to open /dev/randomfailed to generate random data/dev/random
+0022ed8f <- 004cfa58 fmt :       <unknown>must specify at least one of read, write, or append accesscreating or truncating a file requires write or append accessBox<dyn Any>thread caused non-unwinding panic. aborting.
+ï¿½failed to write whole bufferLazyLock instance has previously been poisoneduse of std::thread::current() is not possible after the thread's local data has been destroyedfatal runtime error: init_current() was re-entrant, which indicates a bug in the Rust threading implementation, aborting
+failed to open /dev/randomfailed to generate random data/dev/random
+0022ed92 <- 00f71928 ? :       <unknown>must specify at least one of read, write, or append accesscreating or truncating a file requires write or append accessBox<dyn Any>thread caused non-unwinding panic. aborting.
+ï¿½failed to write whole bufferLazyLock instance has previously been poisoneduse of std::thread::current() is not possible after the thread's local data has been destroyedfatal runtime error: init_current() was re-entrant, which indicates a bug in the Rust threading implementation, aborting
+failed to open /dev/randomfailed to generate random data/dev/random
+0022edae <- 004cbdd4 panic_poisoned :       <unknown>must specify at least one of read, write, or append accesscreating or truncating a file requires write or append accessBox<dyn Any>thread caused non-unwinding panic. aborting.
+ï¿½failed to write whole bufferLazyLock instance has previously been poisoneduse of std::thread::current() is not possible after the thread's local data has been destroyedfatal runtime error: init_current() was re-entrant, which indicates a bug in the Rust threading implementation, aborting
+failed to open /dev/randomfailed to generate random data/dev/random
+0022eddc <- 004cbf40 init_current :       <unknown>must specify at least one of read, write, or append accesscreating or truncating a file requires write or append accessBox<dyn Any>thread caused non-unwinding panic. aborting.
+ï¿½failed to write whole bufferLazyLock instance has previously been poisoneduse of std::thread::current() is not possible after the thread's local data has been destroyedfatal runtime error: init_current() was re-entrant, which indicates a bug in the Rust threading implementation, aborting
+failed to open /dev/randomfailed to generate random data/dev/random
+0022ee3a <- 004cbf24 init_current :       <unknown>must specify at least one of read, write, or append accesscreating or truncating a file requires write or append accessBox<dyn Any>thread caused non-unwinding panic. aborting.
+ï¿½failed to write whole bufferLazyLock instance has previously been poisoneduse of std::thread::current() is not possible after the thread's local data has been destroyedfatal runtime error: init_current() was re-entrant, which indicates a bug in the Rust threading implementation, aborting
+failed to open /dev/randomfailed to generate random data/dev/random
+0022eeb3 <- 004cdd6c getrandom :       <unknown>must specify at least one of read, write, or append accesscreating or truncating a file requires write or append accessBox<dyn Any>thread caused non-unwinding panic. aborting.
+ï¿½failed to write whole bufferLazyLock instance has previously been poisoneduse of std::thread::current() is not possible after the thread's local data has been destroyedfatal runtime error: init_current() was re-entrant, which indicates a bug in the Rust threading implementation, aborting
+failed to open /dev/randomfailed to generate random data/dev/random
+0022eecd <- 004cdd44 getrandom :       <unknown>must specify at least one of read, write, or append accesscreating or truncating a file requires write or append accessBox<dyn Any>thread caused non-unwinding panic. aborting.
+ï¿½failed to write whole bufferLazyLock instance has previously been poisoneduse of std::thread::current() is not possible after the thread's local data has been destroyedfatal runtime error: init_current() was re-entrant, which indicates a bug in the Rust threading implementation, aborting
+failed to open /dev/randomfailed to generate random data/dev/random
+0022eecd <- 004cdb48 getrandom :       <unknown>must specify at least one of read, write, or append accesscreating or truncating a file requires write or append accessBox<dyn Any>thread caused non-unwinding panic. aborting.
+ï¿½failed to write whole bufferLazyLock instance has previously been poisoneduse of std::thread::current() is not possible after the thread's local data has been destroyedfatal runtime error: init_current() was re-entrant, which indicates a bug in the Rust threading implementation, aborting
+failed to open /dev/randomfailed to generate random data/dev/random
+0022eeeb <- 004cdb94 getrandom :       <unknown>must specify at least one of read, write, or append accesscreating or truncating a file requires write or append accessBox<dyn Any>thread caused non-unwinding panic. aborting.
+ï¿½failed to write whole bufferLazyLock instance has previously been poisoneduse of std::thread::current() is not possible after the thread's local data has been destroyedfatal runtime error: init_current() was re-entrant, which indicates a bug in the Rust threading implementation, aborting
+failed to open /dev/randomfailed to generate random data/dev/random
+0022eef6 <- 004cdd0c getrandom :       <unknown>must specify at least one of read, write, or append accesscreating or truncating a file requires write or append accessBox<dyn Any>thread caused non-unwinding panic. aborting.
+ï¿½failed to write whole bufferLazyLock instance has previously been poisoneduse of std::thread::current() is not possible after the thread's local data has been destroyedfatal runtime error: init_current() was re-entrant, which indicates a bug in the Rust threading implementation, aborting
+failed to open /dev/randomfailed to generate random data/dev/random

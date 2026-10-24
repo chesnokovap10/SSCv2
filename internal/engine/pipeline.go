@@ -9,22 +9,24 @@ import (
 	"sscv2/internal/bt"
 )
 
-// Encoder turns fixed-size blocks of interleaved int16 PCM into codec frames.
+// Encoder turns fixed-size blocks of interleaved stereo float PCM (-1..1)
+// into codec frames; each codec converts to its own sample format (AAC
+// int16, SSC 24 bit).
 type Encoder interface {
 	FrameLen() int // PCM frames consumed per Encode call
-	Encode(pcm []int16) ([]byte, error)
+	Encode(pcm []float32) ([]byte, error)
 	BitrateKbps() int
 	Close()
 }
 
-// pipeline: captured float32 -> stereo downmix -> int16 -> encoder ->
+// pipeline: captured float32 -> stereo downmix (clipped to -1..1) -> encoder ->
 // MTU-sized RTP payloads -> bt.SendMedia. Called on the capture thread.
 type pipeline struct {
 	mu     sync.Mutex
 	enc    Encoder
 	maxRaw int
 	ts     uint32
-	pcm    []int16 // pending samples (residual between callbacks)
+	pcm    []float32 // pending stereo samples (residual between callbacks)
 	stereo []float32
 	accum  []byte
 	active atomic.Bool
@@ -32,6 +34,9 @@ type pipeline struct {
 	muted atomic.Bool
 	// frag: split frames larger than one packet (RFC 3016)
 	frag bool
+	// perPacket: one frame per packet and the RTP timestamp counts packets,
+	// not samples (SSC, as the phone sends it)
+	perPacket bool
 
 	maxFrame atomic.Int32 // largest encoded frame in the stats window
 	split    atomic.Int32 // frames larger than one packet in the window
@@ -55,17 +60,20 @@ func (p *pipeline) set(enc Encoder, mtu int) {
 	}
 	p.ts = 0
 	p.pcm = p.pcm[:0]
+	_, p.perPacket = enc.(interface{ framePerPacket() })
 	p.active.Store(enc != nil)
 }
 
-func clamp16(v float32) int16 {
+func clip(v float32) float32 {
 	if v > 1 {
-		v = 1
+		return 1
 	} else if v < -1 {
-		v = -1
+		return -1
 	}
-	return int16(v * 32767)
+	return v
 }
+
+func clamp16(v float32) int16 { return int16(clip(v) * 32767) }
 
 // onCapture receives `frames` interleaved frames of `ch` channels.
 func (p *pipeline) onCapture(s []float32, frames, ch int) {
@@ -95,14 +103,14 @@ func (p *pipeline) onCapture(s []float32, frames, ch int) {
 	switch {
 	case ch == 2:
 		for _, v := range s[:frames*2] {
-			p.pcm = append(p.pcm, clamp16(v))
+			p.pcm = append(p.pcm, clip(v))
 			if a := float32(math.Abs(float64(v))); a > peak {
 				peak = a
 			}
 		}
 	case ch == 1:
 		for _, v := range s[:frames] {
-			x := clamp16(v)
+			x := clip(v)
 			p.pcm = append(p.pcm, x, x)
 		}
 	default:
@@ -117,7 +125,7 @@ func (p *pipeline) onCapture(s []float32, frames, ch int) {
 			fc, lfe := at(2), at(3)
 			l := c[0] + 0.707107*fc + 0.707107*(at(4)+at(6)) + 0.5*lfe
 			r := c[1] + 0.707107*fc + 0.707107*(at(5)+at(7)) + 0.5*lfe
-			p.pcm = append(p.pcm, clamp16(l), clamp16(r))
+			p.pcm = append(p.pcm, clip(l), clip(r))
 		}
 	}
 	if peak > math.Float32frombits(p.peak.Load()) {
@@ -126,6 +134,12 @@ func (p *pipeline) onCapture(s []float32, frames, ch int) {
 
 	block := p.enc.FrameLen() * 2
 	off := 0
+	if p.perPacket {
+		p.encodePerPacket(block, &off)
+		n := copy(p.pcm, p.pcm[off:])
+		p.pcm = p.pcm[:n]
+		return
+	}
 	p.accum = p.accum[:0]
 	firstTS := p.ts
 	nframes := 0
@@ -175,6 +189,26 @@ func (p *pipeline) onCapture(s []float32, frames, ch int) {
 	// keep the residual for the next callback
 	n := copy(p.pcm, p.pcm[off:])
 	p.pcm = p.pcm[:n]
+}
+
+// encodePerPacket: one frame per packet, the RTP timestamp counts packets.
+func (p *pipeline) encodePerPacket(block int, off *int) {
+	for *off+block <= len(p.pcm) {
+		out, err := p.enc.Encode(p.pcm[*off : *off+block])
+		*off += block
+		if err != nil || len(out) == 0 {
+			continue
+		}
+		p.encBytes.Add(uint64(len(out)))
+		if int32(len(out)) > p.maxFrame.Load() {
+			p.maxFrame.Store(int32(len(out)))
+		}
+		if len(out) > p.maxRaw {
+			p.split.Add(1) // too big: counted as a send failure
+		}
+		p.ts++
+		bt.SendMedia(out, p.ts)
+	}
 }
 
 // loudWithin reports audio above silence during the last d.

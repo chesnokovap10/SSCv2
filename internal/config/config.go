@@ -21,7 +21,7 @@ type Mode string
 const (
 	ModeOff Mode = "off" // adapter belongs to Windows Bluetooth
 	ModeAAC Mode = "aac" // adapter in WinUSB mode, AAC to the headphones
-	ModeSSC Mode = "ssc" // Samsung Scalable Codec (placeholder)
+	ModeSSC Mode = "ssc" // adapter in WinUSB mode, SSC (libssc) to the headphones
 )
 
 // Device is a remembered Bluetooth peer.

@@ -18,8 +18,9 @@
 | `test/corpus.py` | кадры целиком: все 14 битрейтов × 10 сигналов |
 | `test/edge.py` | фаза 4: длинные прогоны, неизвестные и меняющиеся битрейты, крайние сигналы, 16 бит, 44,1 кГц |
 | `test/signals.py` | детерминированные тестовые сигналы × профили |
+| `test/cgo_ref.py` | фаза 5: хэши кадров блоба для Go-теста `internal/codec/ssc` (cgo-сборка = блоб) |
 | `tools/gen_tables.py` | `research/tables.json` → `src/ssc_tables.c` |
-| `research/` | реверс: таблицы режимов, модель заголовка, дифф-стенд, декомпиляция |
+| `research/` | реверс: таблицы режимов, модель заголовка, дифф-стенд, декомпиляция; `decomp_bt/` — SSC-часть BT-стека телефона |
 
 ## Сборка и проверка
 
@@ -51,9 +52,16 @@ py -3.14 libssc\research\difftest\build_ref.py <opus-dir> --tag v1.1.5 --patch e
 py -3.14 libssc\research\difftest\difftest.py
 # декомпиляция (JDK 21 + Ghidra портативно в D:\2\tools)
 pwsh libssc\research\ghidra\decompile.ps1     # -> research\decomp\*.c
+pwsh libssc\research\ghidra\decompile_bt.ps1  # BT-стек телефона, SSC-функции -> research\decomp_bt (~15 мин)
 ```
 
-В каталогах нет `.go`-файлов, `go build` их не трогает.
+В каталогах нет `.go`-файлов, `go build` их не трогает. В приложение libssc
+входит через cgo-пакет `internal/codec/ssc` (обёртки `zssc_*.c` от `tools/genwrap`):
+
+```powershell
+go test ./internal/codec/ssc        # 14 битрейтов против хэшей блоба (testdata/oracle.txt)
+py -3.14 libssc\test\cgo_ref.py     # переснять хэши с блоба
+```
 
 ## oracle/
 

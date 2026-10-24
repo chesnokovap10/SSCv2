@@ -146,8 +146,6 @@ func (a *App) startup() {
 	switch {
 	case st.Mode == driver.NotPresent:
 		a.t.Balloon("SSCv2", "Встроенный адаптер MediaTek не найден.", 1)
-	case want == config.ModeSSC:
-		a.setMode(config.ModeOff)
 	case want != config.ModeOff && (st.Mode == driver.WinUSB || svcRunning):
 		// resume: no UAC prompt needed (driver already switched or service)
 		go a.enable(want)
@@ -240,10 +238,6 @@ func (a *App) refresh() {
 func (a *App) enable(m config.Mode) {
 	a.opMu.Lock()
 	defer a.opMu.Unlock()
-	if m == config.ModeSSC {
-		a.t.Balloon("SSCv2", engine.ErrSSCNotReady.Error(), 1)
-		return
-	}
 	defer a.setBusy("")
 
 	a.mu.Lock()
@@ -722,7 +716,7 @@ func (a *App) menu() []tray.Item {
 		{Separator: true},
 		{Text: "Выкл (Bluetooth Windows)", ID: idModeOff, Radio: true, Checked: mode == config.ModeOff, Disabled: busy},
 		{Text: "Режим AAC", ID: idModeAAC, Radio: true, Checked: mode == config.ModeAAC, Disabled: busy},
-		{Text: "Режим SSC (заготовка)", ID: idModeSSC, Radio: true, Checked: mode == config.ModeSSC, Disabled: true},
+		{Text: "Режим SSC", ID: idModeSSC, Radio: true, Checked: mode == config.ModeSSC, Disabled: busy},
 		{Text: "AAC 256 кбит/с (выше лимита наушников)", ID: idAAC256, Checked: a.s.AACMode == "over", Disabled: busy},
 		{Separator: true},
 	}

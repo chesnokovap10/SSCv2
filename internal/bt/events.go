@@ -208,6 +208,18 @@ func (s *stackT) onA2DP(cp *C.uint8_t, p []byte) {
 			}
 		}
 
+	case C.A2DP_SUBEVENT_SIGNALING_MEDIA_CODEC_OTHER_CONFIGURATION:
+		n := int(C.a2dp_subevent_signaling_media_codec_other_configuration_get_media_codec_information_len(cp))
+		info := unsafe.Slice((*byte)(unsafe.Pointer(C.a2dp_subevent_signaling_media_codec_other_configuration_get_media_codec_information(cp))), n)
+		if n >= 7 {
+			vid := uint32(info[0]) | uint32(info[1])<<8 | uint32(info[2])<<16 | uint32(info[3])<<24
+			codec := uint16(info[4]) | uint16(info[5])<<8
+			if vid == C.SSC_VENDOR_ID && codec == C.SSC_CODEC_ID {
+				s.sscCfg.Store(uint32(info[6]))
+				s.logf("bt: SSC configured, cap 0x%02X", info[6])
+			}
+		}
+
 	case C.A2DP_SUBEVENT_SIGNALING_MEDIA_CODEC_SBC_CAPABILITY:
 		s.caps.SBC = true
 		s.caps.SBCSeid = uint8(C.a2dp_subevent_signaling_media_codec_sbc_capability_get_remote_seid(cp))
@@ -293,6 +305,7 @@ func (s *stackT) onA2DP(cp *C.uint8_t, p []byte) {
 		wasUp := s.connected.Load() || s.streaming.Load()
 		s.connected.Store(false)
 		s.streaming.Store(false)
+		s.sscCfg.Store(0)
 		s.resetMedia()
 		s.a2dpCid = 0
 		if s.avrcpCid != 0 {

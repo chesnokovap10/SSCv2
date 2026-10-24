@@ -45,9 +45,9 @@ type mpkt struct {
 }
 
 type stackT struct {
-	logf  func(string, ...any)
-	keys  KeyStore
-	opts  Options
+	logf   func(string, ...any)
+	keys   KeyStore
+	opts   Options
 	events chan Event
 
 	localAddr Addr
@@ -72,14 +72,14 @@ type stackT struct {
 	discCh    chan error
 	inquiryCh chan error
 
-	a2dpCid, avrcpCid  uint16
-	localSeid, remoteSeid uint8
+	a2dpCid, avrcpCid         uint16
+	localSeid, remoteSeid     uint8
 	sbcSeid, aacSeid, sscSeid uint8
-	caps      RemoteCaps
-	remote    Addr
-	hasRemote bool
-	found     []Found
-	inquiring bool
+	caps                      RemoteCaps
+	remote                    Addr
+	hasRemote                 bool
+	found                     []Found
+	inquiring                 bool
 
 	// ---- shared ----
 	aclHandle atomic.Uint32
@@ -92,17 +92,20 @@ type stackT struct {
 	// connected to us); codec in remoteCodec. Reset by Configure/Connect.
 	remoteCfg   atomic.Bool
 	remoteCodec atomic.Int32
+	// sscCfg: capability byte of the SSC configuration in force (0x0C basic,
+	// 0x0E with the 96 kHz UHQ bit), whoever set it
+	sscCfg atomic.Uint32
 
 	// media queue: encoder goroutine -> BTstack thread
-	mqmu       sync.Mutex
-	mq         [64]mpkt
-	mqHead     int
-	mqTail     int
-	mqCount    int
-	mqReq      atomic.Bool
-	sendFails  atomic.Uint32
-	sentOK     atomic.Uint64
-	txBuf      mpkt
+	mqmu      sync.Mutex
+	mq        [64]mpkt
+	mqHead    int
+	mqTail    int
+	mqCount   int
+	mqReq     atomic.Bool
+	sendFails atomic.Uint32
+	sentOK    atomic.Uint64
+	txBuf     mpkt
 
 	vol   volPump
 	mouse mouseBridge
@@ -250,8 +253,8 @@ func (s *stackT) loop(started chan struct{}) {
 		localName = C.CString(name)
 	}
 	C.gap_set_local_name(localName)
-	C.gap_set_class_of_device(0x200414)      // Audio / Loudspeaker
-	C.gap_set_allow_role_switch(true)        // many headphones want to be master
+	C.gap_set_class_of_device(0x200414) // Audio / Loudspeaker
+	C.gap_set_allow_role_switch(true)   // many headphones want to be master
 	C.gap_set_default_link_policy_settings(0x0005)
 	C.gap_set_page_timeout(0x8000) // ~20 s
 
@@ -465,7 +468,12 @@ func Configure(ctx context.Context, codec Codec, sampleRate uint32, channels uin
 		case CodecAAC:
 			rc = C.ssc_set_config_aac(cid, C.uint8_t(local), C.uint8_t(remote), C.uint32_t(sampleRate), C.uint8_t(channels), C.uint32_t(aacBitrate))
 		case CodecSSC:
+			// Like the phone (A2dpCodecConfigSsc::setCodecConfig): 24-bit
+			// 48 kHz (0x04) plus the sink's "no bitrate limit" bit (0x08).
 			cap := C.uint8_t(C.SSC_CAP_BASIC)
+			if s.caps.SSCCap != 0 {
+				cap = C.uint8_t(0x04 | s.caps.SSCCap&0x08)
+			}
 			if sampleRate == 88200 || sampleRate == 96000 {
 				cap = C.SSC_CAP_UHQ
 			}
@@ -498,6 +506,9 @@ func RemoteConfigured() (Codec, int, bool) {
 	}
 	return Codec(s.remoteCodec.Load()), int(s.mtu.Load()), true
 }
+
+// SSCConfig is the capability byte of the configured SSC stream (0 if none).
+func SSCConfig() uint8 { return uint8(stack.sscCfg.Load()) }
 
 // StartStream sends AVDTP START and waits for it.
 func StartStream(ctx context.Context) error {

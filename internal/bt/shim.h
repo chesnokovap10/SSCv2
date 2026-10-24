@@ -14,7 +14,10 @@ enum { SSC_SRC_HCI = 0, SSC_SRC_A2DP, SSC_SRC_AVRCP, SSC_SRC_SM, SSC_SRC_HIDS };
 /* SSC vendor codec (Samsung Scalable Codec). */
 #define SSC_VENDOR_ID 0x00000075u
 #define SSC_CODEC_ID  0x0103u
-#define SSC_CAP_BASIC 0x0Cu  /* 44.1/48k basic bitrates */
+/* Capability byte (phone's A2DP_ParseInfoSsc): 0xF0 sample rates (0x10 48k,
+ * 0x20 44.1k, 0x40 32k, 0x80 96k), 0x08 no bitrate limit, 0x04 24-bit 48k,
+ * 0x02 UHQ v2 (96k). */
+#define SSC_CAP_BASIC 0x0Cu  /* 24-bit 48k, no bitrate limit */
 #define SSC_CAP_UHQ   0x0Eu  /* basic + 96k UHQ */
 
 void ssc_log_init(int verbose);
