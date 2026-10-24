@@ -23,6 +23,7 @@ type EngineConfig struct {
 	Verbose      bool   `json:"verbose,omitempty"`
 	Debug        bool   `json:"debug,omitempty"`
 	AACMode      string `json:"aacMode,omitempty"` // "fit" | "frag"
+	SSCBitrate   int    `json:"sscBitrate,omitempty"` // kbps, 0 = like the phone
 }
 
 // Command from tray to engine.

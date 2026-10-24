@@ -24,3 +24,21 @@ func TestSSCBitrate(t *testing.T) {
 		t.Error("mtu 100: no error")
 	}
 }
+
+func TestSSCForced(t *testing.T) {
+	defer func() { sscForced = 0 }()
+	for _, c := range []struct{ kbps, mtu, want int }{
+		{328, 1017, 328000},
+		{328, 667, 256000}, // not raised: steps down to what fits
+		{256, 667, 256000},
+		{229, 667, 229000},
+	} {
+		sscForced = c.kbps * 1000
+		if got, err := sscBitrate(48000, c.mtu, 0x04); err != nil || got != c.want {
+			t.Errorf("%d kbps mtu %d: %d %v, want %d", c.kbps, c.mtu, got, err, c.want)
+		}
+	}
+	if sscNeedsOver(256) || !sscNeedsOver(328) || sscNeedsOver(0) {
+		t.Error("sscNeedsOver")
+	}
+}

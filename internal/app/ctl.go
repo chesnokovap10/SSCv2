@@ -15,6 +15,7 @@ import (
 
 	"golang.org/x/sys/windows"
 
+	"sscv2/internal/codec/ssc"
 	"sscv2/internal/config"
 	"sscv2/internal/helper"
 	"sscv2/internal/ipc"
@@ -44,7 +45,7 @@ func tailFile(path string, n int) string {
 // Control API: the running tray accepts commands on a per-user named pipe,
 // so everything the menu does can be scripted ("ssc.exe ctl <cmd> [arg]").
 //
-//	status | info | debug on|off | restore <mode> | mode off|aac|ssc | import windows | service install|remove
+//	status | info | debug on|off | restore <mode> | mode off|aac|ssc | ssc auto|<kbps> | import windows | service install|remove
 //	virtual install|remove
 //	scan | connect <addr> | headphones <addr> | mouse <addr|none>
 
@@ -162,6 +163,22 @@ func (a *App) ctl(args []string) string {
 		a.mu.Unlock()
 		go a.restartEngine()
 		return "ok: aac " + arg(1)
+	case "ssc":
+		// SSC bitrate: kbps or "auto" (like the phone)
+		kbps := 0
+		if arg(1) != "auto" {
+			n, err := strconv.Atoi(arg(1))
+			if err != nil || !ssc.Valid(48000, n*1000) {
+				return "error: ssc auto|88|96|128|192|229|256|328"
+			}
+			kbps = n
+		}
+		a.mu.Lock()
+		a.s.SSCBitrate = kbps
+		_ = config.Save(a.s)
+		a.mu.Unlock()
+		go a.restartEngine()
+		return fmt.Sprintf("ok: ssc %d kbps (0 = auto)", kbps)
 	case "variant":
 		a.mu.Lock()
 		a.driverVariant = arg(1)

@@ -85,6 +85,7 @@ func Run(in io.Reader, stdout *os.File) int {
 	if e.cfg.AACMode != "" {
 		aacMode = e.cfg.AACMode
 	}
+	sscForced = e.cfg.SSCBitrate * 1000
 	logf("engine start: codec=%s headphones=%q mouse=%q adapter=%04X:%04X debug=%v",
 		e.cfg.Codec, e.cfg.Headphones, e.cfg.Mouse, e.cfg.VID, e.cfg.PID, e.cfg.Debug)
 	e.target = e.cfg.Headphones
@@ -174,7 +175,8 @@ func (e *engine) run() error {
 		Logf:          logf,
 		Verbose:       e.cfg.Verbose,
 		Debug:         e.cfg.Debug,
-		ForceMediaMTU: map[bool]int{true: overMTU}[e.cfg.Codec != "ssc" && e.cfg.AACMode == "over"],
+		ForceMediaMTU: map[bool]int{true: overMTU}[e.cfg.Codec != "ssc" && e.cfg.AACMode == "over" ||
+			e.cfg.Codec == "ssc" && sscNeedsOver(e.cfg.SSCBitrate)],
 		USBIDs:        [][2]uint16{{e.cfg.VID, e.cfg.PID}},
 	}
 	if e.cfg.Mouse != "" {

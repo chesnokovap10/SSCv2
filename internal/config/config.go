@@ -48,6 +48,10 @@ type Settings struct {
 	// frame fits one packet), "over" (256 kbps above their announced MTU,
 	// menu "AAC 256") or "frag" (diagnostics: frames split over two packets).
 	AACMode string `json:"aacMode,omitempty"`
+	// SSCBitrate: SSC kbps (88..328); 0 = like the phone (192, 128 when the
+	// headphones announce a limit). Frames above the headphones' packet
+	// size go in larger packets, as "AAC 256" does.
+	SSCBitrate int `json:"sscBitrate,omitempty"`
 }
 
 func (s *Settings) MuteSpeakersOrDefault() bool {
@@ -100,7 +104,7 @@ func (s *Settings) summary() string {
 		}
 		return d.Addr
 	}
-	return fmt.Sprintf("mode=%s headphones=%s mouse=%s debug=%v aac=%q", s.Mode, dev(s.Headphones), dev(s.Mouse), s.Debug, s.AACMode)
+	return fmt.Sprintf("mode=%s headphones=%s mouse=%s debug=%v aac=%q ssc=%d", s.Mode, dev(s.Headphones), dev(s.Mouse), s.Debug, s.AACMode, s.SSCBitrate)
 }
 
 // caller names the function that called Load/Save (who reset the choice?).

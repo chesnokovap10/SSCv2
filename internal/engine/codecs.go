@@ -87,12 +87,28 @@ func sscRateOK(sampleRate int) error {
 	return nil
 }
 
-// sscBitrate: the phone's choice for this configuration byte, lowered if a
-// frame (CBR, 4-byte header included) would not fit one packet.
+// sscForced: bitrate from the settings (bps, 0 = like the phone).
+var sscForced int
+
+// budsMTU: the media payload Galaxy Buds announce.
+const budsMTU = 667
+
+// sscNeedsOver: a forced bitrate whose frames exceed the Buds' packet goes
+// with our own larger media MTU (as "AAC 256").
+func sscNeedsOver(kbps int) bool {
+	return kbps > 0 && ssc.FrameBytes(48000, kbps*1000) > budsMTU
+}
+
+// sscBitrate: the forced bitrate or the phone's choice for this
+// configuration byte, lowered if a frame (CBR, 4-byte header included)
+// would not fit one packet.
 func sscBitrate(sampleRate, mtu int, cfg uint8) (int, error) {
 	top := sscBitrateFull
 	if cfg != 0 && cfg&0x08 == 0 {
 		top = sscBitrateLimited
+	}
+	if sscForced > 0 {
+		top = sscForced
 	}
 	best := 0
 	for _, b := range ssc.BasicBitrates {
