@@ -3,8 +3,8 @@
  * Ported stage by stage (libssc/PLAN.md, phase 3). Bit-exact so far: header,
  * byte budget, input processing (3a), silence flag and prefilter (3b), long
  * MDCT and headroom (3c), band analysis, transient decision and header flags
- * (3d), energy quantisation and bit allocation (3e). Still missing: PVQ
- * (quant_all_bands) and the final energy bits (3f).
+ * (3d), energy quantisation and bit allocation (3e), PVQ and the end of the
+ * frame (3f): the whole CELT payload.
  */
 #include "ssc_encoder.h"
 
@@ -51,6 +51,7 @@ typedef struct {
     int shortBlocks;         /* M (8) when transient, else 0 */
     int16_t tf_estimate;     /* Q14: .2 when the transient was patched in */
     int drop;                /* top bands not coded (UHQ bandwidth / 152k) */
+    int transient_checked;   /* ec_tell + 3 <= total_bits before the transient bit */
     /* 3e: energy quantisation and allocation */
     int effectiveBytes;      /* = nbCompressedBytes (no VBR) */
     int tf_res[SSC_NB_EBANDS];
@@ -342,7 +343,7 @@ static void analysis(SscEncoder *st, ec_enc *enc, SscFrame *f, uint8_t *out, int
     f->isTransient = 0;
     f->shortBlocks = 0;
     f->tf_estimate = 0;
-    checked = ec_tell(enc) + 3 <= f->total_bits;
+    checked = f->transient_checked = ec_tell(enc) + 3 <= f->total_bits;
     if (checked) {
         /* Both detectors always run (the temporal one keeps state). */
         int t1 = patch_transient_decision(f->bandLogE, oldBandE, nb, end - previous_uhq_index);
@@ -818,6 +819,38 @@ static void fill_stage_alloc(const SscEncoder *st, const SscFrame *f) {
     memcpy(a->error, f->error, sizeof a->error);
 }
 
+/* PVQ, anti-collapse flag, final energy bits and the end-of-frame state
+ * (ssc_encode @0x110e4..0x113f4). */
+static void finish_frame(SscEncoder *st, ec_enc *enc, SscFrame *f) {
+    const SscMode *m = st->mode;
+    int nb = m->nbEBands, C = st->channels, endc = st->end - f->drop, i;
+    int16_t *oldBandE = (int16_t *)(st->in_mem + (f->overlap + 1024) * C);
+    int16_t *oldLogE = oldBandE + nb * C;
+    unsigned char collapse_masks[2 * SSC_NB_EBANDS];
+    uint32_t seed = (uint32_t)st->rng;
+
+    quant_all_bands(m, endc, (int16_t *)SSC_FREQ, collapse_masks, f->bandE, f->pulses,
+                    f->shortBlocks, st->spread_decision, f->dual_stereo, st->intensity, f->tf_res,
+                    (f->total_bits << 3) - f->anti_collapse_rsv, f->balance, enc, f->codedBands,
+                    &seed);
+    st->rng = (int32_t)seed;
+    if (f->anti_collapse_rsv > 0) ec_enc_bits(enc, st->consec_transient < 2, 1);
+    quant_energy_finalise(m, endc, oldBandE, f->error, f->fine_quant, f->fine_priority,
+                          f->total_bits - ec_tell(enc), enc, C);
+    if (f->silence)
+        for (i = 0; i < nb * C; i++) oldBandE[i] = -28672;
+    for (i = endc; i < nb; i++) oldBandE[i] = oldBandE[nb + i] = -28672;  /* dropped bands */
+    previous_uhq_index = f->drop;
+    st->prefilter_period = f->pitch_index;
+    st->prefilter_gain = f->gain1;
+    /* Samsung: oldLogE only (oldLogE2 is never updated) */
+    if (!f->isTransient)
+        memcpy(oldLogE, oldBandE, sizeof(int16_t) * nb * 2);
+    else
+        for (i = 0; i < nb * 2; i++) oldLogE[i] = IMIN(oldLogE[i], oldBandE[i]);
+    st->consec_transient = f->isTransient || !f->transient_checked ? st->consec_transient + 1 : 0;
+}
+
 int ssc_encode(SscEncoder *st, int32_t *pcm, int frame_size, uint8_t *out, int bitrate) {
     const SscRate *rate = find_rate(bitrate);
     int wide = rate ? rate->wide : 0;
@@ -865,13 +898,7 @@ int ssc_encode(SscEncoder *st, int32_t *pcm, int frame_size, uint8_t *out, int b
         ssc_stage_hook(SSC_STAGE_PRE_PVQ, st, &enc);
     }
 
-    /* TODO(phase 3f): quant_all_bands, anti-collapse, energy finalise. */
-
-    /* End-of-frame state (ssc_encode @0x111b8..). Still missing: band energies,
-     * consec_transient (+0x40). */
-    previous_uhq_index = f.drop;
-    st->prefilter_period = f.pitch_index;
-    st->prefilter_gain = f.gain1;
+    finish_frame(st, &enc, &f);
     st->rng = (int32_t)enc.rng;  /* seed for the next frame's quant_all_bands */
     ec_enc_done(&enc);
     st->frame_counter = (uint16_t)(st->frame_counter + 1 == 256 ? 0 : st->frame_counter + 1);

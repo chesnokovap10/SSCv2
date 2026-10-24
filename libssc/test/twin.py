@@ -244,13 +244,13 @@ def test_frames(lib):
             pcm = ctypes.create_string_buffer(raw, len(raw))  # ssc_encode writes in place (DRC)
             n = lib.ssc_encode(st, pcm, 864, out, g["bitrate"])
             got = out.raw[:max(n, 0)]
-            if n != len(want) or got[:2] != want[:2] or got[3] != want[3] or \
-                    (got[2] & 0xF0) != (want[2] & 0xF0):
-                bad = bad or f"frame {i}: {got[:4].hex()}/{n} vs {want[:4].hex()}/{len(want)}"
-            same += sum(1 for a, b in zip(got[4:], want[4:]) if a == b)
-            total += len(want) - 4
-        rows.append((f"ssc_encode header+size {path.stem}", bad,
-                     f"payload bytes equal {same}/{total} (phase 3)"))
+            if got != want:
+                k = next((j for j in range(min(len(got), len(want))) if got[j] != want[j]),
+                         min(len(got), len(want)))
+                bad = bad or f"frame {i}: first difference at byte {k} (len {n} vs {len(want)})"
+            same += got == want
+            total += 1
+        rows.append((f"ssc_encode frames {path.stem}", bad, f"{same}/{total} frames bit-exact"))
     return rows
 
 

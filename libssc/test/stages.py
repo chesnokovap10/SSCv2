@@ -58,43 +58,13 @@ def alloc_views(raw, end):
     }
 
 
-# State bytes written by stages that are not ported yet: masked out of the
-# "state" view until their sub-step (offsets into SscEncoder).
-STATE_PENDING = [
-    (0x1c, 0x20),     # rng at the end of the previous frame (needs the whole payload)
-    (0x20, 0x38),     # spread_decision, delayedIntra, tonal_average, lastCodedBands,
-                      # hf_average, tapset_decision (Opus 1.1 CELTEncoder order)
-    (0x40, 0x44),     # consec_transient
-    (0x50, 0x54),     # written after the MDCT (Opus 1.1 order: stereo_saving?)
-    (0x128 + 4 * 2 * (108 + 1024), None),  # oldBandE / oldLogE / oldLogE2
-]
-
-
-def inject_pending(blob, lib):
-    """Copy the not-yet-ported state (STATE_PENDING) from the blob into libssc
-    before a frame, so later stages see the same history (e.g. oldBandE for
-    patch_transient_decision) until the stage that writes it is ported."""
-    raw = blob.o.read(blob.state, lib.size)
-    for lo, hi in STATE_PENDING:
-        hi = lib.size if hi is None else hi
-        ctypes.memmove(ctypes.addressof(lib.st) + lo, raw[lo:hi], hi - lo)
-
-
-def mask_state(raw):
-    b = bytearray(raw)
-    for lo, hi in STATE_PENDING:
-        hi = len(b) if hi is None else hi
-        b[lo:hi] = bytes(hi - lo)
-    return bytes(b)
-
-
 def snapshot(read, st, st_size, ec, out, glob):
     """Named byte views of one encoder at a stage point (same for both sides)."""
     storage = int.from_bytes(read(ec + 8, 4), "little")
     return {
         "in_shared": glob("in_shared", IN_SHARED),
         "_pre_shared": glob("_pre_shared", PRE_SHARED),
-        "state": mask_state(bytes(8) + read(st + 8, st_size - 8)),  # mode pointer zeroed
+        "state": bytes(8) + read(st + 8, st_size - 8),  # mode pointer zeroed
         "range coder": read(ec + EC_FIELDS.start, EC_FIELDS.stop - EC_FIELDS.start),
         "bytes written": read(out + 4, storage),
     }
@@ -203,7 +173,7 @@ def hdr_flags(f):
 
 
 # Checkpoints that depend on code not ported yet: reported, but not a failure.
-PENDING = {"CELT payload"}
+PENDING = set()
 
 # name -> (blob reader, lib reader); each returns bytes
 CHECKPOINTS = {
@@ -217,6 +187,12 @@ CHECKPOINTS = {
     "frame length": (lambda o: len(o.last).to_bytes(4, "little"),
                      lambda l: len(l.last).to_bytes(4, "little")),
     "frame header (CELT flags)": (lambda o: hdr_flags(o.last), lambda l: hdr_flags(l.last)),
+    # everything the next frame depends on
+    "state after frame": (lambda o: o.read(o.state + 8, o.size - 8), lambda l: l.st.raw[8:]),
+    "in_shared after frame": (lambda o: o.read(o.exports["in_shared"], IN_SHARED),
+                              lambda l: l.glob("in_shared", IN_SHARED)),
+    "_pre_shared after frame": (lambda o: o.read(o.exports["_pre_shared"], PRE_SHARED),
+                                lambda l: l.glob("_pre_shared", PRE_SHARED)),
     "previous_uhq_index": (lambda o: o.read(o.exports["previous_uhq_index"], 4),
                            lambda l: l.glob("previous_uhq_index", 4)),
     "CELT payload": (lambda o: o.last[4:], lambda l: l.last[4:]),
@@ -227,8 +203,6 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--frames", type=int, default=12)
     ap.add_argument("--signals", default=",".join(signals.NAMES))
-    ap.add_argument("--no-inject", action="store_true",
-                    help="do not copy not-yet-ported state from the blob before each frame")
     ap.add_argument("--rates", choices=["basic", "all"], default="basic",
                     help="basic: the 6 golden profiles; all: all 14 bitrates")
     a = ap.parse_args()
@@ -242,8 +216,6 @@ def main():
             o = BlobEncoder(rate, bitrate)
             l = LibEncoder(lib, rate, bitrate)
             for i, pcm in enumerate(signals.frames(sig, rate, a.frames)):
-                if not a.no_inject:
-                    inject_pending(o, l)
                 o.last = o.encode(pcm)
                 l.last = l.encode(pcm)
                 frames += 1

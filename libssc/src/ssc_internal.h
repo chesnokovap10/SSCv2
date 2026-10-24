@@ -62,6 +62,17 @@ int compute_allocation(const SscMode *m, int end, const int *offsets, const int 
                        int32_t *balance, int *pulses, int *ebits, int *fine_priority,
                        struct ec_ctx *ec, int prev, int signalBandwidth, int hi_rate);
 
+/* ssc_pvq.c */
+int stereo_itheta(const int16_t *X, const int16_t *Y, int stereo, int N);
+unsigned alg_quant(int16_t *X, int N, int K, int spread, int B, struct ec_ctx *enc);
+void quant_all_bands(const SscMode *m, int end, int16_t *X_, unsigned char *collapse_masks,
+                     const int32_t *bandE, const int *pulses, int shortBlocks, int spread,
+                     int dual_stereo, int intensity, const int *tf_res, int32_t total_bits,
+                     int32_t balance, struct ec_ctx *ec, int codedBands, uint32_t *seed);
+void quant_energy_finalise(const SscMode *m, int end, int16_t *oldEBands, const int16_t *error,
+                           const int *fine_quant, const int *fine_priority, int bits_left,
+                           struct ec_ctx *enc, int C);
+
 /* ssc_tone.c */
 int tone_detect(const int32_t *xcorr, int *best_pitch, int32_t maxcorr, int n);
 int last_band_info_calc(int thr, int n, const int32_t *e);

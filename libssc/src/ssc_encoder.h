@@ -37,7 +37,7 @@ typedef struct SscEncoder {
     int32_t prefilter_period;   /* 0x38 */
     int16_t prefilter_gain;     /* 0x3c */
     int16_t f3e;
-    int32_t f40;                /* 0x40  written at end of every frame */
+    int32_t consec_transient;   /* 0x40 */
     int32_t preemph_memE[2];    /* 0x44  computed, never subtracted (see prefilter) */
     int32_t overlap_max;        /* 0x4c  max |pcm| over the last overlap samples */
     int32_t intensity;          /* 0x50  intensity stereo start band */

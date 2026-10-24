@@ -82,6 +82,16 @@ SPECS = {
     "compute_allocation": dict(args=["ptr", "int", "in:88", "in:88", "int", "inout:4", "inout:4",
                                      "int", "out:4", "out:88", "out:88", "out:88", "ec", "int",
                                      "int", "int"], ret=True),
+    # 3f: PVQ
+    "encode_pulses": dict(args=["in:4*a1", "int", "int", "ec"]),
+    "stereo_itheta": dict(args=["in:2*a3", "in:2*a3", "int", "int"], ret=True),
+    "alg_quant": dict(args=["inout:2*a1", "int", "int", "int", "int", "ec"], ret=True,
+                      globals=["in_shared"]),
+    "quant_energy_finalise": dict(args=["ptr", "int", "inout:88", "in:88", "in:88", "in:88", "int",
+                                        "ec", "int"]),
+    "quant_all_bands": dict(args=["ptr", "int", "inout:3456", "out:2*a1", "in:176", "in:4*a1",
+                                  "int", "int", "int", "int", "in:4*a1", "int", "int", "ec",
+                                  "int", "inout:4"], globals=["in_shared"]),
 }
 GLOBAL_SIZES = {"win_square": 432, "drc_struct": 24, "DRC_ChNum": 4, "Soundbooster_DRC_Fs": 4, "DRC_ModeFlag": 4,
                 "_pcmpower": 6912, "previous_uhq_index": 4, "in_shared": 7776, "_pre_shared": 15104,
