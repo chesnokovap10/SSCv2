@@ -20,16 +20,21 @@ type Encoder interface {
 // pipeline: captured float32 -> stereo downmix -> int16 -> encoder ->
 // MTU-sized RTP payloads -> bt.SendMedia. Called on the capture thread.
 type pipeline struct {
-	mu      sync.Mutex
-	enc     Encoder
-	maxRaw  int
-	ts      uint32
-	pcm     []int16 // pending samples (residual between callbacks)
-	stereo  []float32
-	accum   []byte
-	active  atomic.Bool
+	mu     sync.Mutex
+	enc    Encoder
+	maxRaw int
+	ts     uint32
+	pcm    []int16 // pending samples (residual between callbacks)
+	stereo []float32
+	accum  []byte
+	active atomic.Bool
 	// muted: send silence (headphones' volume not settled yet)
-	muted   atomic.Bool
+	muted atomic.Bool
+	// frag: split frames larger than one packet (RFC 3016)
+	frag bool
+
+	maxFrame atomic.Int32 // largest encoded frame in the stats window
+	split    atomic.Int32 // frames larger than one packet in the window
 
 	encBytes atomic.Uint64
 	frames   atomic.Uint64
@@ -42,9 +47,9 @@ func (p *pipeline) set(enc Encoder, mtu int) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.enc = enc
-	// Payload budget: media payload minus 12 bytes of margin, like the
-	// verified C++ build.
-	p.maxRaw = mtu - 12
+	// Payload budget: the media payload BTstack reports (L2CAP MTU minus
+	// the RTP header).
+	p.maxRaw = mtu
 	if p.maxRaw < 100 {
 		p.maxRaw = 100
 	}
@@ -128,6 +133,30 @@ func (p *pipeline) onCapture(s []float32, frames, ch int) {
 		out, err := p.enc.Encode(p.pcm[off : off+block])
 		if err == nil && len(out) > 0 {
 			p.encBytes.Add(uint64(len(out)))
+			if int32(len(out)) > p.maxFrame.Load() {
+				p.maxFrame.Store(int32(len(out)))
+			}
+			if len(out) > p.maxRaw {
+				p.split.Add(1)
+				if nframes > 0 {
+					bt.SendMedia(p.accum, firstTS)
+					p.accum = p.accum[:0]
+					nframes = 0
+				}
+				if p.frag {
+					// RFC 3016: same timestamp, marker on the last fragment.
+					for o := 0; o < len(out); o += p.maxRaw {
+						end := min(o+p.maxRaw, len(out))
+						bt.SendMediaMarker(out[o:end], p.ts, end == len(out))
+					}
+				} else {
+					bt.SendMedia(out, p.ts) // too big: counted as a send failure
+				}
+				p.ts += uint32(p.enc.FrameLen())
+				off += block
+				firstTS = p.ts
+				continue
+			}
 			if len(p.accum)+len(out) > p.maxRaw && nframes > 0 {
 				bt.SendMedia(p.accum, firstTS)
 				p.accum = p.accum[:0]
@@ -151,6 +180,12 @@ func (p *pipeline) onCapture(s []float32, frames, ch int) {
 // loudWithin reports audio above silence during the last d.
 func (p *pipeline) loudWithin(d time.Duration) bool {
 	return time.Now().UnixMilli()-p.lastLoud.Load() < d.Milliseconds()
+}
+
+// takeFrameStats returns and resets the largest frame and the number of
+// frames that did not fit one packet since the last call.
+func (p *pipeline) takeFrameStats() (int, int) {
+	return int(p.maxFrame.Swap(0)), int(p.split.Swap(0))
 }
 
 // takePeak returns and resets the peak level since the last call.

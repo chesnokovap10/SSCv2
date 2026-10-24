@@ -4,9 +4,13 @@ package config
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sync"
+
+	"sscv2/internal/logx"
 )
 
 const AppName = "SSCv2"
@@ -40,6 +44,10 @@ type Settings struct {
 	// Debug: detailed journal (logs\debug.log) of switches, device
 	// exchanges and volume.
 	Debug bool `json:"debug,omitempty"`
+	// AACMode: "" / "fit" (default: bitrate from the headphones' MTU, every
+	// frame fits one packet), "over" (256 kbps above their announced MTU,
+	// menu "AAC 256") or "frag" (diagnostics: frames split over two packets).
+	AACMode string `json:"aacMode,omitempty"`
 }
 
 func (s *Settings) MuteSpeakersOrDefault() bool {
@@ -84,13 +92,38 @@ func KeysPath() string     { return filepath.Join(UserDir(), "keys.json") }
 
 var mu sync.Mutex
 
+// summary is one log line describing the settings (no secrets in them).
+func (s *Settings) summary() string {
+	dev := func(d *Device) string {
+		if d == nil {
+			return "-"
+		}
+		return d.Addr
+	}
+	return fmt.Sprintf("mode=%s headphones=%s mouse=%s debug=%v aac=%q", s.Mode, dev(s.Headphones), dev(s.Mouse), s.Debug, s.AACMode)
+}
+
+// caller names the function that called Load/Save (who reset the choice?).
+func caller() string {
+	if pc, file, line, ok := runtime.Caller(2); ok {
+		name := filepath.Base(file)
+		if f := runtime.FuncForPC(pc); f != nil {
+			name = f.Name()
+		}
+		return fmt.Sprintf("%s:%d", name, line)
+	}
+	return "?"
+}
+
 // Load reads the settings; a missing file yields defaults.
 func Load() (*Settings, error) {
 	mu.Lock()
 	defer mu.Unlock()
+	path := SettingsPath()
 	s := &Settings{Mode: ModeOff}
-	b, err := os.ReadFile(SettingsPath())
+	b, err := os.ReadFile(path)
 	if errors.Is(err, os.ErrNotExist) {
+		logx.Printf("settings: %s not found - defaults (pid %d)", path, os.Getpid())
 		return s, nil
 	}
 	if err != nil {
@@ -102,14 +135,17 @@ func Load() (*Settings, error) {
 	if s.Mode == "" {
 		s.Mode = ModeOff
 	}
+	logx.Printf("settings: loaded %s (%d bytes): %s", path, len(b), s.summary())
 	return s, nil
 }
 
-// Save writes the settings atomically.
+// Save writes the settings atomically. Every save is logged with its caller.
 func Save(s *Settings) error {
 	mu.Lock()
 	defer mu.Unlock()
-	return WriteJSONAtomic(SettingsPath(), s)
+	err := WriteJSONAtomic(SettingsPath(), s)
+	logx.Printf("settings: saved %s by %s: %v", s.summary(), caller(), err)
+	return err
 }
 
 // WriteJSONAtomic marshals v and replaces path via a temp file.

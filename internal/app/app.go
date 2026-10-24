@@ -37,6 +37,7 @@ const (
 	idSvcRemove
 	idOpenLogs
 	idDebug
+	idAAC256
 	idExit
 
 	idFoundBase      = 1000
@@ -65,7 +66,7 @@ type App struct {
 	// (ctl "restore <mode>", for diagnostics; not persisted).
 	restoreMode   string
 	driverVariant string
-	menuText    map[int]string
+	menuText      map[int]string
 }
 
 func logf(f string, a ...any) { logx.Printf(f, a...) }
@@ -292,6 +293,7 @@ func (a *App) startEngineLocked() {
 		PID:          a.adapter.ID.PID,
 		MuteSpeakers: a.s.MuteSpeakersOrDefault(),
 		Debug:        a.s.Debug,
+		AACMode:      a.s.AACMode,
 	}
 	if a.s.Headphones != nil {
 		cfg.Headphones = a.s.Headphones.Addr
@@ -721,6 +723,7 @@ func (a *App) menu() []tray.Item {
 		{Text: "Выкл (Bluetooth Windows)", ID: idModeOff, Radio: true, Checked: mode == config.ModeOff, Disabled: busy},
 		{Text: "Режим AAC", ID: idModeAAC, Radio: true, Checked: mode == config.ModeAAC, Disabled: busy},
 		{Text: "Режим SSC (заготовка)", ID: idModeSSC, Radio: true, Checked: mode == config.ModeSSC, Disabled: true},
+		{Text: "AAC 256 кбит/с (выше лимита наушников)", ID: idAAC256, Checked: a.s.AACMode == "over", Disabled: busy},
 		{Separator: true},
 	}
 
@@ -912,6 +915,16 @@ func (a *App) command(id int) {
 		go a.removeService()
 	case id == idOpenLogs:
 		openFolder(config.LogDir())
+	case id == idAAC256:
+		a.mu.Lock()
+		if a.s.AACMode == "over" {
+			a.s.AACMode = ""
+		} else {
+			a.s.AACMode = "over"
+		}
+		_ = config.Save(a.s)
+		a.mu.Unlock()
+		go a.restartEngine()
 	case id == idDebug:
 		a.mu.Lock()
 		on := !a.s.Debug

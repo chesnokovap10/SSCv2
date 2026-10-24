@@ -38,9 +38,10 @@ var (
 )
 
 type mpkt struct {
-	data [1024]byte
-	n    int
-	ts   uint32
+	data   [1024]byte
+	n      int
+	ts     uint32
+	marker bool
 }
 
 type stackT struct {
@@ -585,6 +586,12 @@ func (s *stackT) resetMedia() {
 // SendMedia queues one RTP payload (codec frames; AAC/SSC raw, SBC with its
 // 1-byte header already prepended). Safe from any goroutine.
 func SendMedia(payload []byte, timestamp uint32) bool {
+	return SendMediaMarker(payload, timestamp, false)
+}
+
+// SendMediaMarker is SendMedia with the RTP marker bit (RFC 3016: set on
+// the packet that completes an AAC frame split over several packets).
+func SendMediaMarker(payload []byte, timestamp uint32, marker bool) bool {
 	s := stack
 	if !s.streaming.Load() {
 		return false
@@ -598,6 +605,7 @@ func SendMedia(payload []byte, timestamp uint32) bool {
 	slot := &s.mq[s.mqHead]
 	slot.n = copy(slot.data[:], payload)
 	slot.ts = timestamp
+	slot.marker = marker
 	s.mqHead = (s.mqHead + 1) % len(s.mq)
 	s.mqCount++
 	s.mqmu.Unlock()
@@ -628,7 +636,11 @@ func (s *stackT) canSendNow() {
 		cid, seid := C.uint16_t(s.a2dpCid), C.uint8_t(s.localSeid)
 		max := int(C.a2dp_max_media_payload_size(cid, seid))
 		if max > 0 && s.txBuf.n <= max {
-			st := C.a2dp_source_stream_send_media_payload_rtp(cid, seid, 0, C.uint32_t(s.txBuf.ts),
+			mk := C.uint8_t(0)
+			if s.txBuf.marker {
+				mk = 1
+			}
+			st := C.a2dp_source_stream_send_media_payload_rtp(cid, seid, mk, C.uint32_t(s.txBuf.ts),
 				(*C.uint8_t)(unsafe.Pointer(&s.txBuf.data[0])), C.uint16_t(s.txBuf.n))
 			if st != 0 {
 				s.sendFails.Add(1)

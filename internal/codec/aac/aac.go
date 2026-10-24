@@ -69,10 +69,10 @@ type Encoder struct {
 	out        []byte
 }
 
-// New creates an encoder. mtu is the media payload budget per packet: one
-// AAC frame must fit one AVDTP packet, so the peak bitrate is capped to it
-// (sinks like Galaxy Buds offer ~667 bytes, ~245 kbps at 48 kHz).
-func New(sampleRate, channels, bitrate, mtu int) (*Encoder, error) {
+// New creates an encoder. frameBudget is the largest LATM frame allowed
+// (the media payload of one AVDTP packet when every frame must fit one
+// packet: Galaxy Buds offer 667 bytes, i.e. 250 kbps at 48 kHz); 0 = no cap.
+func New(sampleRate, channels, bitrate, frameBudget int) (*Encoder, error) {
 	if channels != 1 && channels != 2 {
 		return nil, fmt.Errorf("aac: %d каналов не поддерживается", channels)
 	}
@@ -85,11 +85,11 @@ func New(sampleRate, channels, bitrate, mtu int) (*Encoder, error) {
 	}
 	enc := &Encoder{h: h, Channels: channels, SampleRate: sampleRate, Bitrate: bitrate}
 	peak := 0
-	if mtu > 12+16 {
-		// Same budget as the verified C++ build: payload minus 12 more bytes
-		// of margin minus the LATM length prefix.
-		budget := mtu - 12 - 6
-		peak = int(int64(budget) * 8 * int64(sampleRate) / 1024)
+	if frameBudget > 16 {
+		// fdk's peak bitrate bounds the whole transport frame (LATM
+		// header included), so the budget is the payload itself. The old
+		// build also subtracted the 12-byte RTP header a second time.
+		peak = int(int64(frameBudget) * 8 * int64(sampleRate) / 1024)
 		if enc.Bitrate > peak {
 			enc.Bitrate = peak
 		}

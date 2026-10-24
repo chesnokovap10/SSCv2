@@ -63,11 +63,11 @@ func (c Codec) String() string {
 
 // RemoteCaps are the codecs the sink advertised.
 type RemoteCaps struct {
-	SBC, AAC, SSC          bool
+	SBC, AAC, SSC             bool
 	SBCSeid, AACSeid, SSCSeid uint8
-	SSCCap                 uint8
-	SSCUHQ                 bool
-	AACBitrate             uint32
+	SSCCap                    uint8
+	SSCUHQ                    bool
+	AACBitrate                uint32
 }
 
 // Found is an inquiry result.
@@ -107,24 +107,27 @@ type Event struct {
 
 // Options for Start.
 type Options struct {
-	Keys       KeyStore
-	Logf       func(string, ...any)
-	Verbose    bool    // forward BTstack log_info lines
-	USBIDs     [][2]uint16
-	LocalName  string
-	Mouse      *LEBond // nil = no mouse bridge
-	EnableSSC  bool    // offer the SSC endpoint (only when SSC can be encoded)
-	Debug      bool    // packet journal (logx debug mode)
+	Keys      KeyStore
+	Logf      func(string, ...any)
+	Verbose   bool // forward BTstack log_info lines
+	USBIDs    [][2]uint16
+	LocalName string
+	Mouse     *LEBond // nil = no mouse bridge
+	EnableSSC bool    // offer the SSC endpoint (only when SSC can be encoded)
+	Debug     bool    // packet journal (logx debug mode)
+	// ForceMediaMTU: treat the headphones' media channel MTU as this many
+	// bytes instead of what they announced ("AAC 256" mode).
+	ForceMediaMTU int
 }
 
 // LEBond is an imported LE bond (mouse).
 type LEBond struct {
-	Addr      Addr
-	Random    bool // random (static) address
-	LTK       [16]byte
-	IRK       [16]byte
-	EDIV      uint16
-	Rand      [8]byte
-	KeySize   int
+	Addr       Addr
+	Random     bool // random (static) address
+	LTK        [16]byte
+	IRK        [16]byte
+	EDIV       uint16
+	Rand       [8]byte
+	KeySize    int
 	SecureConn bool
 }

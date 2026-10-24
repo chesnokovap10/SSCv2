@@ -288,6 +288,18 @@ int ssc_hog_parse(uint16_t hids_cid, uint8_t service_index, const uint8_t *repor
     return is_mouse;
 }
 
+/* ---- media channel MTU override ("AAC 256" mode) ------------------------- */
+
+void ssc_l2cap_set_remote_mtu(uint16_t local_cid, uint16_t mtu);
+
+int ssc_media_force_mtu(uint8_t local_seid, uint16_t mtu) {
+    avdtp_stream_endpoint_t *ep = avdtp_get_stream_endpoint_for_seid(local_seid);
+    if (!ep || !ep->l2cap_media_cid) return -1;
+    int old = l2cap_get_remote_mtu_for_local_cid(ep->l2cap_media_cid);
+    ssc_l2cap_set_remote_mtu(ep->l2cap_media_cid, mtu);
+    return old;
+}
+
 /* ---- C stdio -------------------------------------------------------------- */
 
 /* BTstack prints with printf in places; keep that out of the engine's

@@ -152,6 +152,16 @@ func (a *App) ctl(args []string) string {
 			}
 		}
 		return tailFile(filepath.Join(config.LogDir(), name+".log"), n)
+	case "aac":
+		if m := arg(1); m != "fit" && m != "frag" && m != "over" {
+			return "error: aac fit|frag"
+		}
+		a.mu.Lock()
+		a.s.AACMode = arg(1)
+		_ = config.Save(a.s)
+		a.mu.Unlock()
+		go a.restartEngine()
+		return "ok: aac " + arg(1)
 	case "variant":
 		a.mu.Lock()
 		a.driverVariant = arg(1)

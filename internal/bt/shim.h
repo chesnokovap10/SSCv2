@@ -19,6 +19,7 @@ enum { SSC_SRC_HCI = 0, SSC_SRC_A2DP, SSC_SRC_AVRCP, SSC_SRC_SM, SSC_SRC_HIDS };
 
 void ssc_log_init(int verbose);
 void ssc_set_debug(int packets, int verbose);
+int ssc_media_force_mtu(uint8_t local_seid, uint16_t mtu);
 int ssc_redirect_stdout(const char *path);
 void ssc_register_handlers(void);
 void ssc_register_sdp(void);

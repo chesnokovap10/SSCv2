@@ -242,6 +242,10 @@ func (s *stackT) onA2DP(cp *C.uint8_t, p []byte) {
 		}
 		s.localSeid = uint8(C.a2dp_subevent_stream_established_get_local_seid(cp))
 		s.remoteSeid = uint8(C.a2dp_subevent_stream_established_get_remote_seid(cp))
+		if s.opts.ForceMediaMTU > 0 {
+			old := int(C.ssc_media_force_mtu(C.uint8_t(s.localSeid), C.uint16_t(s.opts.ForceMediaMTU)))
+			s.logf("bt: media MTU %d -> %d (AAC 256 mode, above the headphones' announced limit)", old, s.opts.ForceMediaMTU)
+		}
 		m := int(C.a2dp_max_media_payload_size(C.uint16_t(s.a2dpCid), C.uint8_t(s.localSeid)))
 		if m <= 0 {
 			m = 667

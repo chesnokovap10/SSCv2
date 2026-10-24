@@ -82,6 +82,9 @@ func Run(in io.Reader, stdout *os.File) int {
 		return 2
 	}
 	logx.SetDebug(e.cfg.Debug)
+	if e.cfg.AACMode != "" {
+		aacMode = e.cfg.AACMode
+	}
 	logf("engine start: codec=%s headphones=%q mouse=%q adapter=%04X:%04X debug=%v",
 		e.cfg.Codec, e.cfg.Headphones, e.cfg.Mouse, e.cfg.VID, e.cfg.PID, e.cfg.Debug)
 	e.target = e.cfg.Headphones
@@ -166,12 +169,13 @@ func (e *engine) run() error {
 		logf("keys.json: %v", err)
 	}
 	opts := bt.Options{
-		EnableSSC: e.cfg.Codec == "ssc",
-		Keys:      e.store,
-		Logf:      logf,
-		Verbose:   e.cfg.Verbose,
-		Debug:     e.cfg.Debug,
-		USBIDs:    [][2]uint16{{e.cfg.VID, e.cfg.PID}},
+		EnableSSC:     e.cfg.Codec == "ssc",
+		Keys:          e.store,
+		Logf:          logf,
+		Verbose:       e.cfg.Verbose,
+		Debug:         e.cfg.Debug,
+		ForceMediaMTU: map[bool]int{true: overMTU}[e.cfg.AACMode == "over"],
+		USBIDs:        [][2]uint16{{e.cfg.VID, e.cfg.PID}},
 	}
 	if e.cfg.Mouse != "" {
 		if l, ok := e.store.FindLE(e.cfg.Mouse); ok {
@@ -420,7 +424,8 @@ func (e *engine) session(addrStr string) error {
 	if b, ok := enc.(interface{ Bandwidth() int }); ok {
 		bw = fmt.Sprintf(", band %d Hz", b.Bandwidth())
 	}
-	logf("streaming %s %d Hz, %d kbps%s, payload %d", codec, e.srate, enc.BitrateKbps(), bw, mtu)
+	e.pipe.frag = aacMode == "frag" && codec == bt.CodecAAC
+	logf("streaming %s %d Hz, %d kbps%s, payload %d, packing %s", codec, e.srate, enc.BitrateKbps(), bw, mtu, map[bool]string{true: "frag", false: "fit"}[e.pipe.frag])
 	e.update(func(s *ipc.EngineStatus) {
 		s.Phase, s.Message = "streaming", ""
 		s.Streaming = true
@@ -590,8 +595,9 @@ func (e *engine) ticker() {
 		_, mstate, mrep := bt.MouseStatus()
 		eb, fr := e.pipe.encBytes.Load(), e.pipe.frames.Load()
 		if bt.Streaming() {
-			logf("CAP rate=%d fs enc=%d kbps peak=%.3f queue=%d fail=%d sent=%d",
-				(fr-lastFrames)/2, (eb-lastBytes)*8/2000, e.pipe.takePeak(), q, fails, sent)
+			maxF, over := e.pipe.takeFrameStats()
+			logf("CAP rate=%d fs enc=%d kbps peak=%.3f queue=%d fail=%d sent=%d maxframe=%d split=%d",
+				(fr-lastFrames)/2, (eb-lastBytes)*8/2000, e.pipe.takePeak(), q, fails, sent, maxF, over)
 		}
 		lastBytes, lastFrames = eb, fr
 		e.update(func(s *ipc.EngineStatus) {

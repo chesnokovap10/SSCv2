@@ -22,6 +22,7 @@ type EngineConfig struct {
 	MuteSpeakers bool   `json:"muteSpeakers"`
 	Verbose      bool   `json:"verbose,omitempty"`
 	Debug        bool   `json:"debug,omitempty"`
+	AACMode      string `json:"aacMode,omitempty"` // "fit" | "frag"
 }
 
 // Command from tray to engine.
