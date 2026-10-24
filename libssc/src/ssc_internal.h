@@ -32,4 +32,20 @@ void normal_headroom(int32_t *freq, int bitrate, int M, const int16_t *eBands);
 void uhq_headroom(int32_t *freq, int bitrate, int M, const int16_t *eBands);
 void headroom_process(int32_t *freq, int bitrate, int M, const int16_t *eBands, int uhq);
 
+/* ssc_bands.c (C = 2, M = 8) */
+struct SscEncoder;
+void compute_band_energies(const SscMode *m, const int32_t *X, int32_t *bandE, int end);
+void amp2Log2(const SscMode *m, int effEnd, int end, const int32_t *bandE, int16_t *bandLogE,
+              int C);
+void normalise_bands(const SscMode *m, const int32_t *freq, int16_t *X, const int32_t *bandE,
+                     int end);
+void compute_band_energies_for_lastband(const SscMode *m, const int32_t *X, int32_t *out, int n,
+                                        int uhq, int row);
+int patch_transient_decision(const int16_t *newE, const int16_t *oldE, int nb, int end);
+int patch_transient_decision_temporal(const SscMode *m, struct SscEncoder *st, const int32_t *in);
+
+/* ssc_tone.c */
+int tone_detect(const int32_t *xcorr, int *best_pitch, int32_t maxcorr, int n);
+int last_band_info_calc(int thr, int n, const int32_t *e);
+
 #endif

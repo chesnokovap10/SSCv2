@@ -134,6 +134,23 @@ def test_haar1(o, lib, rng, n):
     return [("haar1", None)]
 
 
+def test_last_band_info(o, lib, rng, n):
+    """last_band_info_calc is exported but never called by the blob: random calls."""
+    lib.last_band_info_calc.argtypes = [ctypes.c_int, ctypes.c_int, ctypes.c_void_p]
+    lib.last_band_info_calc.restype = ctypes.c_int
+    for _ in range(max(1, n // 10)):
+        cnt = rng.choice([0, 1, 4, 8])
+        e = [rng.choice([rng.randrange(0, 40000), rng.randrange(-2**31, 2**31)]) for _ in range(2 * cnt)]
+        thr = rng.choice([12001, 30001, rng.randrange(-2**31, 2**31)])
+        raw = struct.pack(f"<{2 * cnt}i", *e)
+        o.uc.mem_write(IO_BASE, raw or b"\x00")
+        b = Oracle.s32(o.call("last_band_info_calc", thr & 0xFFFFFFFF, cnt, IO_BASE))
+        buf = ctypes.create_string_buffer(raw or b"\x00", max(1, len(raw)))
+        if b != lib.last_band_info_calc(thr, cnt, buf):
+            return [("last_band_info_calc", (thr, cnt, e))]
+    return [("last_band_info_calc", None)]
+
+
 def lib_script(lib, size, ops):
     ec = ctypes.create_string_buffer(0x100)
     buf = ctypes.create_string_buffer(size)
@@ -234,6 +251,7 @@ def main():
     rows += test_modes(o, lib)
     rows += test_scalars(o, lib, rng, a.n)
     rows += test_haar1(o, lib, rng, a.n)
+    rows += test_last_band_info(o, lib, rng, a.n)
     rows += test_ec(o, lib, rng, a.n)
     rows += test_state(o, lib)
     rows += test_frames(lib)

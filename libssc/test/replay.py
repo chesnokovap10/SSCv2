@@ -10,7 +10,7 @@ same inputs and compare byte for byte.
 Spec syntax per argument: "int" (32-bit value), "ptr" (a pointer into a shared
 global or the mode tables, mapped to libssc's twin object), or "<dir>:<size>"
 where dir is in / out / inout and size is a Python expression over a0..a7 (the
-int args).
+int args); "alias:N" passes the same buffer as argument N (in-place functions).
 """
 
 import argparse
@@ -43,7 +43,8 @@ SPECS = {
     "ssc_pitch_xcorr_c2": dict(args=["in:432", "in:920", "out:976"], ret=True),
     "dual_inner_prod": dict(args=["in:864", "in:864", "in:864", "int", "out:4", "out:4"]),
     "pitch_downsample": dict(args=["pp2in:4*a2", "out:(a2>>1)*2", "int"]),
-    "pitch_search": dict(args=["in:(a2>>1)*2", "in:((a2+a3)>>1)*2", "int", "int", "out:4"]),
+    # scratch (x_lp4, y_lp4, xcorr) lives in in_shared, so it is compared too
+    "pitch_search": dict(args=["ptr", "ptr", "int", "int", "out:4"], globals=["in_shared"]),
     # x is pre[c] + 1024: the history before it is read (x[-T-2..]), hence @4096
     "comb_filter": dict(args=["out:4*a4", "in:4*(a4+1024)@4096", "int", "int", "int", "int", "int",
                               "int"], globals=["win_square"]),
@@ -55,6 +56,17 @@ SPECS = {
                              globals=["in_shared", "_pre_shared"]),
     "normal_headroom": dict(args=["inout:6912", "int", "int", "in:46"], globals=["headroom_gain"]),
     "uhq_headroom": dict(args=["inout:6912", "int", "int", "in:46"]),
+    # 3d: band analysis (bandE: 2 x 22 int32, bandLogE: 2 x 22 int16)
+    "compute_band_energies": dict(args=["ptr", "in:6912", "out:176", "int"]),
+    "amp2Log2": dict(args=["ptr", "int", "int", "in:176", "out:88", "int"]),
+    # X overwrites freq in place in the blob; separate copies give the same bytes
+    "normalise_bands": dict(args=["ptr", "inout:6912", "alias:1", "in:176", "int"]),
+    "compute_band_energies_for_lastband": dict(args=["ptr", "in:6912", "out:8*a3", "int", "int",
+                                                     "int"]),
+    "patch_transient_decision": dict(args=["in:88", "in:88", "int", "int"], ret=True),
+    "patch_transient_decision_temporal": dict(args=["ptr", "inout:304", "in:7776"], ret=True),
+    # reads xcorr[-1] .. xcorr[n]
+    "tone_detect": dict(args=["in:4*a3+8@4", "inout:8", "int", "int"], ret=True),
 }
 GLOBAL_SIZES = {"win_square": 432, "drc_struct": 24, "DRC_ChNum": 4, "Soundbooster_DRC_Fs": 4, "DRC_ModeFlag": 4,
                 "_pcmpower": 6912, "previous_uhq_index": 4, "in_shared": 7776, "_pre_shared": 15104,
@@ -92,6 +104,8 @@ def parse(spec_arg):
     """-> (dir, size expr, offset expr): "in:SIZE@OFF" covers [ptr-OFF, ptr-OFF+SIZE)."""
     if spec_arg in ("int", "ptr"):
         return (spec_arg, None, "0")
+    if spec_arg.startswith("alias:"):   # same pointer as another argument
+        return ("alias", spec_arg[6:], "0")
     d, size = spec_arg.split(":", 1)
     size, _, off = size.partition("@")
     return (d, size, off or "0")
@@ -119,7 +133,7 @@ class Recorder:
             if d == "pp2in":
                 ptrs = struct.unpack("<2Q", self.o.read(rec.args[i], 16))
                 mem[i] = [self.o.read(p, size_of(size, ints)) for p in ptrs]
-            elif d not in ("int", "ptr"):
+            elif d not in ("int", "ptr", "alias"):
                 mem[i] = self.o.read(rec.args[i] - size_of(off, ints), size_of(size, ints))
         glob = {g: self.o.read(self.o.exports[g], GLOBAL_SIZES[g]) for g in spec.get("globals", [])}
         return ints, mem, glob
@@ -163,6 +177,9 @@ def replay(lib, name, call):
             argtypes.append(ctypes.c_int32)
         elif d == "ptr":
             args.append(translate(lib, BLOB_REGIONS, call["raw"][i]))
+            argtypes.append(ctypes.c_void_p)
+        elif d == "alias":
+            args.append(args[int(sa[6:])])
             argtypes.append(ctypes.c_void_p)
         elif d == "pp2in":
             chans = [ctypes.create_string_buffer(r, len(r)) for r in call["mem_in"][i]]

@@ -301,15 +301,22 @@ celt_pitch_xcorr(const opus_val16 *_x, const opus_val16 *_y,
 #endif
 }
 
+/* libssc: the blob keeps the pitch search scratch inside the shared `in_shared`
+   buffer (x_lp4 at byte 0x774, y_lp4 at 0x924, xcorr at 0xcec) instead of on the
+   stack. tone_detect() reads xcorr[-1] and xcorr[max_pitch>>2], which hold
+   whatever earlier stages left there, so the layout has to be the same. */
+extern opus_int32 in_shared[];
+int tone_detect(const opus_val32 *xcorr, int *best_pitch, opus_val32 maxcorr, int n);
+
 void pitch_search(const opus_val16 * OPUS_RESTRICT x_lp, opus_val16 * OPUS_RESTRICT y,
                   int len, int max_pitch, int *pitch, int arch)
 {
    int i, j;
    int lag;
    int best_pitch[2]={0,0};
-   VARDECL(opus_val16, x_lp4);
-   VARDECL(opus_val16, y_lp4);
-   VARDECL(opus_val32, xcorr);
+   opus_val16 *x_lp4 = (opus_val16 *)((char *)in_shared + 0x774);
+   opus_val16 *y_lp4 = (opus_val16 *)((char *)in_shared + 0x924);
+   opus_val32 *xcorr = (opus_val32 *)((char *)in_shared + 0xcec);
 #ifdef FIXED_POINT
    opus_val32 maxcorr;
    opus_val32 xmax, ymax;
@@ -322,10 +329,6 @@ void pitch_search(const opus_val16 * OPUS_RESTRICT x_lp, opus_val16 * OPUS_RESTR
    celt_assert(len>0);
    celt_assert(max_pitch>0);
    lag = len+max_pitch;
-
-   ALLOC(x_lp4, len>>2, opus_val16);
-   ALLOC(y_lp4, lag>>2, opus_val16);
-   ALLOC(xcorr, max_pitch>>1, opus_val32);
 
    /* Downsample by 2 again */
    for (j=0;j<len>>2;j++)
@@ -362,6 +365,8 @@ void pitch_search(const opus_val16 * OPUS_RESTRICT x_lp, opus_val16 * OPUS_RESTR
                    , 0, maxcorr
 #endif
                    );
+   /* libssc: Samsung tone detector may move both coarse candidates. */
+   tone_detect(xcorr, best_pitch, maxcorr, max_pitch>>2);
 
    /* Finer search with 2x decimation */
 #ifdef FIXED_POINT

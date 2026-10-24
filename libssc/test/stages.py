@@ -26,9 +26,11 @@ EC_FIELDS = slice(8, 0x34)   # ec_ctx without the buffer pointer
 OUT_OFF = 0x80000            # oracle's output buffer is IO_BASE + OUT_OFF
 
 # Stage points: libssc calls ssc_stage_hook(id, st, enc); in the blob the same
-# moment is the entry of the named function (first call in the frame).
-STAGES = {1: ("pre-MDCT", "ssc_mdct_forward"),
-          2: ("post-MDCT", "compute_band_energies")}  # long MDCT + headroom
+# moment is the entry (or, with "exit", the return) of the named function, first
+# call in the frame.
+STAGES = {1: ("pre-MDCT", "ssc_mdct_forward", "enter"),
+          2: ("post-MDCT", "compute_band_energies", "enter"),  # long MDCT + headroom
+          3: ("post-normalise", "normalise_bands", "exit")}   # 3d: analysis done
 
 
 # State bytes written by stages that are not ported yet: masked out of the
@@ -39,9 +41,18 @@ STATE_PENDING = [
                       # hf_average, tapset_decision (Opus 1.1 CELTEncoder order)
     (0x40, 0x44),     # consec_transient
     (0x50, 0x54),     # written after the MDCT (Opus 1.1 order: stereo_saving?)
-    (0x70, 0xd4),     # Samsung fields written after the MDCT (transient/tone/last band)
     (0x128 + 4 * 2 * (108 + 1024), None),  # oldBandE / oldLogE / oldLogE2
 ]
+
+
+def inject_pending(blob, lib):
+    """Copy the not-yet-ported state (STATE_PENDING) from the blob into libssc
+    before a frame, so later stages see the same history (e.g. oldBandE for
+    patch_transient_decision) until the stage that writes it is ported."""
+    raw = blob.o.read(blob.state, lib.size)
+    for lo, hi in STATE_PENDING:
+        hi = lib.size if hi is None else hi
+        ctypes.memmove(ctypes.addressof(lib.st) + lo, raw[lo:hi], hi - lo)
 
 
 def mask_state(raw):
@@ -104,8 +115,9 @@ class BlobEncoder:
         self.size = Oracle.s32(self.o.call("ssc_encoder_get_size", 2, rate))
         self.snaps, self.ec = {}, None
         self.o.probes_enter["ec_enc_init"] = lambda o, rec: setattr(self, "ec", rec.args[0])
-        for stage, (_name, fn) in STAGES.items():
-            self.o.probes_enter[fn] = lambda o, rec, s=stage: self._on_stage(s)
+        for stage, (_name, fn, when) in STAGES.items():
+            probes = self.o.probes_exit if when == "exit" else self.o.probes_enter
+            probes[fn] = lambda o, rec, s=stage: self._on_stage(s)
 
     def glob(self, name, size):
         return self.o.read(self.o.exports[name], size)
@@ -141,7 +153,7 @@ def hdr_flags(f):
 
 
 # Checkpoints that depend on code not ported yet: reported, but not a failure.
-PENDING = {"frame header (CELT flags)", "CELT payload"}
+PENDING = {"CELT payload"}
 
 # name -> (blob reader, lib reader); each returns bytes
 CHECKPOINTS = {
@@ -155,6 +167,8 @@ CHECKPOINTS = {
     "frame length": (lambda o: len(o.last).to_bytes(4, "little"),
                      lambda l: len(l.last).to_bytes(4, "little")),
     "frame header (CELT flags)": (lambda o: hdr_flags(o.last), lambda l: hdr_flags(l.last)),
+    "previous_uhq_index": (lambda o: o.read(o.exports["previous_uhq_index"], 4),
+                           lambda l: l.glob("previous_uhq_index", 4)),
     "CELT payload": (lambda o: o.last[4:], lambda l: l.last[4:]),
 }
 
@@ -163,11 +177,13 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--frames", type=int, default=12)
     ap.add_argument("--signals", default=",".join(signals.NAMES))
+    ap.add_argument("--no-inject", action="store_true",
+                    help="do not copy not-yet-ported state from the blob before each frame")
     ap.add_argument("--rates", choices=["basic", "all"], default="basic",
                     help="basic: the 6 golden profiles; all: all 14 bitrates")
     a = ap.parse_args()
     lib = ctypes.CDLL(str(LIBSSC / "build" / "libssc.dll"))
-    stage_names = [f"{label}: {view}" for label, _fn in STAGES.values()
+    stage_names = [f"{label}: {view}" for label, _fn, _when in STAGES.values()
                    for view in ("in_shared", "_pre_shared", "state", "range coder", "bytes written")]
     first_fail = {k: None for k in list(CHECKPOINTS) + stage_names}
     payload_same = payload_total = frames = 0
@@ -176,6 +192,8 @@ def main():
             o = BlobEncoder(rate, bitrate)
             l = LibEncoder(lib, rate, bitrate)
             for i, pcm in enumerate(signals.frames(sig, rate, a.frames)):
+                if not a.no_inject:
+                    inject_pending(o, l)
                 o.last = o.encode(pcm)
                 l.last = l.encode(pcm)
                 frames += 1
@@ -183,7 +201,7 @@ def main():
                 for name, (rb, rl) in CHECKPOINTS.items():
                     if first_fail[name] is None and rb(o) != rl(l):
                         first_fail[name] = where
-                for stage, (label, _fn) in STAGES.items():
+                for stage, (label, _fn, _when) in STAGES.items():
                     bs, ls = o.snaps.get(stage), l.snaps.get(stage)
                     for view in ("in_shared", "_pre_shared", "state", "range coder", "bytes written"):
                         key = f"{label}: {view}"

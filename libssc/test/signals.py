@@ -19,7 +19,7 @@ PROFILES = [(48000, 128000), (48000, 192000), (48000, 229000), (96000, 250000),
 # All 14 bitrates the blob knows (--rates all in the benches).
 ALL_PROFILES = [(48000, b) for b in (88000, 96000, 128000, 192000, 229000, 256000, 328000)] + [
     (96000, b) for b in (152000, 250000, 291000, 308000, 442000, 584000, 886000)]
-NAMES = ["golden", "silence", "noise", "loud", "sweep", "chirp_lr", "clicks"]
+NAMES = ["golden", "silence", "noise", "loud", "sweep", "chirp_lr", "clicks", "tone", "chord", "hfsweep"]
 
 
 def profiles(which):
@@ -57,6 +57,16 @@ def frames(name, rate, count):
             elif name == "chirp_lr":  # different content per channel
                 l = 0.4 * SCALE * math.sin(2 * math.pi * (200 + 4000 * t) * t)
                 r = 0.3 * SCALE * math.sin(2 * math.pi * 1500 * t) * math.sin(2 * math.pi * 3 * t)
+            elif name == "tone":  # pure 1 kHz at 24-bit scale: makes tone_detect fire
+                l = r = 0.3 * (1 << 23) * math.sin(2 * math.pi * 1000 * t)
+            elif name == "chord":  # 440 + 880 + 1320 Hz at 24-bit scale (tone_detect too)
+                l = r = 0.3 * (1 << 23) * sum(math.sin(2 * math.pi * f0 * t) for f0 in (440, 880, 1320))
+            elif name == "hfsweep":  # quiet linear sweep over the top band in 10 frames:
+                # walks the header bandwidth sub-bands (17-23.5 kHz / 15-47 kHz)
+                f_lo, f_hi = (17000, 23500) if rate == 48000 else (15000, 47000)
+                dur = 10 * FRAME_SAMPLES / rate
+                ph = 2 * math.pi * (f_lo * t + (f_hi - f_lo) * t * t / (2 * dur))
+                l = r = 0.02 * (1 << 23) * math.sin(ph)
             elif name == "clicks":  # sparse transients
                 k = (t0 + i) % 4000
                 l = r = (0.9 * SCALE if k < 8 else 0) + rng.gauss(0, 0.002) * SCALE

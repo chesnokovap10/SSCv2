@@ -2,8 +2,9 @@
  *
  * Ported stage by stage (libssc/PLAN.md, phase 3). Bit-exact so far: header,
  * byte budget, input processing (3a), silence flag and prefilter (3b), long
- * MDCT and headroom (3c). The rest of the CELT payload is not produced yet
- * (range coder finished early).
+ * MDCT and headroom (3c), band analysis, transient decision and header flags
+ * (3d). The rest of the CELT payload is not produced yet (range coder finished
+ * early).
  */
 #include "ssc_encoder.h"
 
@@ -17,6 +18,8 @@
 _Static_assert(offsetof(SscEncoder, prefilter_period) == 0x38, "encoder layout");
 _Static_assert(offsetof(SscEncoder, overlap_max) == 0x4c, "encoder layout");
 _Static_assert(offsetof(SscEncoder, fs_mode) == 0x60, "encoder layout");
+_Static_assert(offsetof(SscEncoder, tr_energy) == 0x7c, "encoder layout");
+_Static_assert(offsetof(SscEncoder, tr_hp) == 0xc4, "encoder layout");
 _Static_assert(offsetof(SscEncoder, frame_counter) == 0xd4, "encoder layout");
 _Static_assert(offsetof(SscEncoder, biquad) == 0xd8, "encoder layout");
 _Static_assert(offsetof(SscEncoder, in_mem) == 0x128, "encoder layout");
@@ -38,6 +41,14 @@ typedef struct {
     int16_t gain1;           /* quantised prefilter gain (0 when off) */
     int qg;
     int pf_on;
+    /* 3d: band analysis */
+    int32_t bandE[2 * SSC_NB_EBANDS];
+    int16_t bandLogE[2 * SSC_NB_EBANDS];
+    int16_t bandLogE2[2 * SSC_NB_EBANDS];
+    int isTransient;
+    int shortBlocks;         /* M (8) when transient, else 0 */
+    int16_t tf_estimate;     /* Q14: .2 when the transient was patched in */
+    int drop;                /* top bands not coded (UHQ bandwidth / 152k) */
 } SscFrame;
 
 const SscMode *ssc_custom_mode_create(int fs, int frame_size, int *err) {
@@ -220,13 +231,11 @@ static void silence_and_input(SscEncoder *st, const int32_t *pcm, ec_enc *enc, S
  * lives in _pre_shared after the FFT scratch, like the blob's. */
 #define SSC_FREQ (_pre_shared + 1944)
 
-static void long_mdct(SscEncoder *st, SscFrame *f, int bitrate, int wide) {
+/* Shared tail of the long and short MDCT paths. */
+static void spectrum_fixup(SscEncoder *st, int bitrate, int wide) {
     const SscMode *m = st->mode;
-    int N = f->N, ov = f->overlap, c, i;
     int32_t *freq = SSC_FREQ;
-    int top;
-    for (c = 0; c < 2; c++)  /* stride 2 hard-coded, like the input copy */
-        ssc_mdct_forward(&m->mdct, in_shared + c * (N + ov), freq + c * N, m->window, ov, 0, 1);
+    int i, top;
     /* Narrow rates below 192k: nothing above the last band (M = 8 hard-coded). */
     top = m->eBands[st->end - 1];
     if (!wide && bitrate < 192000 && top < 108)
@@ -235,6 +244,103 @@ static void long_mdct(SscEncoder *st, SscFrame *f, int bitrate, int wide) {
         uhq_headroom(freq, bitrate, 8, m->eBands);
     else
         normal_headroom(freq, bitrate, 8, m->eBands);
+}
+
+static void long_mdct(SscEncoder *st, SscFrame *f, int bitrate, int wide) {
+    const SscMode *m = st->mode;
+    int N = f->N, ov = f->overlap, c;
+    for (c = 0; c < 2; c++)  /* stride 2 hard-coded, like the input copy */
+        ssc_mdct_forward(&m->mdct, in_shared + c * (N + ov), SSC_FREQ + c * N, m->window, ov, 0,
+                         1);
+    spectrum_fixup(st, bitrate, wide);
+}
+
+/* 8 short MDCTs per channel, interleaved (stride 8), as Opus compute_mdcts. */
+static void short_mdcts(SscEncoder *st, SscFrame *f, int bitrate, int wide) {
+    const SscMode *m = st->mode;
+    int L = m->shortMdctSize, ov = f->overlap, c, b;
+    for (c = 0; c < 2; c++)
+        for (b = 0; b < 8; b++)
+            ssc_mdct_forward(&m->mdct, in_shared + c * (8 * L + ov) + b * L,
+                             SSC_FREQ + c * 8 * L + b, m->window, ov, 3, 8);
+    spectrum_fixup(st, bitrate, wide);
+}
+
+static int32_t add32(int32_t a, int32_t b) { return (int32_t)((uint32_t)a + (uint32_t)b); }
+
+/* Header bandwidth flags from the sub-band energies above the last band
+ * (ssc_encode @0xe228..0xeb44 and @0xe890). Narrow rates: byte 2 += 4k for the
+ * highest of 3 sub-bands with energy > 30001 (two channels summed). UHQ (not
+ * 152k): rows 0..3 drop 0..3 top bands; the first row with a sub-band > 12001
+ * sets byte 2 += 4·row and the sub-band index into byte 3 bits 5..7. */
+static void bandwidth_flags(SscEncoder *st, SscFrame *f, uint8_t *out, int wide, int uhq) {
+    const SscMode *m = st->mode;
+    int32_t e[16];
+    int row = 0, j = 0, found = 0;
+    if (!wide) {
+        int k = 0;
+        compute_band_energies_for_lastband(m, SSC_FREQ, e, 4, 0, 0);
+        if (add32(e[3], e[7]) >= 30002) k = 3;
+        else if (add32(e[2], e[6]) >= 30002) k = 2;
+        else if (add32(e[1], e[5]) >= 30002) k = 1;
+        out[2] = (uint8_t)(out[2] + 4 * k);
+        f->drop = 0;
+        return;
+    }
+    if (out[3] == 0xE6) {  /* 152k: four bands off, no flags */
+        f->drop = 4;
+        return;
+    }
+    f->drop = 0;
+    if (!uhq) return;  /* 256k / 328k on the 48 kHz mode */
+    for (row = 0; row < 4 && !found; row++) {
+        compute_band_energies_for_lastband(m, SSC_FREQ, e, 8, 1, row);
+        for (j = 7; j >= 0; j--)
+            if (add32(e[j], e[8 + j]) > 0x2ee1) {
+                found = 1;
+                break;
+            }
+    }
+    row--;
+    if (!found) j = 0;
+    f->drop = row;
+    out[2] = (uint8_t)(out[2] + 4 * row);
+    out[3] = (uint8_t)((j << 5) | (out[3] & 0x1f));
+}
+
+/* Band energies, transient decision, bandwidth flags, normalisation
+ * (ssc_encode @0xe184..0xebcc; Opus 1.1 celt_encode_with_ec order). */
+static void analysis(SscEncoder *st, ec_enc *enc, SscFrame *f, uint8_t *out, int bitrate,
+                     int wide, int uhq) {
+    const SscMode *m = st->mode;
+    int nb = m->nbEBands, C = st->channels, end = st->end, i, checked;
+    const int16_t *oldBandE = (const int16_t *)(st->in_mem + (f->overlap + 1024) * C);
+
+    compute_band_energies(m, SSC_FREQ, f->bandE, end);
+    amp2Log2(m, end, end, f->bandE, f->bandLogE, C);
+    memcpy(f->bandLogE2, f->bandLogE, sizeof(int16_t) * nb * C);
+    f->isTransient = 0;
+    f->shortBlocks = 0;
+    f->tf_estimate = 0;
+    checked = ec_tell(enc) + 3 <= f->total_bits;
+    if (checked) {
+        /* Both detectors always run (the temporal one keeps state). */
+        int t1 = patch_transient_decision(f->bandLogE, oldBandE, nb, end - previous_uhq_index);
+        int t2 = patch_transient_decision_temporal(m, st, in_shared);
+        if (t1 || t2) {
+            short_mdcts(st, f, bitrate, wide);
+            compute_band_energies(m, SSC_FREQ, f->bandE, end);
+            amp2Log2(m, end, end, f->bandE, f->bandLogE, C);
+            for (i = 0; i < 2 * nb; i++)  /* short vs long MDCT scaling: LM/2 */
+                f->bandLogE2[i] = (int16_t)(f->bandLogE2[i] + 0x600);
+            f->isTransient = 1;
+            f->shortBlocks = 8;
+            f->tf_estimate = 0xccd;
+        }
+    }
+    bandwidth_flags(st, f, out, wide, uhq);
+    if (checked) ec_enc_bit_logp(enc, f->isTransient, 3);
+    normalise_bands(m, SSC_FREQ, (int16_t *)SSC_FREQ, f->bandE, end - f->drop);
 }
 
 /* Pitch pre-filter (Opus run_prefilter, Samsung variant; @0xdb90..0xdfdc). */
@@ -356,12 +462,14 @@ int ssc_encode(SscEncoder *st, int32_t *pcm, int frame_size, uint8_t *out, int b
     if (ssc_stage_hook) ssc_stage_hook(SSC_STAGE_PRE_MDCT, st, &enc);
     long_mdct(st, &f, bitrate, wide);
     if (ssc_stage_hook) ssc_stage_hook(SSC_STAGE_POST_MDCT, st, &enc);
+    analysis(st, &enc, &f, out, bitrate, wide, uhq);
+    if (ssc_stage_hook) ssc_stage_hook(SSC_STAGE_POST_NORMALISE, st, &enc);
 
-    /* TODO(phase 3d+): band energies, transient decision (short MDCTs),
-     * quantisation. */
+    /* TODO(phase 3e+): coarse/fine energy, allocation, PVQ. */
 
     /* End-of-frame state (ssc_encode @0x111b8..). Still missing: band energies,
-     * consec_transient (+0x40), previous_uhq_index. */
+     * consec_transient (+0x40). */
+    previous_uhq_index = f.drop;
     st->prefilter_period = f.pitch_index;
     st->prefilter_gain = f.gain1;
     st->f1c = (int32_t)enc.rng;  /* seed for the next frame's quant_all_bands */

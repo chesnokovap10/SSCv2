@@ -28,7 +28,9 @@ def main():
     out = LIBSSC / "build"
     out.mkdir(exist_ok=True)
     dll = out / "libssc.dll"
-    cmd = ["gcc", "-std=gnu11", "-O2", "-Wall", "-Wno-unused-function", "-shared",
+    # -ffp-contract=off: the float transient detector must not get fused multiply-adds
+    # (the blob uses plain fmul/fadd); keep it in the cgo flags too.
+    cmd = ["gcc", "-std=gnu11", "-O2", "-ffp-contract=off", "-Wall", "-Wno-unused-function", "-shared",
            "-o", str(dll), *DEFINES, f"-I{SRC}", f"-I{SRC / 'opus'}",
            *map(str, sources())]
     r = subprocess.run(cmd, capture_output=True, text=True)

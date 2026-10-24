@@ -43,7 +43,12 @@ typedef struct SscEncoder {
     int32_t fs;                 /* 0x64  real input rate */
     int32_t bitrate;            /* 0x68  bps, set per frame */
     int32_t bit_depth;          /* 0x6c  24 */
-    uint8_t f70[0xd4 - 0x70];
+    /* 0x70..0xd4: patch_transient_decision_temporal (float, per channel) */
+    int32_t tr_flag;            /* 0x70  a transient was seen last frame */
+    int32_t tr_pos[2];          /* 0x74  last sub-block above the running energy */
+    float tr_energy[2][8];      /* 0x7c  high-passed energy of the 8 sub-blocks */
+    float tr_avg[2];            /* 0xbc  running energy average */
+    float tr_hp[2][2];          /* 0xc4  high-pass memory: last input, last output */
     uint16_t frame_counter;     /* 0xd4  8-bit, wraps at 256 */
     uint16_t hdr_low_bits;      /* 0xd6  low 2 bits of header byte 2 (1 after init) */
     int64_t biquad[10];         /* 0xd8  Biquad_Narrow_int2int_stereo state */
@@ -57,7 +62,7 @@ extern int32_t _pre_shared[2 * (864 + SSC_COMBFILTER_MAXPERIOD)]; /* prefilter `
 /* Test hook: called at named points of ssc_encode with the live range coder
  * (const ec_enc *). Lets the stage bench snapshot libssc where it snapshots the
  * blob. NULL in normal use. */
-enum { SSC_STAGE_PRE_MDCT = 1, SSC_STAGE_POST_MDCT = 2 };
+enum { SSC_STAGE_PRE_MDCT = 1, SSC_STAGE_POST_MDCT = 2, SSC_STAGE_POST_NORMALISE = 3 };
 typedef void (*ssc_stage_fn)(int stage, const struct SscEncoder *st, const void *enc);
 extern ssc_stage_fn ssc_stage_hook;
 
