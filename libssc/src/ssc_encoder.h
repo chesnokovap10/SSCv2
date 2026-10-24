@@ -37,7 +37,8 @@ typedef struct SscEncoder {
     uint8_t f70[0xd4 - 0x70];
     uint16_t frame_counter;     /* 0xd4  8-bit, wraps at 256 */
     uint16_t hdr_low_bits;      /* 0xd6  low 2 bits of header byte 2 (1 after init) */
-    uint8_t fd8[0x12c - 0xd8];  /* 0xd8  Biquad_Narrow state starts here */
+    int64_t biquad[10];         /* 0xd8  Biquad_Narrow_int2int_stereo state */
+    int32_t f128;               /* 0x128 */
     int32_t in_mem[1];          /* 0x12c  per-channel arrays follow */
 } SscEncoder;
 
@@ -48,7 +49,8 @@ void ssc_encoder_destroy(SscEncoder *st);
 const SscMode *ssc_custom_mode_create(int fs, int frame_size, int *err);
 
 /* Encode one frame of interleaved int32 PCM (24-bit at 2^29 scale) into out.
+ * Like the blob, the DRC limiter rewrites pcm in place.
  * Returns the frame length in bytes (header + payload) or a negative error. */
-int ssc_encode(SscEncoder *st, const int32_t *pcm, int frame_size, uint8_t *out, int bitrate);
+int ssc_encode(SscEncoder *st, int32_t *pcm, int frame_size, uint8_t *out, int bitrate);
 
 #endif

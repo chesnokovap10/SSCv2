@@ -208,7 +208,8 @@ def test_frames(lib):
         bad, same = None, 0
         total = 0
         for i, want in enumerate(g["payloads"]):
-            pcm = golden_pcm(g["seed"], i, g["rate"], g["channels"])
+            raw = golden_pcm(g["seed"], i, g["rate"], g["channels"])
+            pcm = ctypes.create_string_buffer(raw, len(raw))  # ssc_encode writes in place (DRC)
             n = lib.ssc_encode(st, pcm, 864, out, g["bitrate"])
             got = out.raw[:max(n, 0)]
             if n != len(want) or got[:2] != want[:2] or got[3] != want[3] or \

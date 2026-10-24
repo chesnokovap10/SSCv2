@@ -11,9 +11,11 @@
 #include <string.h>
 
 #include "opus/entenc.h"
+#include "ssc_drc.h"
 
 _Static_assert(offsetof(SscEncoder, fs_mode) == 0x60, "encoder layout");
 _Static_assert(offsetof(SscEncoder, frame_counter) == 0xd4, "encoder layout");
+_Static_assert(offsetof(SscEncoder, biquad) == 0xd8, "encoder layout");
 _Static_assert(offsetof(SscEncoder, in_mem) == 300, "encoder layout");
 
 const SscMode *ssc_custom_mode_create(int fs, int frame_size, int *err) {
@@ -54,8 +56,9 @@ int ssc_encoder_init(SscEncoder *st, int fs, int channels, int bit_depth) {
     st->bit_depth = bit_depth;
     st->frame_counter = 0;
     st->hdr_low_bits = 1;
-    /* TODO(phase 4): previous_uhq_index = 0; SoundBooster_DRC_Init(fs, channels);
-     * SoundBooster_DRC_SetPar(1, 0x7b8e, 0, 50000, 0). */
+    previous_uhq_index = 0;
+    SoundBooster_DRC_Init(fs, channels);
+    SoundBooster_DRC_SetPar(1, 0x7b8e); /* blob also passes (0, 50000, 0), unused */
     return ret;
 }
 
@@ -89,7 +92,7 @@ typedef struct {
     uint8_t byte3;    /* (flags << 5) | rate index; flags may change later in the frame */
     uint8_t uhq;      /* header byte 1 carries the counter's high nibble */
     uint8_t wide;     /* no +3/128 budget boost */
-    int32_t drc_gain; /* set_DRC_limit_gain() for 24-bit input */
+    int32_t drc_gain; /* set_DRC_limit_gain(); narrow rates: >>8 unless 24-bit input */
 } SscRate;
 
 static const SscRate kRates[] = {
@@ -109,7 +112,30 @@ static const SscRate *find_rate(int bitrate) {
     return NULL;
 }
 
-int ssc_encode(SscEncoder *st, const int32_t *pcm, int frame_size, uint8_t *out, int bitrate) {
+/* Input processing before CELT (ssc_encode @0xd504..0xd688): a biquad copy of
+ * the input drives CalculateLimitGain, then the DRC limiter rewrites pcm in
+ * place in 8 blocks of frame_size/8 stereo frames. */
+static void preprocess(SscEncoder *st, int32_t *pcm, int frame_size, int bitrate, int wide) {
+    int32_t p_filtered, p_input, gain;
+    int i, block = frame_size >> 2;
+    if (!wide) {
+        const int32_t *coef = bitrate <= 96000 ? coeffs96andbelow : coeffs;
+        Biquad_Narrow_int2int_stereo(_pcmpower, pcm, coef, st->biquad, frame_size);
+        powercalc(_pcmpower, frame_size, &p_filtered);
+        powercalc(pcm, frame_size, &p_input);
+        gain = CalculateLimitGain(p_filtered, p_input - p_filtered, bitrate, st->fs);
+        if (st->bit_depth == 24) gain <<= 8;
+    } else {
+        Biquad_Narrow_int2int_stereo(_pcmpower, pcm, coeffs96andbelow, st->biquad, frame_size);
+        powercalc(_pcmpower, frame_size, &p_filtered);
+        powercalc(pcm, frame_size, &p_input);
+        gain = CalculateLimitGain(p_filtered, p_input, bitrate, st->fs) << 8;
+    }
+    set_DRC_limit_gain(gain);
+    for (i = 0; i < 8; i++) SoundBooster_DRC_Exe(pcm + i * block, frame_size >> 3);
+}
+
+int ssc_encode(SscEncoder *st, int32_t *pcm, int frame_size, uint8_t *out, int bitrate) {
     const SscRate *rate = find_rate(bitrate);
     int wide = rate ? rate->wide : 0;
     int uhq = rate ? rate->uhq : 0;
@@ -124,7 +150,8 @@ int ssc_encode(SscEncoder *st, const int32_t *pcm, int frame_size, uint8_t *out,
     out[3] = rate ? rate->byte3 : 0xF3; /* unknown rate: 0xF3, no DRC gain update */
     out[2] = (uint8_t)((st->frame_counter << 4) | (st->hdr_low_bits & 3));
     if (uhq) out[1] = (uint8_t)(0xE0 | ((st->frame_counter >> 4) & 0xF));
-    /* TODO(phase 4): set_DRC_limit_gain(rate->drc_gain) (24-bit; other depths differ). */
+    if (rate) /* overwritten by preprocess(); kept for state parity with the blob */
+        set_DRC_limit_gain(wide || st->bit_depth == 24 ? rate->drc_gain : rate->drc_gain >> 8);
 
     /* Byte budget: the 44.1/48 kHz mode counts at Fs = 44100. */
     n = st->bitrate * frame_size / (st->fs_mode * 8);
@@ -133,8 +160,9 @@ int ssc_encode(SscEncoder *st, const int32_t *pcm, int frame_size, uint8_t *out,
     budget = n - 1;
     ec_enc_init(&enc, out + SSC_HEADER_BYTES, budget);
 
-    /* TODO(phase 3/4): Biquad + DRC on the input, then the CELT pipeline. */
+    preprocess(st, pcm, frame_size, bitrate, wide);
     ec_enc_shrink(&enc, budget);
+    /* TODO(phase 3): the CELT pipeline. */
     if (!pcm || n < 3) return -1;
 
     ec_enc_done(&enc);
