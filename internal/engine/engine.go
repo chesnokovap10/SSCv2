@@ -171,6 +171,7 @@ func (e *engine) run() error {
 	}
 	opts := bt.Options{
 		EnableSSC:     e.cfg.Codec == "ssc",
+		SSCCap:        uint8(e.cfg.SSCCap),
 		Keys:          e.store,
 		Logf:          logf,
 		Verbose:       e.cfg.Verbose,
@@ -393,9 +394,9 @@ func (e *engine) session(addrStr string) error {
 
 	var mtu int
 	if rc, rmtu, ok := bt.RemoteConfigured(); ok {
-		if rc == bt.CodecSSC && bt.SSCConfig()&0x02 != 0 {
-			// UHQ (96 kHz) chosen by them: we encode the 48 kHz basic mode.
-			logf("headphones chose SSC UHQ (cap 0x%02X) themselves - reconnecting for basic SSC", bt.SSCConfig())
+		if rc == bt.CodecSSC && (bt.SSCConfig()&0x02 != 0) != sscUHQ() {
+			// their choice of UHQ (96 kHz) or basic differs from ours
+			logf("headphones chose SSC cap 0x%02X themselves - reconnecting for ours (UHQ %v)", bt.SSCConfig(), sscUHQ())
 			bt.Disconnect()
 			return errReconnect
 		}
@@ -409,7 +410,11 @@ func (e *engine) session(addrStr string) error {
 		logf("using the %s stream the headphones set up", rc)
 		mtu = rmtu
 	} else {
-		mtu, err = bt.Configure(ctx, codec, uint32(e.srate), 2, 256000)
+		rate := e.srate
+		if codec == bt.CodecSSC {
+			rate = sscEncodeRate(e.srate)
+		}
+		mtu, err = bt.Configure(ctx, codec, uint32(rate), 2, 256000)
 		if err != nil {
 			return err
 		}

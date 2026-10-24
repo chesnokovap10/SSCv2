@@ -114,6 +114,7 @@ type Options struct {
 	LocalName string
 	Mouse     *LEBond // nil = no mouse bridge
 	EnableSSC bool    // offer the SSC endpoint (only when SSC can be encoded)
+	SSCCap    uint8   // SSC configuration byte to send (0 = like the phone)
 	Debug     bool    // packet journal (logx debug mode)
 	// ForceMediaMTU: treat the headphones' media channel MTU as this many
 	// bytes instead of what they announced ("AAC 256" mode).

@@ -45,7 +45,7 @@ func tailFile(path string, n int) string {
 // Control API: the running tray accepts commands on a per-user named pipe,
 // so everything the menu does can be scripted ("ssc.exe ctl <cmd> [arg]").
 //
-//	status | info | debug on|off | restore <mode> | mode off|aac|ssc | ssc auto|<kbps> | import windows | service install|remove
+//	status | info | debug on|off | restore <mode> | mode off|aac|ssc | ssc auto|<kbps> | ssccap auto|<hex> | import windows | service install|remove
 //	virtual install|remove
 //	scan | connect <addr> | headphones <addr> | mouse <addr|none>
 
@@ -168,8 +168,8 @@ func (a *App) ctl(args []string) string {
 		kbps := 0
 		if arg(1) != "auto" {
 			n, err := strconv.Atoi(arg(1))
-			if err != nil || !ssc.Valid(48000, n*1000) {
-				return "error: ssc auto|88|96|128|192|229|256|328"
+			if err != nil || !ssc.Valid(48000, n*1000) && !ssc.Valid(96000, n*1000) {
+				return "error: ssc auto|88|96|128|192|229|256|328 or UHQ 152|250|291|308|442|584|886"
 			}
 			kbps = n
 		}
@@ -179,6 +179,22 @@ func (a *App) ctl(args []string) string {
 		a.mu.Unlock()
 		go a.restartEngine()
 		return fmt.Sprintf("ok: ssc %d kbps (0 = auto)", kbps)
+	case "ssccap":
+		// SSC configuration byte for experiments: hex (0x0A) or "auto"
+		v := int64(0)
+		if arg(1) != "auto" {
+			n, err := strconv.ParseInt(strings.TrimPrefix(strings.ToLower(arg(1)), "0x"), 16, 16)
+			if err != nil || n <= 0 || n > 0xFF {
+				return "error: ssccap auto|<hex byte>"
+			}
+			v = n
+		}
+		a.mu.Lock()
+		a.s.SSCCap = int(v)
+		_ = config.Save(a.s)
+		a.mu.Unlock()
+		go a.restartEngine()
+		return fmt.Sprintf("ok: ssccap 0x%02X (0 = auto)", v)
 	case "variant":
 		a.mu.Lock()
 		a.driverVariant = arg(1)

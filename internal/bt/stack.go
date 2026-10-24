@@ -475,7 +475,14 @@ func Configure(ctx context.Context, codec Codec, sampleRate uint32, channels uin
 				cap = C.uint8_t(0x04 | s.caps.SSCCap&0x08)
 			}
 			if sampleRate == 88200 || sampleRate == 96000 {
-				cap = C.SSC_CAP_UHQ
+				// phone: UHQ v2 (0x02) plus the sink's 0x08 bit
+				cap = C.uint8_t(0x02 | 0x08)
+				if s.caps.SSCCap != 0 {
+					cap = C.uint8_t(0x02 | s.caps.SSCCap&0x08)
+				}
+			}
+			if s.opts.SSCCap != 0 {
+				cap = C.uint8_t(s.opts.SSCCap) // experiments (ctl ssccap)
 			}
 			rc = C.ssc_set_config_ssc(cid, C.uint8_t(local), C.uint8_t(remote), cap)
 		default:

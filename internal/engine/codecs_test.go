@@ -42,3 +42,33 @@ func TestSSCForced(t *testing.T) {
 		t.Error("sscNeedsOver")
 	}
 }
+
+func TestSSCUHQ(t *testing.T) {
+	defer func() { sscForced = 0 }()
+	sscForced = 584000
+	if !sscUHQ() || sscEncodeRate(48000) != 96000 {
+		t.Fatal("584k is not UHQ")
+	}
+	if got, err := sscBitrate(96000, 667, 0x0A); err != nil || got != 584000 {
+		t.Errorf("584k mtu 667: %d %v", got, err)
+	}
+	sscForced = 886000
+	if got, _ := sscBitrate(96000, 667, 0x0A); got != 584000 {
+		t.Errorf("886k mtu 667: %d, want 584000", got)
+	}
+	if !sscNeedsOver(886) || sscNeedsOver(584) {
+		t.Error("sscNeedsOver UHQ")
+	}
+	e, err := newSSC(48000, 1005)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer e.Close()
+	if e.FrameLen() != 432 {
+		t.Fatalf("FrameLen %d", e.FrameLen())
+	}
+	out, err := e.Encode(make([]float32, 864))
+	if err != nil || len(out) != 1000 || out[0] != 0xFF || out[1]&0xF0 != 0xE0 {
+		t.Fatalf("UHQ frame: %d % X %v", len(out), out[:4], err)
+	}
+}

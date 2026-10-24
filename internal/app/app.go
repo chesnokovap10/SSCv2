@@ -289,6 +289,7 @@ func (a *App) startEngineLocked() {
 		Debug:        a.s.Debug,
 		AACMode:      a.s.AACMode,
 		SSCBitrate:   a.s.SSCBitrate,
+		SSCCap:       a.s.SSCCap,
 	}
 	if a.s.Headphones != nil {
 		cfg.Headphones = a.s.Headphones.Addr

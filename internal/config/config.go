@@ -52,6 +52,10 @@ type Settings struct {
 	// headphones announce a limit). Frames above the headphones' packet
 	// size go in larger packets, as "AAC 256" does.
 	SSCBitrate int `json:"sscBitrate,omitempty"`
+	// SSCCap: SSC configuration byte sent to the headphones (experiments);
+	// 0 = like the phone (0x04 | their 0x08 bit, UHQ 0x02 | their 0x08).
+	// A UHQ bitrate in SSCBitrate (152..886) forces 96 kHz.
+	SSCCap int `json:"sscCap,omitempty"`
 }
 
 func (s *Settings) MuteSpeakersOrDefault() bool {
@@ -104,7 +108,7 @@ func (s *Settings) summary() string {
 		}
 		return d.Addr
 	}
-	return fmt.Sprintf("mode=%s headphones=%s mouse=%s debug=%v aac=%q ssc=%d", s.Mode, dev(s.Headphones), dev(s.Mouse), s.Debug, s.AACMode, s.SSCBitrate)
+	return fmt.Sprintf("mode=%s headphones=%s mouse=%s debug=%v aac=%q ssc=%d/0x%02X", s.Mode, dev(s.Headphones), dev(s.Mouse), s.Debug, s.AACMode, s.SSCBitrate, s.SSCCap)
 }
 
 // caller names the function that called Load/Save (who reset the choice?).

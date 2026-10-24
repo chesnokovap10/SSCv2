@@ -24,6 +24,7 @@ type EngineConfig struct {
 	Debug        bool   `json:"debug,omitempty"`
 	AACMode      string `json:"aacMode,omitempty"` // "fit" | "frag"
 	SSCBitrate   int    `json:"sscBitrate,omitempty"` // kbps, 0 = like the phone
+	SSCCap       int    `json:"sscCap,omitempty"`     // SSC config byte, 0 = like the phone
 }
 
 // Command from tray to engine.
