@@ -10,8 +10,7 @@ same inputs and compare byte for byte.
 Spec syntax per argument: "int" (32-bit value), "ptr" (a pointer into a shared
 global or the mode tables, mapped to libssc's twin object), or "<dir>:<size>"
 where dir is in / out / inout and size is a Python expression over a0..a7 (the
-int args); "alias:N" passes the same buffer as argument N (in-place functions),
-"alias:N+EXPR" a pointer EXPR bytes into it;
+int args); "alias:N" passes the same buffer as argument N (in-place functions);
 "state" is the encoder header (0xe0 bytes, in and out) with its mode pointer
 mapped to libssc's mode; "alloc" the SscAlloc struct (0x184 bytes, in and out)
 with its caps pointer mapped.
@@ -46,12 +45,14 @@ SPECS = {
     "set_DRC_limit_gain": dict(args=["int"], globals=["drc_struct"]),
     "SSC_DRC_Exe": dict(args=["inout:8*a1", "int"], globals=["drc_struct", "DRC_ChNum"]),
     # 3b: pitch analysis (N = 864, len = N + 1024)
-    "_ssc_autocorr": dict(args=["in:1888", "out:20"], ret=True),
+    # x is in_shared in the blob and the scaled copy goes there too (in place)
+    "_ssc_autocorr": dict(args=["ptr", "out:20"], ret=True, globals=["in_shared"]),
     "_ssc_lpc": dict(args=["out:8", "in:20"]),
     "ssc_pitch_xcorr_c1": dict(args=["in:1888", "in:1888", "out:20"]),
     "ssc_pitch_xcorr_c2": dict(args=["in:432", "in:920", "out:976"], ret=True),
-    # x1 = x0 + len in _pre_shared: one buffer covers both channels
-    "ssc_pitch_downsample": dict(args=["in:8*a3", "alias:0+4*a3", "out:(a3>>1)*2", "int"]),
+    # x0, x1 in _pre_shared, x_lp = in_shared (scaled in place by _ssc_autocorr)
+    "ssc_pitch_downsample": dict(args=["ptr", "ptr", "ptr", "int"],
+                                 globals=["in_shared", "_pre_shared"]),
     # scratch (x_lp4, y_lp4, xcorr) lives in in_shared, so it is compared too
     "ssc_pitch_search": dict(args=["ptr", "ptr", "int", "int", "out:4"], globals=["in_shared"]),
     # x is pre[c] + 1024: the history before it is read (x[-T-2..]), hence @4096
@@ -234,8 +235,7 @@ def replay(lib, name, call):
             args.append(translate(lib, BLOB_REGIONS, call["raw"][i]))
             argtypes.append(ctypes.c_void_p)
         elif d == "alias":
-            n, _, off_expr = sa[6:].partition("+")
-            args.append(args[int(n)] + (size_of(off_expr, call["ints"]) if off_expr else 0))
+            args.append(args[int(sa[6:])])
             argtypes.append(ctypes.c_void_p)
         elif d in PTR_STRUCTS:
             size, po = PTR_STRUCTS[d]

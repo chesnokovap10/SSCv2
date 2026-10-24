@@ -125,7 +125,10 @@ SscEncoder *ssc_encoder_create(int fs, int channels, int bit_depth, int *err) {
         if (err) *err = -1;
         return NULL;
     }
-    st = (SscEncoder *)malloc(state_size(m, channels) + 4);  /* + the 4 bytes the blob misses */
+    /* ssc_encode always handles two channels (like the blob, which then writes
+     * past a mono state): room for at least stereo, + the 4 bytes get_size
+     * misses. init clears state_size(channels) before it checks channels. */
+    st = (SscEncoder *)malloc((channels > 2 ? state_size(m, channels) : state_size(m, 2)) + 4);
     if (!st) {
         if (err) *err = -7;
         return NULL;
@@ -751,7 +754,7 @@ static void quantise(SscEncoder *st, ec_enc *enc, SscFrame *f, int bitrate, int 
         int dynalloc_logp = 6;
         int32_t total_boost = 0;
         for (i = 0; i < endc; i++) {
-            int width = C * (m->eBands[i + 1] - m->eBands[i]) << 3;
+            int width = (m->eBands[i + 1] - m->eBands[i]) << 4;  /* blob: stereo whatever C is */
             int quanta = IMIN(width << 3, IMAX(6 << 3, width));
             int loop_logp = dynalloc_logp, boost = 0, j;
             for (j = 0; tell + (loop_logp << 3) < total_bits - total_boost && boost < caps[i]; j++) {
@@ -914,5 +917,7 @@ int ssc_encode(SscEncoder *st, int32_t *pcm, int frame_size, uint8_t *out, int b
     st->rng = (int32_t)enc.rng;  /* seed for the next frame's quant_all_bands */
     ec_enc_done(&enc);
     st->frame_counter = (uint16_t)(st->frame_counter + 1 == 256 ? 0 : st->frame_counter + 1);
-    return enc.error ? -3 : budget + SSC_HEADER_BYTES;
+    /* the frame is cut at 1275 payload bytes; ec_enc_done still wrote its tail
+     * at the end of the full budget (blob: same) */
+    return enc.error ? -3 : f.nbCompressedBytes + SSC_HEADER_BYTES;
 }

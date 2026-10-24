@@ -24,6 +24,7 @@ extern SscDrcState drc_struct;
 extern int32_t DRC_ChNum;
 extern int32_t Soundbooster_DRC_Fs;
 extern int32_t DRC_ModeFlag;
+extern int32_t count_for_debug;
 extern int32_t _pcmpower[864 * 2];   /* Biquad output (blob global) */
 extern int32_t previous_uhq_index;
 

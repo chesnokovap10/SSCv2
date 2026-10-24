@@ -6,6 +6,8 @@
  * freq holds two channels of N (864) bins; M is the number of short MDCTs (8),
  * so band b starts at bin eBands[b] * M.
  */
+#include "ssc_drc.h"
+#include "ssc_encoder.h"
 #include "ssc_internal.h"
 #include "ssc_mode.h"
 
@@ -30,6 +32,26 @@ static void scale(int32_t *freq, int lo, int hi, int32_t g) {  /* uhq_headroom: 
     }
 }
 
+/* headroom_gain[k] as the blob reads it. It has 240 entries, enough for the
+ * 48 kHz mode (bands 20..21 = 240 bins); on the 96 kHz mode with a narrow
+ * bitrate (not used by the phone) the loop runs to bin 864 and reads on into
+ * the .data that follows: drc_struct, DRC_ChNum, DRC_ModeFlag,
+ * Soundbooster_DRC_Fs, count_for_debug, previous_uhq_index, then _pre_shared
+ * (blob va 0x20500..). */
+static int32_t gain_at(int k) {
+    if (k < 240) return headroom_gain[k];
+    k -= 240;
+    if (k < 6) return ((const int32_t *)&drc_struct)[k];
+    switch (k) {
+    case 6: return DRC_ChNum;
+    case 7: return DRC_ModeFlag;
+    case 8: return Soundbooster_DRC_Fs;
+    case 9: return count_for_debug;
+    case 10: return previous_uhq_index;
+    default: return _pre_shared[k - 11];
+    }
+}
+
 void normal_headroom(int32_t *freq, int bitrate, int M, const int16_t *eBands, int N) {
     int i;
     if (bitrate >= 96000) {
@@ -37,7 +59,7 @@ void normal_headroom(int32_t *freq, int bitrate, int M, const int16_t *eBands, i
          * headroom_gain[] (low 16 bits), indexed from the start of band 20. */
         int b20 = eBands[20] * M, lo = b20 + (M >> 2) * 34, hi = eBands[22] * M;
         for (i = lo; i < hi; i++) {
-            int32_t g = (int16_t)headroom_gain[i - b20];
+            int32_t g = (int16_t)gain_at(i - b20);
             freq[i] = mul16_32_q15(g, freq[i]);
             freq[i + N] = mul16_32_q15(g, freq[i + N]);
         }

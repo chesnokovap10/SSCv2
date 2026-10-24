@@ -6,6 +6,7 @@ SscDrcState drc_struct;
 int32_t DRC_ChNum;
 int32_t Soundbooster_DRC_Fs;
 int32_t DRC_ModeFlag;
+int32_t count_for_debug;  /* blob export, never written */
 int32_t _pcmpower[864 * 2];
 int32_t previous_uhq_index;
 
