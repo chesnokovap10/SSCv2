@@ -79,7 +79,7 @@ C99, fixed-point, на основе CELT-энкодера libopus (BSD-3). API �
 - **3d** ✅ энергии и решения: `compute_band_energies`, `amp2Log2`,
   `patch_transient_decision(_temporal)`, `compute_band_energies_for_lastband`,
   `tone_detect`, `normalise_bands`, `last_band_info_calc`.
-- **3e** coarse/fine энергия, `spreading_decision`, tf, `compute_allocation`.
+- **3e** ✅ coarse/fine энергия, `spreading_decision`, tf, `compute_allocation`.
 - **3f** `quant_all_bands` (PVQ, стерео, cwrs), `quant_energy_finalise`,
   флаги заголовка. Критерий фазы: голдены и корпус `test/signals.py` совпадают
   байт в байт.
@@ -471,3 +471,76 @@ post-normalise, флаги заголовка, `previous_uhq_index`) совпа�
 **1400/1400 кадрах** (`--rates all`: 14 битрейтов × 9 сигналов × 10 кадров +
 `hfsweep`); replay 25/25 функций на всех битрейтах; twin 19/19.
 Полезная нагрузка CELT — ещё PEND (3e–3f).
+
+- 2026-10-24 — **подэтап 3e готов** (tf, энергии coarse/fine, spread, dynalloc,
+  trim, распределение бит).
+
+### Итоги 3e
+
+**Цепочка** (`ssc_encode` @0xebcc..0x11068) — порядок Opus 1.1:
+tf_analysis → `quant_coarse_energy` → tf_encode → spread → dynalloc (анализ +
+кодирование бустов) → stereo_analysis → intensity → alloc_trim →
+`compute_allocation` → `quant_fine_energy`. Встроенные в `ssc_encode` части
+перенесены как static-функции `ssc_encoder.c`, экспортируемые — в
+`src/ssc_quant.c`. Что отличается от Opus:
+
+- **tf**: анализ и `tf_encode` только на узких битрейтах и при
+  `effectiveBytes ≥ 30`; у широких `tf_res` обнуляется и не кодируется.
+  После обратного прохода Витерби `tf_res[0] = tf_res[1] = isTransient`.
+  Рабочая память tf_analysis — снова в `in_shared` (`metric` +0, `path0` +22,
+  `path1` +44 int32, `tmp` с байта 0x108, `tmp_1` с 0x348). `tf_encode` идёт до
+  `st->end`, а не до `end − drop`.
+- **`quant_coarse_energy`** — своя сигнатура (11 аргументов): всегда два
+  прохода (intra и inter), без `intra_bias`; `intra` форсируется только полем
+  `st->force_intra` (0x10), которое блоб не выставляет. Если выиграл intra, в
+  `error[]` копируются все 44 значения из локального массива — хвост за `end`
+  там неинициализирован (стековый мусор, дальше не читается; стенды его не
+  сравнивают). Таблицы Лапласа — Opus LM=3.
+- **spread**: `spreading_decision` переписана — только полосы 8..end−1, счётчики
+  удвоены (поэтому `hf_sum` вдвое больше, чем в Opus), нет выхода SPREAD_NONE
+  для узкой последней полосы, гистерезис в масштабе ×4 (результат тот же).
+  Вызывается, если `nbAvailableBytes ≥ 20` и нет коротких блоков.
+- **dynalloc**: Opus с `lsb_depth = 16`, CBR. Добавки Samsung:
+  1) буст полос 0 и 1 по форме `bandLogE2` (сильный низкий пик: до 10 квантов;
+     не делается, если сработал кап dynalloc);
+  2) после кодирования бустов — первая из полос 18..20 с бустом > 1000, у
+     которой следующая полоса без буста, переносит буст на неё, если
+     `oldBandE` следующей (уже после coarse) > 7000 или > половины текущей.
+  Капы — прямо `mode->cache.caps` (`init_caps` блоб не вызывает).
+- **intensity**: `hysteresis_decision(510, …)` по своим таблицам Samsung на 23
+  значения → фактически всегда `end − drop`.
+- **alloc_trim**: без `stereo_saving` (блоб считает `logXC2`, но не
+  использует), без анализа тональности и surround; наклон спектра по
+  `end − drop`.
+- **`compute_allocation`** — своя сигнатура (без start/C/LM/encode) и флаг
+  `bitrate > 192000`, который выбирает **вторую таблицу распределения**
+  (`mode->allocVectors2`). Внутри — Opus 1.1 rate.c без изменений.
+- `quant_fine_energy`, `hysteresis_decision` — Opus 1.1 (без start).
+- Поля состояния названы: `rng` 0x1c, `spread_decision` 0x20, `delayedIntra`
+  0x24, `tonal_average` 0x28, `lastCodedBands` 0x2c, `hf_average` 0x30,
+  `tapset_decision` 0x34, `intensity` 0x50, `force_intra` 0x10.
+
+**Стенды:**
+- stages: новая точка «pre-PVQ» (вход `quant_all_bands`): кроме памяти,
+  состояния и range coder сравниваются все аргументы `quant_all_bands`
+  (регистры + стек: end, shortBlocks, spread, dual_stereo, intensity,
+  total_bits, balance, codedBands; массивы `tf_res`, `pulses`, `bandE`) и
+  `fine_quant`, `fine_priority`, `error` (по указателям, снятым на входе
+  `quant_fine_energy` / `compute_allocation`). Массивы сравниваются до `end`:
+  за ним у блоба остатки переиспользованных локальных массивов.
+  **Совпадает на 1400/1400 кадрах** (`--rates all`).
+- replay: +5 функций (30 всего). Новое: аргументы после x7 читаются со стека
+  (AAPCS64), вид `ec` (копия `ec_ctx` и его буфера с подменой указателя),
+  `valid` — сравнение только значимых байт выходного массива.
+- twin: + `init_caps` на обоих режимах (20 проверок).
+- Покрытие веток 3e на тестовых сигналах (отдельная сборка со счётчиками):
+  всё, кроме `force_intra`; intra-проход выигрывал в 227 кадрах, кап dynalloc —
+  41, каскад буста — 62, буст полос 0/1 — 147/49, пропуск полос — 395.
+
+**Попутно:** `ssc_encoder.c` (с 3d) и сгенерированный `ssc_tables.c` были не
+в UTF-8 (Python на Windows пишет в cp1252 по умолчанию). Переведены в UTF-8,
+`tools/gen_tables.py` теперь пишет UTF-8 явно.
+
+Полезная нагрузка CELT до PVQ совпадает; совпадающих байт кадра стало
+167 тыс. из 653 тыс. (было 109 тыс.). Перенос состояния из блоба в стенде
+пока нужен: `oldBandE` дописывает `quant_energy_finalise` (3f).

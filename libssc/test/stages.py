@@ -9,6 +9,7 @@ port of the ssc_encode chain advances (see libssc/PLAN.md, phase 3).
 import argparse
 import ctypes
 import os
+import struct
 import sys
 from pathlib import Path
 
@@ -16,6 +17,7 @@ LIBSSC = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(LIBSSC / "oracle"))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from ssc_oracle import IO_BASE, Oracle  # noqa: E402
+from unicorn.arm64_const import UC_ARM64_REG_SP  # noqa: E402
 import signals  # noqa: E402
 
 FRAME = 864
@@ -30,7 +32,30 @@ OUT_OFF = 0x80000            # oracle's output buffer is IO_BASE + OUT_OFF
 # call in the frame.
 STAGES = {1: ("pre-MDCT", "ssc_mdct_forward", "enter"),
           2: ("post-MDCT", "compute_band_energies", "enter"),  # long MDCT + headroom
-          3: ("post-normalise", "normalise_bands", "exit")}   # 3d: analysis done
+          3: ("post-normalise", "normalise_bands", "exit"),   # 3d: analysis done
+          4: ("pre-PVQ", "quant_all_bands", "enter")}         # 3e: energy + allocation
+BASE_VIEWS = ("in_shared", "_pre_shared", "state", "range coder", "bytes written")
+# Extra views at pre-PVQ: SscStageAlloc in libssc, the quant_all_bands arguments
+# (registers + stack) and the allocation/energy arrays in the blob.
+ALLOC_VIEWS = ("qab scalars", "tf_res", "pulses", "fine_quant", "fine_priority", "bandE",
+               "error (coded bands)")
+STAGE_VIEWS = {s: BASE_VIEWS + (ALLOC_VIEWS if s == 4 else ()) for s in STAGES}
+
+
+def alloc_views(raw, end):
+    """Split an SscStageAlloc image (8 int32, 4 x 22 int32, 44 int32, 44 int16)."""
+    ints = struct.unpack_from("<8i", raw)
+    arr = lambda k: raw[32 + 88 * k: 32 + 88 * (k + 1)]  # noqa: E731
+    err = raw[32 + 88 * 4 + 176:]
+    return {
+        "qab scalars": raw[:32],
+        # beyond `end` the blob's arrays hold leftovers of reused locals (unused)
+        "tf_res": arr(0), "pulses": arr(1)[:4 * end], "fine_quant": arr(2)[:4 * end],
+        "fine_priority": arr(3)[:4 * end],
+        "bandE": raw[32 + 88 * 4: 32 + 88 * 4 + 176],
+        # error beyond `end` may be stack garbage in the blob (intra copy)
+        "error (coded bands)": err[:2 * end] + err[44:44 + 2 * end],
+    }
 
 
 # State bytes written by stages that are not ported yet: masked out of the
@@ -95,6 +120,9 @@ class LibEncoder:
     def _on_stage(self, stage, st, enc):
         read = lambda p, n: ctypes.string_at(p, n)  # noqa: E731
         self.snaps[stage] = snapshot(read, st, self.size, enc, ctypes.addressof(self.out), self.glob)
+        if stage == 4:
+            raw = self.glob("ssc_stage_alloc", 648)
+            self.snaps[stage].update(alloc_views(raw, struct.unpack_from("<i", raw)[0]))
 
     def encode(self, pcm):
         self.snaps = {}
@@ -117,15 +145,37 @@ class BlobEncoder:
         self.o.probes_enter["ec_enc_init"] = lambda o, rec: setattr(self, "ec", rec.args[0])
         for stage, (_name, fn, when) in STAGES.items():
             probes = self.o.probes_exit if when == "exit" else self.o.probes_enter
-            probes[fn] = lambda o, rec, s=stage: self._on_stage(s)
+            probes[fn] = lambda o, rec, s=stage: self._on_stage(s, rec)
+        # pointers to arrays that quant_all_bands does not receive
+        self.ptrs = {}
+        self.o.probes_enter["quant_fine_energy"] = lambda o, rec: self.ptrs.update(
+            error=rec.args[3], fine_quant=rec.args[4])
+        self.o.probes_enter["compute_allocation"] = lambda o, rec: self.ptrs.update(
+            fine_priority=self.stack_arg(11))
 
     def glob(self, name, size):
         return self.o.read(self.o.exports[name], size)
 
-    def _on_stage(self, stage):
-        if stage not in self.snaps:
-            self.snaps[stage] = snapshot(self.o.read, self.o.state, self.size, self.ec,
-                                         IO_BASE + OUT_OFF, self.glob)
+    def stack_arg(self, k):
+        """Argument k (>= 8) at function entry (AAPCS64: 8-byte slots at sp)."""
+        sp = self.o.uc.reg_read(UC_ARM64_REG_SP)
+        return int.from_bytes(self.o.read(sp + 8 * (k - 8), 8), "little")
+
+    def _on_stage(self, stage, rec):
+        if stage in self.snaps:
+            return
+        self.snaps[stage] = snapshot(self.o.read, self.o.state, self.size, self.ec,
+                                     IO_BASE + OUT_OFF, self.glob)
+        if stage == 4:
+            a = rec.args
+            s32 = Oracle.s32
+            end = s32(a[1])
+            scal = [end, s32(a[6]), s32(a[7])] + [s32(self.stack_arg(k)) for k in (8, 9, 11, 12, 14)]
+            rd = lambda p, n: self.o.read(p, n)  # noqa: E731
+            raw = (struct.pack("<8i", *scal) + rd(self.stack_arg(10), 88) + rd(a[5], 88)
+                   + rd(self.ptrs["fine_quant"], 88) + rd(self.ptrs["fine_priority"], 88)
+                   + rd(a[4], 176) + rd(self.ptrs["error"], 88))
+            self.snaps[stage].update(alloc_views(raw, end))
 
     def encode(self, pcm):
         self.snaps = {}
@@ -183,8 +233,8 @@ def main():
                     help="basic: the 6 golden profiles; all: all 14 bitrates")
     a = ap.parse_args()
     lib = ctypes.CDLL(str(LIBSSC / "build" / "libssc.dll"))
-    stage_names = [f"{label}: {view}" for label, _fn, _when in STAGES.values()
-                   for view in ("in_shared", "_pre_shared", "state", "range coder", "bytes written")]
+    stage_names = [f"{label}: {view}" for stage, (label, _fn, _when) in STAGES.items()
+                   for view in STAGE_VIEWS[stage]]
     first_fail = {k: None for k in list(CHECKPOINTS) + stage_names}
     payload_same = payload_total = frames = 0
     for sig in a.signals.split(","):
@@ -203,7 +253,7 @@ def main():
                         first_fail[name] = where
                 for stage, (label, _fn, _when) in STAGES.items():
                     bs, ls = o.snaps.get(stage), l.snaps.get(stage)
-                    for view in ("in_shared", "_pre_shared", "state", "range coder", "bytes written"):
+                    for view in STAGE_VIEWS[stage]:
                         key = f"{label}: {view}"
                         if first_fail[key] is not None:
                             continue

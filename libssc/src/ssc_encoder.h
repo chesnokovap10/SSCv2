@@ -24,21 +24,24 @@ typedef struct SscEncoder {
     const SscMode *mode;        /* 0x00 */
     int32_t overlap;            /* 0x08 */
     int32_t channels;           /* 0x0c */
-    int32_t f10;                /* 0x10  0 after init */
+    int32_t force_intra;        /* 0x10  0 after init */
     int32_t end;                /* 0x14  mode->effEBands at init, mode->nbEBands per frame */
     int32_t f18;                /* 0x18  -1 after init (Opus: bitrate / VBR target) */
-    int32_t f1c;                /* 0x1c  written at end of every frame */
-    int32_t f20;                /* 0x20  2 after init (spread decision, SPREAD_NORMAL?) */
-    int32_t f24;                /* 0x24  1 after init */
-    int32_t f28;                /* 0x28  256 after init (tonal average?) */
-    uint8_t f2c[0x38 - 0x2c];
+    int32_t rng;                /* 0x1c  range coder state at the end of the frame */
+    int32_t spread_decision;    /* 0x20  2 (SPREAD_NORMAL) after init */
+    int32_t delayedIntra;       /* 0x24  1 after init */
+    int32_t tonal_average;      /* 0x28  256 after init */
+    int32_t lastCodedBands;     /* 0x2c */
+    int32_t hf_average;         /* 0x30 */
+    int32_t tapset_decision;    /* 0x34 */
     int32_t prefilter_period;   /* 0x38 */
     int16_t prefilter_gain;     /* 0x3c */
     int16_t f3e;
     int32_t f40;                /* 0x40  written at end of every frame */
     int32_t preemph_memE[2];    /* 0x44  computed, never subtracted (see prefilter) */
     int32_t overlap_max;        /* 0x4c  max |pcm| over the last overlap samples */
-    uint8_t f50[0x60 - 0x50];
+    int32_t intensity;          /* 0x50  intensity stereo start band */
+    uint8_t f54[0x60 - 0x54];
     int32_t fs_mode;            /* 0x60  44100 for 48 kHz input, else Fs */
     int32_t fs;                 /* 0x64  real input rate */
     int32_t bitrate;            /* 0x68  bps, set per frame */
@@ -62,7 +65,22 @@ extern int32_t _pre_shared[2 * (864 + SSC_COMBFILTER_MAXPERIOD)]; /* prefilter `
 /* Test hook: called at named points of ssc_encode with the live range coder
  * (const ec_enc *). Lets the stage bench snapshot libssc where it snapshots the
  * blob. NULL in normal use. */
-enum { SSC_STAGE_PRE_MDCT = 1, SSC_STAGE_POST_MDCT = 2, SSC_STAGE_POST_NORMALISE = 3 };
+enum {
+    SSC_STAGE_PRE_MDCT = 1,
+    SSC_STAGE_POST_MDCT = 2,
+    SSC_STAGE_POST_NORMALISE = 3,
+    SSC_STAGE_PRE_PVQ = 4  /* entry of quant_all_bands */
+};
+
+/* Filled before SSC_STAGE_PRE_PVQ: the quant_all_bands arguments and the
+ * allocation/energy arrays, in the order the stage bench reads them. */
+typedef struct {
+    int32_t end, shortBlocks, spread, dual_stereo, intensity, total_bits, balance, codedBands;
+    int32_t tf_res[22], pulses[22], fine_quant[22], fine_priority[22];
+    int32_t bandE[44];
+    int16_t error[44];
+} SscStageAlloc;
+extern SscStageAlloc ssc_stage_alloc;
 typedef void (*ssc_stage_fn)(int stage, const struct SscEncoder *st, const void *enc);
 extern ssc_stage_fn ssc_stage_hook;
 

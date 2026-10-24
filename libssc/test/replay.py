@@ -24,11 +24,13 @@ LIBSSC = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(LIBSSC / "oracle"))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from ssc_oracle import IMAGE_BASE, Oracle  # noqa: E402
+from unicorn.arm64_const import UC_ARM64_REG_SP  # noqa: E402
 import signals  # noqa: E402
 
 S32 = Oracle.s32
 
 BLOB_REGIONS = []
+EC_SIZE = 52  # ec_ctx: buf pointer + 11 x uint32 (the 4 padding bytes are not compared)
 
 SPECS = {
     "Biquad_Narrow_int2int_stereo": dict(args=["out:8*a4", "in:8*a4", "in:20", "inout:80", "int"]),
@@ -67,6 +69,19 @@ SPECS = {
     "patch_transient_decision_temporal": dict(args=["ptr", "inout:304", "in:7776"], ret=True),
     # reads xcorr[-1] .. xcorr[n]
     "tone_detect": dict(args=["in:4*a3+8@4", "inout:8", "int", "int"], ret=True),
+    # 3e: energy quantisation and allocation ("ec": range coder + its buffer)
+    # error[] beyond `end` is copied from an uninitialised stack array when the
+    # intra pass wins (never read later): compare only bands < end per channel
+    "quant_coarse_energy": dict(args=["ptr", "int", "int", "in:88", "inout:88", "int", "out:88",
+                                      "ec", "int", "int", "inout:4"],
+                                valid={6: "[(0, 2*a2), (44, 44 + 2*a2)]"}),
+    "quant_fine_energy": dict(args=["ptr", "int", "inout:88", "inout:88", "in:88", "ec", "int"]),
+    "spreading_decision": dict(args=["ptr", "in:3456", "inout:4", "int", "inout:4", "inout:4",
+                                     "int", "int"], ret=True),
+    "hysteresis_decision": dict(args=["int", "in:46", "in:46", "int", "int"], ret=True),
+    "compute_allocation": dict(args=["ptr", "int", "in:88", "in:88", "int", "inout:4", "inout:4",
+                                     "int", "out:4", "out:88", "out:88", "out:88", "ec", "int",
+                                     "int", "int"], ret=True),
 }
 GLOBAL_SIZES = {"win_square": 432, "drc_struct": 24, "DRC_ChNum": 4, "Soundbooster_DRC_Fs": 4, "DRC_ModeFlag": 4,
                 "_pcmpower": 6912, "previous_uhq_index": 4, "in_shared": 7776, "_pre_shared": 15104,
@@ -102,7 +117,7 @@ def translate(lib, regions, p):
 
 def parse(spec_arg):
     """-> (dir, size expr, offset expr): "in:SIZE@OFF" covers [ptr-OFF, ptr-OFF+SIZE)."""
-    if spec_arg in ("int", "ptr"):
+    if spec_arg in ("int", "ptr", "ec"):
         return (spec_arg, None, "0")
     if spec_arg.startswith("alias:"):   # same pointer as another argument
         return ("alias", spec_arg[6:], "0")
@@ -121,30 +136,42 @@ class Recorder:
         self.o = oracle
         self.calls = {n: [] for n in names}
         self._open = {}
+        self._args = {}
         for n in names:
             oracle.probes_enter[n] = self._enter
             oracle.probes_exit[n] = self._exit
 
     def _snapshot(self, rec, spec):
-        ints = [S32(a) for a in rec.args]
+        args = self._args[id(rec)]
+        ints = [S32(a) for a in args]
         mem = {}
         for i, sa in enumerate(spec["args"]):
             d, size, off = parse(sa)
             if d == "pp2in":
-                ptrs = struct.unpack("<2Q", self.o.read(rec.args[i], 16))
+                ptrs = struct.unpack("<2Q", self.o.read(args[i], 16))
                 mem[i] = [self.o.read(p, size_of(size, ints)) for p in ptrs]
+            elif d == "ec":   # ec_ctx and the bytes of its buffer
+                ctx = self.o.read(args[i], EC_SIZE)
+                buf, storage = struct.unpack_from("<QI", ctx)
+                mem[i] = (ctx, self.o.read(buf, storage))
             elif d not in ("int", "ptr", "alias"):
-                mem[i] = self.o.read(rec.args[i] - size_of(off, ints), size_of(size, ints))
+                mem[i] = self.o.read(args[i] - size_of(off, ints), size_of(size, ints))
         glob = {g: self.o.read(self.o.exports[g], GLOBAL_SIZES[g]) for g in spec.get("globals", [])}
         return ints, mem, glob
 
     def _enter(self, o, rec):
+        # AAPCS64: arguments after x7 sit in 8-byte slots at sp on entry
+        n = len(SPECS[rec.name]["args"])
+        sp = o.uc.reg_read(UC_ARM64_REG_SP)
+        self._args[id(rec)] = list(rec.args) + [int.from_bytes(o.read(sp + 8 * k, 8), "little")
+                                                for k in range(max(0, n - 8))]
         self._open[id(rec)] = self._snapshot(rec, SPECS[rec.name])
 
     def _exit(self, o, rec):
         ints, mem_in, glob_in = self._open.pop(id(rec))
         _, mem_out, glob_out = self._snapshot(rec, SPECS[rec.name])
-        self.calls[rec.name].append(dict(ints=ints, raw=list(rec.args), mem_in=mem_in, mem_out=mem_out,
+        full = self._args.pop(id(rec))
+        self.calls[rec.name].append(dict(ints=ints, raw=full, mem_in=mem_in, mem_out=mem_out,
                                          glob_in=glob_in, glob_out=glob_out, ret=S32(rec.ret)))
 
 
@@ -169,7 +196,7 @@ def record(names, sig_names, frames, rates="basic"):
 def replay(lib, name, call):
     spec = SPECS[name]
     fn = getattr(lib, name)
-    bufs, args, argtypes, keep = {}, [], [], []
+    bufs, args, argtypes, keep, ecs = {}, [], [], [], {}
     for i, sa in enumerate(spec["args"]):
         d, _, off = parse(sa)
         if d == "int":
@@ -180,6 +207,14 @@ def replay(lib, name, call):
             argtypes.append(ctypes.c_void_p)
         elif d == "alias":
             args.append(args[int(sa[6:])])
+            argtypes.append(ctypes.c_void_p)
+        elif d == "ec":
+            ctx, raw = call["mem_in"][i]
+            buf = ctypes.create_string_buffer(raw, max(1, len(raw)))
+            ec = ctypes.create_string_buffer(ctx, EC_SIZE)
+            struct.pack_into("<Q", ec, 0, ctypes.addressof(buf))
+            ecs[i] = (ec, buf)
+            args.append(ctypes.addressof(ec))
             argtypes.append(ctypes.c_void_p)
         elif d == "pp2in":
             chans = [ctypes.create_string_buffer(r, len(r)) for r in call["mem_in"][i]]
@@ -201,10 +236,21 @@ def replay(lib, name, call):
     for i, buf in bufs.items():
         want = call["mem_out"][i]
         got = buf.raw[:len(want)]
+        if i in spec.get("valid", {}):
+            keep_ranges = eval(spec["valid"][i], {}, {f"a{k}": v for k, v in enumerate(call["ints"])})  # noqa: S307
+            want = b"".join(want[lo:hi] for lo, hi in keep_ranges)
+            got = b"".join(got[lo:hi] for lo, hi in keep_ranges)
         if got != want:
             k = next(j for j in range(len(want)) if got[j] != want[j])
             problems.append(f"arg{i} byte {k}: got {got[k & ~3:(k & ~3) + 4].hex()} "
                             f"want {want[k & ~3:(k & ~3) + 4].hex()}")
+    for i, (ec, buf) in ecs.items():
+        ctx, raw = call["mem_out"][i]
+        if ec.raw[8:EC_SIZE] != ctx[8:EC_SIZE]:
+            problems.append(f"arg{i} ec_ctx: got {ec.raw[8:EC_SIZE].hex()} want {ctx[8:EC_SIZE].hex()}")
+        elif buf.raw[:len(raw)] != raw:
+            k = next(j for j in range(len(raw)) if buf.raw[j] != raw[j])
+            problems.append(f"arg{i} ec buffer byte {k}")
     for g, want in call["glob_out"].items():
         got = ctypes.string_at(ctypes.addressof(ctypes.c_char.in_dll(lib, g)), len(want))
         if got != want:

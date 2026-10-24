@@ -151,6 +151,21 @@ def test_last_band_info(o, lib, rng, n):
     return [("last_band_info_calc", None)]
 
 
+def test_init_caps(o, lib):
+    """init_caps is exported but never called by the blob (it reads cache.caps)."""
+    lib.init_caps.argtypes = [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_int, ctypes.c_int]
+    for name, va in (("ssc_mode_48k", 0x28a18), ("ssc_mode_96k", 0x28aa0)):
+        for lm in range(4):
+            for c in (1, 2):
+                o.call("init_caps", IMAGE_BASE + va, IO_BASE, lm, c)
+                want = o.read(IO_BASE, 88)
+                buf = ctypes.create_string_buffer(88)
+                lib.init_caps(ctypes.addressof(ctypes.c_char.in_dll(lib, name)), buf, lm, c)
+                if buf.raw != want:
+                    return [("init_caps", (name, lm, c))]
+    return [("init_caps (both modes, LM 0-3, C 1-2)", None)]
+
+
 def lib_script(lib, size, ops):
     ec = ctypes.create_string_buffer(0x100)
     buf = ctypes.create_string_buffer(size)
@@ -252,6 +267,7 @@ def main():
     rows += test_scalars(o, lib, rng, a.n)
     rows += test_haar1(o, lib, rng, a.n)
     rows += test_last_band_info(o, lib, rng, a.n)
+    rows += test_init_caps(o, lib)
     rows += test_ec(o, lib, rng, a.n)
     rows += test_state(o, lib)
     rows += test_frames(lib)

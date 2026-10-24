@@ -11,6 +11,7 @@ void SSC_COPY32(int32_t *dst, const int32_t *src, int n);
 void SSC_COPY16(int16_t *dst, const int16_t *src, int n);
 void SSC_COPY8(uint8_t *dst, const uint8_t *src, int n);
 void SSC_CLEAR(void *p, unsigned n);
+void haar1(int16_t *X, int N0, int stride);
 
 /* ssc_pitch.c (Opus 1.1 pitch.c / celt_lpc.c, N = 864, C = 2) */
 void pitch_downsample(int32_t *x[], int16_t *x_lp, int len);
@@ -43,6 +44,23 @@ void compute_band_energies_for_lastband(const SscMode *m, const int32_t *X, int3
                                         int uhq, int row);
 int patch_transient_decision(const int16_t *newE, const int16_t *oldE, int nb, int end);
 int patch_transient_decision_temporal(const SscMode *m, struct SscEncoder *st, const int32_t *in);
+
+/* ssc_quant.c (start 0, C = 2, LM = 3) */
+struct ec_ctx;
+void quant_coarse_energy(const SscMode *m, int nbBands, int end, const int16_t *eBands,
+                         int16_t *oldEBands, uint32_t budget, int16_t *error, struct ec_ctx *enc,
+                         int nbAvailableBytes, int force_intra, int32_t *delayedIntra);
+void quant_fine_energy(const SscMode *m, int end, int16_t *oldEBands, int16_t *error,
+                       const int *fine_quant, struct ec_ctx *enc, int C);
+int spreading_decision(const SscMode *m, const int16_t *X, int *average, int last_decision,
+                       int *hf_average, int *tapset_decision, int update_hf, int end);
+int hysteresis_decision(int16_t val, const int16_t *thresholds, const int16_t *hysteresis, int N,
+                        int prev);
+void init_caps(const SscMode *m, int *cap, int LM, int C);
+int compute_allocation(const SscMode *m, int end, const int *offsets, const int *cap,
+                       int alloc_trim, int *intensity, int *dual_stereo, int32_t total,
+                       int32_t *balance, int *pulses, int *ebits, int *fine_priority,
+                       struct ec_ctx *ec, int prev, int signalBandwidth, int hi_rate);
 
 /* ssc_tone.c */
 int tone_detect(const int32_t *xcorr, int *best_pitch, int32_t maxcorr, int n);

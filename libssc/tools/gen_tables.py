@@ -86,7 +86,7 @@ def main():
         f"int32_t margin = {nm['margin'][0]};\n",
         arr("int32_t", "headroom_gain", nm["headroom_gain"], 12, static=False, const=False),
     ]
-    OUT.write_text("\n".join(out))
+    OUT.write_text("\n".join(out), encoding="utf-8")
     print(OUT)
 
 
