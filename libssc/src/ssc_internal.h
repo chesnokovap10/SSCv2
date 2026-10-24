@@ -4,6 +4,8 @@
 
 #include <stdint.h>
 
+#include "ssc_mode.h"
+
 /* ssc_twin.c */
 void SSC_COPY32(int32_t *dst, const int32_t *src, int n);
 void SSC_COPY16(int16_t *dst, const int16_t *src, int n);
@@ -19,5 +21,15 @@ int16_t remove_doubling(int16_t *x, int maxperiod, int minperiod, int N, int *T0
 /* ssc_prefilter.c */
 void comb_filter(int32_t *y, int32_t *x, int T0, int T1, int N, int16_t g0, int16_t g1,
                  int overlap);
+
+/* ssc_mdct.c (32-bit MDCT/FFT; scratch in _pre_shared like the blob) */
+void ssc_fft(const ssc_fft_state *st, const int32_t *fin, int32_t *fout);
+void ssc_mdct_forward(const ssc_mdct_lookup *l, int32_t *in, int32_t *out, const int32_t *window,
+                      int overlap, int shift, int stride);
+
+/* ssc_headroom.c (freq: 2 x 864 bins, M = 8) */
+void normal_headroom(int32_t *freq, int bitrate, int M, const int16_t *eBands);
+void uhq_headroom(int32_t *freq, int bitrate, int M, const int16_t *eBands);
+void headroom_process(int32_t *freq, int bitrate, int M, const int16_t *eBands, int uhq);
 
 #endif

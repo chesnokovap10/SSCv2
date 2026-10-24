@@ -1,8 +1,9 @@
 /* libssc — encoder entry points (ssc_encoder_* / ssc_encode).
  *
  * Ported stage by stage (libssc/PLAN.md, phase 3). Bit-exact so far: header,
- * byte budget, input processing (3a), silence flag and prefilter (3b). The
- * rest of the CELT payload is not produced yet (range coder finished early).
+ * byte budget, input processing (3a), silence flag and prefilter (3b), long
+ * MDCT and headroom (3c). The rest of the CELT payload is not produced yet
+ * (range coder finished early).
  */
 #include "ssc_encoder.h"
 
@@ -215,6 +216,27 @@ static void silence_and_input(SscEncoder *st, const int32_t *pcm, ec_enc *enc, S
     }
 }
 
+/* MDCT of the prefiltered input (ssc_encode @0xe01c..0xe1a0). The spectrum
+ * lives in _pre_shared after the FFT scratch, like the blob's. */
+#define SSC_FREQ (_pre_shared + 1944)
+
+static void long_mdct(SscEncoder *st, SscFrame *f, int bitrate, int wide) {
+    const SscMode *m = st->mode;
+    int N = f->N, ov = f->overlap, c, i;
+    int32_t *freq = SSC_FREQ;
+    int top;
+    for (c = 0; c < 2; c++)  /* stride 2 hard-coded, like the input copy */
+        ssc_mdct_forward(&m->mdct, in_shared + c * (N + ov), freq + c * N, m->window, ov, 0, 1);
+    /* Narrow rates below 192k: nothing above the last band (M = 8 hard-coded). */
+    top = m->eBands[st->end - 1];
+    if (!wide && bitrate < 192000 && top < 108)
+        for (i = top * 8; i < 864; i++) freq[i] = freq[i + 864] = 0;
+    if (wide)
+        uhq_headroom(freq, bitrate, 8, m->eBands);
+    else
+        normal_headroom(freq, bitrate, 8, m->eBands);
+}
+
 /* Pitch pre-filter (Opus run_prefilter, Samsung variant; @0xdb90..0xdfdc). */
 static void prefilter(SscEncoder *st, ec_enc *enc, SscFrame *f) {
     int N = f->N, ov = f->overlap, c, d, qg = 0, pf_on = 0, pitch_index;
@@ -332,8 +354,11 @@ int ssc_encode(SscEncoder *st, int32_t *pcm, int frame_size, uint8_t *out, int b
                       st->bit_depth != 24 && !wide ? 12 : 4);
     prefilter(st, &enc, &f);
     if (ssc_stage_hook) ssc_stage_hook(SSC_STAGE_PRE_MDCT, st, &enc);
+    long_mdct(st, &f, bitrate, wide);
+    if (ssc_stage_hook) ssc_stage_hook(SSC_STAGE_POST_MDCT, st, &enc);
 
-    /* TODO(phase 3c+): MDCT, band energies, quantisation. */
+    /* TODO(phase 3d+): band energies, transient decision (short MDCTs),
+     * quantisation. */
 
     /* End-of-frame state (ssc_encode @0x111b8..). Still missing: band energies,
      * consec_transient (+0x40), previous_uhq_index. */

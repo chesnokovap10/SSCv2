@@ -3,6 +3,7 @@
 the encoder's 2^29 scale (what the app feeds after WASAPI float -> int32)."""
 
 import math
+import zlib
 import random
 import struct
 import sys
@@ -15,7 +16,14 @@ SCALE = 1 << 29
 # (encoder sample rate, bitrate) — the 6 golden profiles plus the other basic rates
 PROFILES = [(48000, 128000), (48000, 192000), (48000, 229000), (96000, 250000),
             (96000, 442000), (96000, 584000)]
+# All 14 bitrates the blob knows (--rates all in the benches).
+ALL_PROFILES = [(48000, b) for b in (88000, 96000, 128000, 192000, 229000, 256000, 328000)] + [
+    (96000, b) for b in (152000, 250000, 291000, 308000, 442000, 584000, 886000)]
 NAMES = ["golden", "silence", "noise", "loud", "sweep", "chirp_lr", "clicks"]
+
+
+def profiles(which):
+    return ALL_PROFILES if which == "all" else PROFILES
 
 
 def _pack(vals):
@@ -27,7 +35,7 @@ def _clip(v):
 
 
 def frames(name, rate, count):
-    rng = random.Random(hash(name) & 0xFFFF)
+    rng = random.Random(zlib.crc32(name.encode()) & 0xFFFF)  # hash() is salted per process
     t0 = 0
     for f in range(count):
         if name == "golden":

@@ -57,7 +57,7 @@ extern int32_t _pre_shared[2 * (864 + SSC_COMBFILTER_MAXPERIOD)]; /* prefilter `
 /* Test hook: called at named points of ssc_encode with the live range coder
  * (const ec_enc *). Lets the stage bench snapshot libssc where it snapshots the
  * blob. NULL in normal use. */
-enum { SSC_STAGE_PRE_MDCT = 1 };
+enum { SSC_STAGE_PRE_MDCT = 1, SSC_STAGE_POST_MDCT = 2 };
 typedef void (*ssc_stage_fn)(int stage, const struct SscEncoder *st, const void *enc);
 extern ssc_stage_fn ssc_stage_hook;
 

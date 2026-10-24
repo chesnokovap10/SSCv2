@@ -3,7 +3,7 @@
 and compare named checkpoints after every frame. Checkpoints are added as the
 port of the ssc_encode chain advances (see libssc/PLAN.md, phase 3).
 
-  py -3.14 libssc/build.py && py -3.14 libssc/test/stages.py [--frames 12]
+  py -3.14 libssc/build.py && py -3.14 libssc/test/stages.py [--frames 12] [--rates all]
 """
 
 import argparse
@@ -27,7 +27,8 @@ OUT_OFF = 0x80000            # oracle's output buffer is IO_BASE + OUT_OFF
 
 # Stage points: libssc calls ssc_stage_hook(id, st, enc); in the blob the same
 # moment is the entry of the named function (first call in the frame).
-STAGES = {1: ("pre-MDCT", "ssc_mdct_forward")}
+STAGES = {1: ("pre-MDCT", "ssc_mdct_forward"),
+          2: ("post-MDCT", "compute_band_energies")}  # long MDCT + headroom
 
 
 # State bytes written by stages that are not ported yet: masked out of the
@@ -162,6 +163,8 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--frames", type=int, default=12)
     ap.add_argument("--signals", default=",".join(signals.NAMES))
+    ap.add_argument("--rates", choices=["basic", "all"], default="basic",
+                    help="basic: the 6 golden profiles; all: all 14 bitrates")
     a = ap.parse_args()
     lib = ctypes.CDLL(str(LIBSSC / "build" / "libssc.dll"))
     stage_names = [f"{label}: {view}" for label, _fn in STAGES.values()
@@ -169,7 +172,7 @@ def main():
     first_fail = {k: None for k in list(CHECKPOINTS) + stage_names}
     payload_same = payload_total = frames = 0
     for sig in a.signals.split(","):
-        for rate, bitrate in signals.PROFILES:
+        for rate, bitrate in signals.profiles(a.rates):
             o = BlobEncoder(rate, bitrate)
             l = LibEncoder(lib, rate, bitrate)
             for i, pcm in enumerate(signals.frames(sig, rate, a.frames)):

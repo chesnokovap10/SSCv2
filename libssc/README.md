@@ -24,6 +24,7 @@ py -3.14 libssc\build.py          # MinGW gcc -> libssc\build\libssc.dll
 py -3.14 libssc\test\twin.py      # 18 проверок против блоба
 py -3.14 libssc\test\replay.py    # перенесённые функции на реальных вызовах
 py -3.14 libssc\test\stages.py    # покадровые контрольные точки
+# replay.py и stages.py: --rates all — все 14 битрейтов вместо 6 профилей
 ```
 
 libssc — ABI-двойник блоба: те же имена функций, сигнатуры и раскладки
