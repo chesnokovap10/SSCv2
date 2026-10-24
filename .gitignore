@@ -2,3 +2,4 @@
 *.exe
 *.test
 __pycache__/
+libssc/research/difftest/build/

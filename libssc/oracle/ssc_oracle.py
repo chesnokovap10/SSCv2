@@ -309,7 +309,10 @@ class Oracle:
                 probe(self, rec)
 
     # ---------------------------------------------------------------- calls
-    def call(self, name, *args):
+    def call(self, name, *args, max_insns=0):
+        """Call an exported blob function with up to 8 integer args.
+        max_insns > 0 bounds runaway loops (Unicorn's wall-clock timeout costs
+        ~15 ms per call on Windows, an instruction count does not)."""
         if len(args) > 8:
             raise BlobError("more than 8 integer args not supported")
         uc = self.uc
@@ -319,10 +322,13 @@ class Oracle:
         uc.reg_write(A.UC_ARM64_REG_LR, self.halt_addr)
         self._stack = []
         try:
-            uc.emu_start(self.exports[name], self.halt_addr)
+            uc.emu_start(self.exports[name], self.halt_addr, count=max_insns)
         except UcError as e:
             pc = uc.reg_read(A.UC_ARM64_REG_PC)
             raise BlobError(f"{name}: {e} at pc={pc:#x} ({self.describe(pc)})") from e
+        pc = uc.reg_read(A.UC_ARM64_REG_PC)
+        if pc != self.halt_addr:
+            raise BlobError(f"{name}: timed out at pc={pc:#x} ({self.describe(pc)})")
         # emu_start stops *before* the halt address, so its hook never fires:
         # close the outermost frame(s) here.
         self._on_return(uc, self.halt_addr, 0, None)

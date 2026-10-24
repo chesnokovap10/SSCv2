@@ -9,6 +9,19 @@
 | `oracle/` | эталон: оригинальный блоб под Unicorn + трассировка |
 | `ref/libScalable_Encoder.so` | блоб Samsung (aarch64, sha256 `9248e264…b461`), только для сверки |
 | `testdata/*.golden` | 6 профилей × 16 кадров, замороженный вывод блоба |
+| `research/` | реверс: карта функций, таблицы режимов, модель заголовка, дифф-стенд |
+
+## research/
+
+```powershell
+py -3.14 -m pip install capstone                       # для disasm.py
+py -3.14 libssc\research\disasm.py ssc_encoder_create   # дизассемблер с символами
+py -3.14 libssc\research\dump_mode.py [--json F]        # режимы и таблицы
+py -3.14 libssc\research\header_model.py                # модель заголовка vs голдены
+# дифф-стенд: Opus (git clone xiph/opus, checkout v1.3.1) + MinGW gcc
+py -3.14 libssc\research\difftest\build_ref.py <opus-dir> --tag v1.3.1 --patch ec24
+py -3.14 libssc\research\difftest\difftest.py
+```
 
 В каталогах нет `.go`-файлов, `go build` их не трогает.
 
