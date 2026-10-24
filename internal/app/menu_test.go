@@ -30,6 +30,9 @@ func dump(t *testing.T, items []tray.Item, depth int) {
 }
 
 func TestMenu(t *testing.T) {
+	// refreshAdapter saves the settings when it finds the adapter: keep that
+	// away from the real %APPDATA%\SSCv2\settings.json
+	t.Setenv("APPDATA", t.TempDir())
 	a := &App{mode: config.ModeOff, s: &config.Settings{Mode: config.ModeOff}}
 	a.refreshAdapter()
 	dump(t, a.menu(), 0)
