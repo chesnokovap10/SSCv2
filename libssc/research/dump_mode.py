@@ -54,7 +54,17 @@ def read_mode(o, mode_va):
         nfft, shift = struct.unpack_from("<2i", o.read(k, 8), 0)
         pa, pb = struct.unpack_from("<2Q", o.read(k + 8, 16), 0)
         kfft.append(dict(va=va(k), nfft=nfft, shift=shift, bitrev_va=va(pa), twiddles_va=va(pb)))
+    # Shared MDCT/FFT tables (extents = distance to the next known table).
+    tw_va, br144_va = va(struct.unpack_from("<Q", o.read(kfft_p[0] + 16, 8))[0]),         va(struct.unpack_from("<Q", o.read(kfft_p[0] + 8, 8))[0])
+    br18_va = va(struct.unpack_from("<Q", o.read(kfft_p[1] + 8, 8))[0])
+    shared = dict(
+        trig=o.read_i32(trig_p, 433),          # 0x14dc0..0x15484
+        bitrev144=o.read_i16(IMAGE_BASE + br144_va, 144),
+        twiddles=o.read_i32(IMAGE_BASE + tw_va, 864),   # 432 x (re, im)
+        bitrev18=o.read_i16(IMAGE_BASE + br18_va, 18),
+    )
     return dict(
+        shared=shared,
         va=mode_va, Fs=Fs, overlap=overlap, nbEBands=nb, effEBands=eff,
         nbShortMdcts=nbShort, shortMdctSize=shortSize, nbAllocVectors=nbAlloc,
         eBands=o.read_i16(eBands_p, nb + 1), eBands_va=va(eBands_p),
@@ -63,7 +73,7 @@ def read_mode(o, mode_va):
         logN=o.read_i16(logN_p, nb), logN_va=va(logN_p),
         window=o.read_i32(window_p, overlap), window_va=va(window_p),
         mdct=dict(n=n, maxshift=maxshift, trig_va=va(trig_p), kfft=kfft),
-        cache=dict(size=csize, index=o.read_i16(cidx_p, nb), index_va=va(cidx_p),
+        cache=dict(size=csize, index=o.read_i16(cidx_p, 5 * nb), index_va=va(cidx_p),
                    bits=list(o.read(cbits_p, csize)), bits_va=va(cbits_p),
                    caps=o.read_i32(ccaps_p, nb), caps_va=va(ccaps_p)),
     )
@@ -92,7 +102,7 @@ def print_mode(label, m):
     c = m["cache"]
     print(f"cache size={c['size']} index @{c['index_va']:#x} bits @{c['bits_va']:#x} "
           f"caps @{c['caps_va']:#x}")
-    print(f"  index: {c['index']}")
+    print(f"  index (5x{nb}): {c['index'][:nb]} ...")
     print(f"  caps:  {c['caps']}")
 
 
@@ -111,9 +121,11 @@ def main():
     a = ap.parse_args()
     o = Oracle()
     modes = {label: read_mode(o, mva) for label, mva in MODES.items()}
+    shared = modes["48k"].pop("shared")
+    assert shared == modes["96k"].pop("shared")
     named = read_named(o)
     if a.json:
-        Path(a.json).write_text(json.dumps(dict(modes=modes, named=named), indent=1))
+        Path(a.json).write_text(json.dumps(dict(modes=modes, shared=shared, named=named), indent=1))
         print(a.json)
         return
     for label, m in modes.items():

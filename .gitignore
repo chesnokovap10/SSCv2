@@ -3,3 +3,5 @@
 *.test
 __pycache__/
 libssc/research/difftest/build/
+libssc/build/
+libssc/research/decomp/_all.c

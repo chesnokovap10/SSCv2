@@ -86,15 +86,15 @@ def run_haar1(o, ref, rng, n):
     bad = None
     for _ in range(max(1, n // 20)):
         stride = rng.choice([1, 2, 4, 8])
-        n0 = rng.choice([2, 4, 8, 16, 36, 54]) * stride
-        x = [rng.randrange(-32768, 32768) for _ in range(n0)]
-        raw = struct.pack(f"<{n0}h", *x)
+        n0 = rng.choice([2, 4, 8, 16, 36, 54])  # per-stride count; buffer is n0*stride
+        x = [rng.randrange(-32768, 32768) for _ in range(n0 * stride)]
+        raw = struct.pack(f"<{n0 * stride}h", *x)
         o.uc.mem_write(IO_BASE, raw)
         o.call("haar1", IO_BASE, n0, stride)
-        b = o.read_i16(IO_BASE, n0)
+        b = o.read_i16(IO_BASE, n0 * stride)
         buf = ctypes.create_string_buffer(raw, len(raw))
         ref.haar1(buf, n0, stride)
-        r = list(struct.unpack(f"<{n0}h", buf.raw))
+        r = list(struct.unpack(f"<{n0 * stride}h", buf.raw))
         if b != r:
             bad = ((n0, stride), b[:6], r[:6])
             break

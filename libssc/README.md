@@ -9,7 +9,21 @@
 | `oracle/` | эталон: оригинальный блоб под Unicorn + трассировка |
 | `ref/libScalable_Encoder.so` | блоб Samsung (aarch64, sha256 `9248e264…b461`), только для сверки |
 | `testdata/*.golden` | 6 профилей × 16 кадров, замороженный вывод блоба |
-| `research/` | реверс: карта функций, таблицы режимов, модель заголовка, дифф-стенд |
+| `src/` | **сама библиотека** (C, fixed-point): `src/opus/` — Opus 1.1.5 + патч ec24, `ssc_*.c` — наш код |
+| `test/twin.py` | стенд-двойник: libssc и блоб с одинаковыми входами, побайтное сравнение |
+| `tools/gen_tables.py` | `research/tables.json` → `src/ssc_tables.c` |
+| `research/` | реверс: карта функций, таблицы режимов, модель заголовка, дифф-стенд, декомпиляция |
+
+## Сборка и проверка
+
+```powershell
+py -3.14 libssc\build.py          # MinGW gcc -> libssc\build\libssc.dll
+py -3.14 libssc\test\twin.py      # 18 проверок против блоба
+```
+
+libssc — ABI-двойник блоба: те же имена функций, сигнатуры и раскладки
+структур (режим, `ec_ctx`, состояние энкодера), поэтому любую функцию можно
+вызвать с обеих сторон на одной и той же памяти.
 
 ## research/
 
@@ -18,9 +32,11 @@ py -3.14 -m pip install capstone                       # для disasm.py
 py -3.14 libssc\research\disasm.py ssc_encoder_create   # дизассемблер с символами
 py -3.14 libssc\research\dump_mode.py [--json F]        # режимы и таблицы
 py -3.14 libssc\research\header_model.py                # модель заголовка vs голдены
-# дифф-стенд: Opus (git clone xiph/opus, checkout v1.3.1) + MinGW gcc
-py -3.14 libssc\research\difftest\build_ref.py <opus-dir> --tag v1.3.1 --patch ec24
+# дифф-стенд: Opus (git clone xiph/opus, checkout v1.1.5) + MinGW gcc
+py -3.14 libssc\research\difftest\build_ref.py <opus-dir> --tag v1.1.5 --patch ec24
 py -3.14 libssc\research\difftest\difftest.py
+# декомпиляция (JDK 21 + Ghidra портативно в D:\2\tools)
+pwsh libssc\research\ghidra\decompile.ps1     # -> research\decomp\*.c
 ```
 
 В каталогах нет `.go`-файлов, `go build` их не трогает.

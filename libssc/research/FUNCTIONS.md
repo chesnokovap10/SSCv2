@@ -1,9 +1,13 @@
 # Карта функций блоба ↔ libopus CELT
 
 Блоб: `libssc/ref/libScalable_Encoder.so`, собран Android NDK r20 (clang 8.0.7,
-API 28) — примерно 2019–2020. База — libopus CELT fixed-point; листовые функции
-одинаковы в 1.1.5 / 1.2.1 / 1.3.1, поэтому точную версию определим на функциях
-среднего уровня (фаза 3).
+API 28) — примерно 2019–2020. База — **libopus 1.1.x** CELT fixed-point (берём
+1.1.5): в состоянии энкодера три массива энергий на канал (`energyError` появился
+в 1.2), `spreading_decision` без `spread_weight` (появился в 1.3). Листовые функции
+одинаковы в 1.1.5 / 1.2.1 / 1.3.1.
+
+Декомпиляция Ghidra 12.1.4: `research/decomp/<функция>.c` (пересобрать:
+`research/ghidra/decompile.ps1`).
 
 Статусы:
 - **✅ = Opus** — дифф-тест (`difftest/`) совпадает с libopus на случайных входах
@@ -52,7 +56,7 @@ API 28) — примерно 2019–2020. База — libopus CELT fixed-point;
 
 | Блоб | Opus | Размер | Статус | Заметки |
 |---|---|---|---|---|
-| `haar1` | `haar1` | 144 | ❌ | Samsung: `(a·46340)>>16 ± (b·46340)>>16` (усечение каждого); Opus: `PSHR32(a·23170 ± b·23170, 15)` (округление суммы) |
+| `haar1` | `haar1` | 144 | ❌ → в libssc (twin ✅) | Samsung: `(a·46340)>>16 ± (b·46340)>>16` (усечение каждого); Opus: `PSHR32(a·23170 ± b·23170, 15)` (округление суммы) |
 | `inv_haar1` | — | 144 | 🆕 | обратное преобразование (в Opus только у декодера через haar1) |
 | `hysteresis_decision` | `hysteresis_decision` | 136 | ⬜ | |
 | `compute_band_energies` | `compute_band_energies` | 1152 | ⬜ | раскладка mode другая |
@@ -114,3 +118,16 @@ API 28) — примерно 2019–2020. База — libopus CELT fixed-point;
 - `allocVectors` — своя таблица 11×22 (не `band_allocation` Opus), общая для режимов;
   `allocVectors2` — вторая таблица 11×22, своя у каждого режима.
 - Окно — int32 Q31 (108 значений), общее; trig/twiddles общие.
+
+## Внутренние функции без имён (Ghidra `FUN_*`)
+
+| Ghidra | Размер | Opus (по вызовам) |
+|---|---|---|
+| `FUN_00104310` | 1072 | `quant_band` / `quant_band_stereo` (вызывает `quant_partition`) |
+| `FUN_00104740` | 1196 | `quant_partition` (рекурсия, `alg_quant`) |
+| `FUN_00104bec` | 784 | `compute_theta` (`stereo_itheta`, `ec_encode`, `ec_enc_uint`) |
+| `FUN_00104efc` | 480 | `intensity_stereo` (`ssc_sqrt`) |
+| `FUN_00106180`, `FUN_0010644c`, `FUN_0010664c` | 716/512/468 | бабочки/работа FFT (`kf_bfly*`, `kf_work`) |
+| `FUN_00107ddc` | 1036 | `find_best_pitch` |
+| `FUN_00108f10` | 1216 | `quant_coarse_energy_impl` (`ec_laplace_encode`, `ec_enc_icdf`) |
+| `FUN_001023c0`, `FUN_0010282c`, `entry` | — | PLT / CRT |
