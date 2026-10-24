@@ -32,16 +32,31 @@ SPECS = {
     "CalculateLimitGain": dict(args=["int"] * 4, ret=True),
     "set_DRC_limit_gain": dict(args=["int"], globals=["drc_struct"]),
     "SoundBooster_DRC_Exe": dict(args=["inout:8*a1", "int"], globals=["drc_struct", "DRC_ChNum"]),
+    # 3b: pitch analysis (N = 864, len = N + 1024)
+    "_ssc_autocorr": dict(args=["in:1888", "out:20"], ret=True),
+    "_ssc_lpc": dict(args=["out:8", "in:20"]),
+    "ssc_pitch_xcorr_c1": dict(args=["in:1888", "in:1888", "out:20"]),
+    "ssc_pitch_xcorr_c2": dict(args=["in:432", "in:920", "out:976"], ret=True),
+    "dual_inner_prod": dict(args=["in:864", "in:864", "in:864", "int", "out:4", "out:4"]),
+    "pitch_downsample": dict(args=["pp2in:4*a2", "out:(a2>>1)*2", "int"]),
+    "pitch_search": dict(args=["in:(a2>>1)*2", "in:((a2+a3)>>1)*2", "int", "int", "out:4"]),
+    # x is pre[c] + 1024: the history before it is read (x[-T-2..]), hence @4096
+    "comb_filter": dict(args=["out:4*a4", "in:4*(a4+1024)@4096", "int", "int", "int", "int", "int",
+                              "int"], globals=["win_square"]),
+    "remove_doubling": dict(args=["in:((a1+a3)>>1)*2", "int", "int", "int", "inout:4", "int", "int"],
+                            ret=16),
 }
-GLOBAL_SIZES = {"drc_struct": 24, "DRC_ChNum": 4, "Soundbooster_DRC_Fs": 4, "DRC_ModeFlag": 4,
+GLOBAL_SIZES = {"win_square": 432, "drc_struct": 24, "DRC_ChNum": 4, "Soundbooster_DRC_Fs": 4, "DRC_ModeFlag": 4,
                 "_pcmpower": 6912, "previous_uhq_index": 4}
 
 
 def parse(spec_arg):
+    """-> (dir, size expr, offset expr): "in:SIZE@OFF" covers [ptr-OFF, ptr-OFF+SIZE)."""
     if spec_arg == "int":
-        return ("int", None)
+        return ("int", None, "0")
     d, size = spec_arg.split(":", 1)
-    return (d, size)
+    size, _, off = size.partition("@")
+    return (d, size, off or "0")
 
 
 def size_of(expr, ints):
@@ -62,9 +77,12 @@ class Recorder:
         ints = [S32(a) for a in rec.args]
         mem = {}
         for i, sa in enumerate(spec["args"]):
-            d, size = parse(sa)
-            if d != "int":
-                mem[i] = self.o.read(rec.args[i], size_of(size, ints))
+            d, size, off = parse(sa)
+            if d == "pp2in":
+                ptrs = struct.unpack("<2Q", self.o.read(rec.args[i], 16))
+                mem[i] = [self.o.read(p, size_of(size, ints)) for p in ptrs]
+            elif d != "int":
+                mem[i] = self.o.read(rec.args[i] - size_of(off, ints), size_of(size, ints))
         glob = {g: self.o.read(self.o.exports[g], GLOBAL_SIZES[g]) for g in spec.get("globals", [])}
         return ints, mem, glob
 
@@ -97,19 +115,25 @@ def record(names, sig_names, frames):
 def replay(lib, name, call):
     spec = SPECS[name]
     fn = getattr(lib, name)
-    bufs, args, argtypes = {}, [], []
+    bufs, args, argtypes, keep = {}, [], [], []
     for i, sa in enumerate(spec["args"]):
-        d, _ = parse(sa)
+        d, _, off = parse(sa)
         if d == "int":
             args.append(call["ints"][i])
             argtypes.append(ctypes.c_int32)
+        elif d == "pp2in":
+            chans = [ctypes.create_string_buffer(r, len(r)) for r in call["mem_in"][i]]
+            arr = (ctypes.c_void_p * 2)(*[ctypes.addressof(c) for c in chans])
+            keep.append((chans, arr))
+            args.append(arr)
+            argtypes.append(ctypes.c_void_p)
         else:
             raw = call["mem_in"][i]
             bufs[i] = ctypes.create_string_buffer(raw, len(raw))
-            args.append(bufs[i])
+            args.append(ctypes.addressof(bufs[i]) + size_of(off, call["ints"]))
             argtypes.append(ctypes.c_void_p)
     fn.argtypes = argtypes
-    fn.restype = ctypes.c_int32 if spec.get("ret") else None
+    fn.restype = {True: ctypes.c_int32, 16: ctypes.c_int16}.get(spec.get("ret"))
     for g, raw in call["glob_in"].items():
         ctypes.memmove(ctypes.addressof(ctypes.c_char.in_dll(lib, g)), raw, len(raw))
     ret = fn(*args)
@@ -125,8 +149,11 @@ def replay(lib, name, call):
         got = ctypes.string_at(ctypes.addressof(ctypes.c_char.in_dll(lib, g)), len(want))
         if got != want:
             problems.append(f"global {g}: got {got.hex()} want {want.hex()}")
-    if spec.get("ret") and ret != call["ret"]:
-        problems.append(f"ret {ret} want {call['ret']}")
+    want_ret = call["ret"]
+    if spec.get("ret") == 16:
+        want_ret = ((want_ret & 0xFFFF) ^ 0x8000) - 0x8000
+    if spec.get("ret") and ret != want_ret:
+        problems.append(f"ret {ret} want {want_ret}")
     return problems
 
 

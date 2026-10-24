@@ -1,9 +1,8 @@
 /* libssc — encoder entry points (ssc_encoder_* / ssc_encode).
  *
- * Phase 2 skeleton: mode selection, state init, frame header and byte budget
- * are bit-exact with the blob; the CELT payload is not produced yet (the
- * range coder is finished empty). The pipeline is ported stage by stage in
- * phase 3, see libssc/PLAN.md.
+ * Ported stage by stage (libssc/PLAN.md, phase 3). Bit-exact so far: header,
+ * byte budget, input processing (3a), silence flag and prefilter (3b). The
+ * rest of the CELT payload is not produced yet (range coder finished early).
  */
 #include "ssc_encoder.h"
 
@@ -12,11 +11,33 @@
 
 #include "opus/entenc.h"
 #include "ssc_drc.h"
+#include "ssc_internal.h"
 
+_Static_assert(offsetof(SscEncoder, prefilter_period) == 0x38, "encoder layout");
+_Static_assert(offsetof(SscEncoder, overlap_max) == 0x4c, "encoder layout");
 _Static_assert(offsetof(SscEncoder, fs_mode) == 0x60, "encoder layout");
 _Static_assert(offsetof(SscEncoder, frame_counter) == 0xd4, "encoder layout");
 _Static_assert(offsetof(SscEncoder, biquad) == 0xd8, "encoder layout");
-_Static_assert(offsetof(SscEncoder, in_mem) == 300, "encoder layout");
+_Static_assert(offsetof(SscEncoder, in_mem) == 0x128, "encoder layout");
+_Static_assert(sizeof(SscEncoder) == 0x130, "encoder layout");
+
+int32_t in_shared[2 * (864 + SSC_OVERLAP)];
+int32_t _pre_shared[2 * (864 + SSC_COMBFILTER_MAXPERIOD)];
+ssc_stage_fn ssc_stage_hook;
+
+/* Per-frame values shared between the stages of ssc_encode. */
+typedef struct {
+    int N, C, overlap;
+    int nbCompressedBytes;   /* budget, at most 1275 */
+    int nbAvailableBytes;
+    int total_bits;
+    int tell;                /* after the silence flag */
+    int silence;
+    int pitch_index;
+    int16_t gain1;           /* quantised prefilter gain (0 when off) */
+    int qg;
+    int pf_on;
+} SscFrame;
 
 const SscMode *ssc_custom_mode_create(int fs, int frame_size, int *err) {
     (void)frame_size; /* the blob ignores it: both modes are fixed at 864 */
@@ -135,12 +156,152 @@ static void preprocess(SscEncoder *st, int32_t *pcm, int frame_size, int bitrate
     for (i = 0; i < 8; i++) SoundBooster_DRC_Exe(pcm + i * block, frame_size >> 3);
 }
 
+/* max(max, -min) with max/min starting at 0, like celt_maxabs32. */
+static int32_t maxabs32(const int32_t *x, int n) {
+    int32_t mx = 0, mn = 0, neg;
+    int i;
+    for (i = 0; i < n; i++) {
+        if (x[i] > mx) mx = x[i];
+        if (x[i] < mn) mn = x[i];
+    }
+    neg = (int32_t)(0u - (uint32_t)mn);
+    return mx <= neg ? neg : mx;
+}
+
+/* Silence flag and the CELT input buffer (ssc_encode @0xd690..0xdb90).
+ * Samsung computes the pre-emphasis memory like Opus but never subtracts it:
+ * `in` is just pcm << shift (4 for 24-bit input, 12 otherwise on narrow rates). */
+static void silence_and_input(SscEncoder *st, const int32_t *pcm, ec_enc *enc, SscFrame *f,
+                              int budget, int shift) {
+    int N = f->N, ov = f->overlap, C = f->C, n1 = C * (N - ov), c, i;
+    int tell0 = ec_tell(enc);
+    int32_t sample_max = st->overlap_max, m;
+
+    f->nbCompressedBytes = budget > 1275 ? 1275 : budget;
+    /* st->f18 (Opus VBR target) is -1 for SSC: no VBR budget adjustment. */
+    f->total_bits = f->nbCompressedBytes * 8;
+
+    if (n1 < 1) {
+        if (sample_max < 1) sample_max = 0;
+    } else {
+        m = maxabs32(pcm, n1);
+        if (sample_max <= m) sample_max = m;
+    }
+    m = C * ov >= 1 ? maxabs32(pcm + n1, C * ov) : 0;
+    st->overlap_max = m;
+    if (sample_max <= m) sample_max = m;
+
+    f->silence = 0;
+    f->tell = tell0;
+    if (tell0 == 1) {
+        int sil = sample_max == 0;
+        ec_enc_bit_logp(enc, sil, 15);
+        if (sil) {  /* pretend the whole budget is used */
+            enc->nbits_total = f->total_bits + EC_ILOG(enc->rng);
+            f->tell = f->total_bits;
+            f->silence = 1;
+        }
+    }
+    f->nbAvailableBytes = f->nbCompressedBytes - ((tell0 + 4) >> 3);
+
+    if (N < 1) return;
+    for (c = 0; c < 2; c++) {  /* the blob hard-codes a stride of 2 */
+        int32_t *dst = in_shared + c * (N + ov) + ov;
+        uint32_t x;
+        for (i = 0; i < N; i++) dst[i] = (int32_t)((uint32_t)pcm[2 * i + c] << shift);
+        x = (uint32_t)dst[N - 1];
+        st->preemph_memE[c] = (int32_t)(0u - ((uint32_t)(((int32_t)x >> 16) * 0xd99a) +
+                                               (((x & 0xfff0) * 0x6ccd) >> 15)));
+    }
+}
+
+/* Pitch pre-filter (Opus run_prefilter, Samsung variant; @0xdb90..0xdfdc). */
+static void prefilter(SscEncoder *st, ec_enc *enc, SscFrame *f) {
+    int N = f->N, ov = f->overlap, c, d, qg = 0, pf_on = 0, pitch_index;
+    int32_t *prefilter_mem = st->in_mem + f->C * ov;
+    int32_t *pre[2] = {_pre_shared, _pre_shared + N + SSC_COMBFILTER_MAXPERIOD};
+    int16_t gain1, pg = st->prefilter_gain;
+    uint16_t thr;
+
+    for (c = 0; c < 2; c++) {
+        SSC_COPY32(pre[c], prefilter_mem + c * SSC_COMBFILTER_MAXPERIOD, SSC_COMBFILTER_MAXPERIOD);
+        SSC_COPY32(pre[c] + SSC_COMBFILTER_MAXPERIOD, in_shared + c * (N + ov) + ov, N);
+    }
+    if (f->nbAvailableBytes < 25 || f->silence) {
+        gain1 = 0;
+        pitch_index = SSC_COMBFILTER_MINPERIOD;
+    } else {
+        int16_t *pitch_buf = (int16_t *)in_shared;  /* the blob reuses in_shared */
+        int16_t g;
+        pitch_downsample(pre, pitch_buf, N + SSC_COMBFILTER_MAXPERIOD);
+        pitch_search(pitch_buf + (SSC_COMBFILTER_MAXPERIOD >> 1), pitch_buf, N,
+                     SSC_COMBFILTER_MAXPERIOD - 3 * SSC_COMBFILTER_MINPERIOD, &pitch_index);
+        pitch_index = SSC_COMBFILTER_MAXPERIOD - pitch_index;
+        g = remove_doubling(pitch_buf, SSC_COMBFILTER_MAXPERIOD, SSC_COMBFILTER_MINPERIOD, N,
+                            &pitch_index, st->prefilter_period, pg);
+        if (pitch_index > SSC_COMBFILTER_MAXPERIOD - 2) pitch_index = SSC_COMBFILTER_MAXPERIOD - 2;
+        gain1 = (int16_t)((uint32_t)(g * 0x599a) >> 15);  /* .7 * g */
+    }
+
+    /* Gain threshold: .2/.4 base, +.2 / +.1 for small budgets, -.1 / -.2 for a
+     * strong previous gain, at least .2 (16-bit arithmetic, as in the blob). */
+    d = pitch_index - st->prefilter_period;
+    if (d < 0) d = -d;
+    thr = d * 10 <= pitch_index ? 0x199a : 0x3334;
+    if (f->nbAvailableBytes < 25) thr += 0x199a;
+    else if (f->nbAvailableBytes <= 34) thr += 0xccd;
+    if (pg > 0x4666) thr += 0xe666;
+    else if (pg >= 0x3334) thr -= 0xccd;
+    if ((int16_t)thr < 0x199b) thr = 0x199a;
+
+    if ((int)gain1 < (int)thr) {
+        gain1 = 0;
+    } else {
+        int16_t gs = gain1;
+        d = gain1 - pg;
+        if (d < 0) d = -d;
+        if (d <= 0xccc) gs = pg;
+        qg = ((gs + 0x600) >> 10) / 3 - 1;
+        if (qg > 6) qg = 7;
+        if (qg < 0) qg = 0;
+        gain1 = (int16_t)(0xc00 * (qg + 1));
+        pf_on = 1;
+    }
+
+    for (c = 0; c < 2; c++) {
+        int32_t *in = in_shared + c * (N + ov);
+        int32_t *mem = prefilter_mem + c * SSC_COMBFILTER_MAXPERIOD;
+        if (st->prefilter_period < 16) st->prefilter_period = SSC_COMBFILTER_MINPERIOD;
+        SSC_COPY32(in, st->in_mem + c * ov, ov);
+        comb_filter(in + ov, pre[c] + SSC_COMBFILTER_MAXPERIOD, st->prefilter_period, pitch_index,
+                    N, (int16_t)(0u - (uint16_t)pg), (int16_t)(0 - gain1), ov);
+        SSC_COPY32(st->in_mem + c * ov, in + N, ov);
+        SSC_COPY32(mem, mem + N, SSC_COMBFILTER_MAXPERIOD - N);
+        SSC_COPY32(mem + SSC_COMBFILTER_MAXPERIOD - N, pre[c] + SSC_COMBFILTER_MAXPERIOD, N);
+    }
+
+    if (pf_on) {
+        int pi = pitch_index + 1, l = EC_ILOG(pi);
+        ec_enc_bit_logp(enc, 1, 1);
+        ec_enc_uint(enc, l - 5, 6);
+        ec_enc_bits(enc, pi - (16 << (l - 5)), l - 1);
+        ec_enc_bits(enc, qg, 3);
+    } else if (f->tell + 16 <= f->total_bits) {
+        ec_enc_bit_logp(enc, 0, 1);
+    }
+    f->pitch_index = pitch_index;
+    f->gain1 = gain1;
+    f->qg = qg;
+    f->pf_on = pf_on;
+}
+
 int ssc_encode(SscEncoder *st, int32_t *pcm, int frame_size, uint8_t *out, int bitrate) {
     const SscRate *rate = find_rate(bitrate);
     int wide = rate ? rate->wide : 0;
     int uhq = rate ? rate->uhq : 0;
     int n, budget;
     ec_enc enc;
+    SscFrame f;
 
     /* Header bytes 0..3 (blob writes them before checking pcm). */
     st->end = st->mode->nbEBands;
@@ -162,9 +323,23 @@ int ssc_encode(SscEncoder *st, int32_t *pcm, int frame_size, uint8_t *out, int b
 
     preprocess(st, pcm, frame_size, bitrate, wide);
     ec_enc_shrink(&enc, budget);
-    /* TODO(phase 3): the CELT pipeline. */
     if (!pcm || n < 3) return -1;
 
+    f.N = frame_size;
+    f.C = st->channels;
+    f.overlap = st->mode->overlap;
+    silence_and_input(st, pcm, &enc, &f, budget,
+                      st->bit_depth != 24 && !wide ? 12 : 4);
+    prefilter(st, &enc, &f);
+    if (ssc_stage_hook) ssc_stage_hook(SSC_STAGE_PRE_MDCT, st, &enc);
+
+    /* TODO(phase 3c+): MDCT, band energies, quantisation. */
+
+    /* End-of-frame state (ssc_encode @0x111b8..). Still missing: band energies,
+     * consec_transient (+0x40), previous_uhq_index. */
+    st->prefilter_period = f.pitch_index;
+    st->prefilter_gain = f.gain1;
+    st->f1c = (int32_t)enc.rng;  /* seed for the next frame's quant_all_bands */
     ec_enc_done(&enc);
     st->frame_counter = (uint16_t)(st->frame_counter + 1 == 256 ? 0 : st->frame_counter + 1);
     return enc.error ? -3 : budget + SSC_HEADER_BYTES;

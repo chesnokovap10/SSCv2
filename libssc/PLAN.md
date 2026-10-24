@@ -72,7 +72,7 @@ C99, fixed-point, на основе CELT-энкодера libopus (BSD-3). API �
 (контрольные точки после каждого кадра). Подэтапы, после каждого — пауза:
 
 - **3a** ✅ вход: Biquad, powercalc, CalculateLimitGain, DRC (SoundBooster).
-- **3b** pitch: `pitch_downsample`, `_ssc_autocorr`, `_ssc_lpc`, xcorr,
+- **3b** ✅ pitch: `pitch_downsample`, `_ssc_autocorr`, `_ssc_lpc`, xcorr,
   `find_best_pitch`, `pitch_search`, `remove_doubling`; префильтр `comb_filter`
   и память префильтра в состоянии.
 - **3c** MDCT/FFT (32-бит), `normal_headroom` / `uhq_headroom`.
@@ -254,3 +254,66 @@ int32, умножения Q31) — переносить с декомпиляц�
 
 **Заметка на фазу 5:** состояние DRC и `_pcmpower` — глобалы процесса, как у
 блоба; для нескольких потоков в одном процессе их надо перенести в `SscEncoder`.
+
+- 2026-10-24 — **подэтап 3b готов** (pitch-анализ и префильтр).
+
+### ⚠ Находка: масштаб входа (важно для фазы 5)
+
+Энкодер рассчитан на **24-битный вход: полная шкала 2^23** (сдвиг `<<4` даёт
+ровно шкалу CELT 2^27; порог лимитера ~0,958·2^23). Старая программа
+`D:\2\SSC` подаёт PCM в масштабе **2^29**, то есть на 36 дБ горячее, и
+встроенный DRC-лимитер Samsung сжимает всё громче примерно −36 dBFS к одному
+уровню. Замер на оракуле (синус 1 кГц, 229k):
+
+| вход | −20 dBFS | −6 dBFS |
+|---|---|---|
+| 2^29 (старая программа) | DRC −16,5 дБ → 0,958 FS | DRC −30,5 дБ → 0,958 FS |
+| 2^23 (24 бит) | DRC 0 дБ, без изменений | DRC 0 дБ, без изменений |
+
+То есть в старой программе динамика музыки фактически сплющена лимитером.
+В SSCv2 подавать 2^23 (float × 8388608) и проверить на слух.
+
+### Итоги 3b
+
+**Как устроен участок `ssc_encode` @0xd690..0xdfdc** (Opus 1.1 + правки Samsung):
+- бюджет `min(budget, 1275)`, VBR не используется (`st+0x18 = −1`);
+- тишина: `sample_max = max(overlap_max, maxabs(pcm[0..C(N−ov)]))`,
+  `overlap_max = maxabs(хвост)`; при `tell == 1` бит тишины (logp 15), при
+  тишине `nbits_total` подгоняется под весь бюджет;
+- вход CELT `in_shared[c][ov+i] = pcm << 4` (`<< 12` для 16 бит на узких
+  битрейтах). **Предыскажение не применяется**, но память `memE = −0.85·x`
+  считается и сохраняется (`st+0x44`);
+- префильтр как `run_prefilter` Opus 1.1: включён, если ≥25 байт и не тишина;
+  пороги усиления те же; `qg`, `gain = 0.09375·(qg+1)`; без tapset;
+  буфер pitch переиспользует глобальный `in_shared`;
+- биты: `1 | octave (uint 6) | период | qg (3 бита)` или `0` при выключенном
+  префильтре и `tell+16 ≤ total_bits`;
+- конец кадра: `prefilter_period/gain`, `st+0x1c = rng` (затравка следующего
+  кадра).
+
+**Раскладка состояния** уточнена: `in_mem` с `+0x128` (`sizeof = 0x130`), поля
+`0x1c..0x4c` идут в порядке `CELTEncoder` Opus 1.1 (rng, spread_decision,
+delayedIntra, tonal_average, lastCodedBands, hf_average, tapset_decision,
+prefilter_period, prefilter_gain, consec_transient, preemph_memE, overlap_max).
+
+**Функции:**
+- `_ssc_autocorr`, `_ssc_lpc`, xcorr-ядра, `pitch_downsample`, `pitch_search` —
+  Opus 1.1.5 без изменений (специализированы под N=864; asm-ядра считают те же
+  суммы по модулю 2^32).
+- `remove_doubling` — правки Samsung в усилении и суммах (см. `src/opus/PATCHES.md`).
+- `comb_filter` — своя реализация (`src/ssc_prefilter.c`): 8 аргументов (8-й —
+  overlap), окно `win_square` Q31, коэффициенты `MULT16_32_Q15(g, w)`, сумма в
+  64 бита с округлением `>>31`; постоянная часть `(g·x + 0x4000) >> 15`.
+  Все 5 веток покрыты (оба нуля / вход / выход / тот же период / смена периода).
+- `SSC_COPY32/16/8` копируют **с конца**; `SSC_CLEAR` = memset.
+
+**Стенды:**
+- replay: 14/14 функций (добавлены 9), поддержка смещения буфера (`@N`) и
+  массива указателей на каналы;
+- stages: точка «pre-MDCT» (хук `ssc_stage_hook` в libssc ↔ вход в первый
+  `ssc_mdct_forward` блоба): `in_shared`, `_pre_shared`, состояние (без полей
+  будущих стадий), `ec_ctx`, записанные байты — **совпадают на 672/672 кадрах**.
+
+**Структура кода:** `src/opus/` — Opus 1.1.5 + патчи (`PATCHES.md`),
+`ssc_pitch.c` (обёртка с сигнатурами Samsung), `ssc_prefilter.c`,
+`ssc_internal.h`, стадии в `ssc_encoder.c` (`silence_and_input`, `prefilter`).

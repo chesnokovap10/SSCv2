@@ -29,7 +29,7 @@ API 28) — примерно 2019–2020. База — **libopus 1.1.x** CELT fi
 | `frac_div32` | `frac_div32` | 416 | ✅ | |
 | `ssc_lcg_rand` | `celt_lcg_rand` | 24 | ✅ | |
 | `smull32_x86` | — | 12 | 🆕 | 32×32→64 умножение |
-| `SSC_COPY8/16/32`, `SSC_CLEAR` | `OPUS_COPY` / `OPUS_CLEAR` | 36–48 | ⬜ | макросы стали функциями |
+| `SSC_COPY8/16/32`, `SSC_CLEAR` | `OPUS_COPY` / `OPUS_CLEAR` | 36–48 | ✅ | копируют с конца |
 
 ## Range coder
 
@@ -80,14 +80,14 @@ API 28) — примерно 2019–2020. База — **libopus 1.1.x** CELT fi
 |---|---|---|---|---|
 | `ssc_mdct_forward` | `clt_mdct_forward` | 1000 | ⬜ | N=1728, окно int32 Q31 (в Opus int16) |
 | `ssc_fft` | `opus_fft` | 904 | ⬜ | 2 состояния: nfft 144 и 18; twiddles 432 × (i32,i32) |
-| `ssc_preemphasis` | `celt_preemphasis` | 220 | ⬜ | коэффициенты не в mode |
-| `pitch_downsample` | `pitch_downsample` | 1152 | ⬜ | |
-| `pitch_search` | `pitch_search` | 1356 | ⬜ | |
-| `remove_doubling` | `remove_doubling` | 2204 | ⬜ | |
-| `ssc_pitch_xcorr_c1/c2`, `dual_inner_prod` | `celt_pitch_xcorr`, `dual_inner_prod` | asm | ⬜ | секция `test`, ручной asm |
-| `_ssc_lpc` | `_celt_lpc` | 372 | ⬜ | |
-| `_ssc_autocorr` | `_celt_autocorr` | 632 | ⬜ | |
-| `comb_filter` | `comb_filter` | 2404 | ⬜ | |
+| `ssc_preemphasis` | `celt_preemphasis` | 220 | ⬜ | в `ssc_encode` не вызывается: предыскажение не применяется (память считается) |
+| `pitch_downsample` | `pitch_downsample` | 1152 | ✅ replay | Opus 1.1.5, C=2 |
+| `pitch_search` | `pitch_search` | 1356 | ✅ replay | Opus 1.1.5 |
+| `remove_doubling` | `remove_doubling` | 2204 | 🔶 replay | патчи Samsung, см. `src/opus/PATCHES.md` |
+| `ssc_pitch_xcorr_c1/c2`, `dual_inner_prod` | `celt_pitch_xcorr`, `dual_inner_prod` | asm | ✅ replay | фиксированные длины (940×5, 216×244, 432); `dual_inner_prod` блоб не вызывает |
+| `_ssc_lpc` | `_celt_lpc` | 372 | ✅ replay | p=4 |
+| `_ssc_autocorr` | `_celt_autocorr` | 632 | ✅ replay | n=944, lag 4, без окна |
+| `comb_filter` | `comb_filter` | 2404 | ❌→ libssc ✅ replay | своя версия: 8 арг., `win_square` Q31, 64-бит суммы (`src/ssc_prefilter.c`) |
 | `tone_detect` | — (в Opus 1.6 другая) | 480 | 🆕 | блоб старше Opus 1.6 |
 | `patch_transient_decision` | `patch_transient_decision` (static) | 668 | ⬜ | |
 | `patch_transient_decision_temporal` | — | 1468 | 🆕 | |
@@ -104,9 +104,9 @@ API 28) — примерно 2019–2020. База — **libopus 1.1.x** CELT fi
 | `ssc_encode` | `celt_encode_with_ec` | 17984 | 🔸 | заголовок/бюджет — см. `header_model.py` |
 | `normal_headroom`, `uhq_headroom`, `headroom_process` | — | 1028/2056/12 | 🆕 | после MDCT |
 | `last_band_info_calc` | — | 80 | 🆕 | |
-| `Biquad_Narrow_int2int_stereo` | — | 252 | 🆕 | коэф. `coeffs` (48k) / `coeffs96andbelow`, вероятно Q28 |
-| `powercalc`, `CalculateLimitGain` | — | 228/492 | 🆕 | |
-| `SoundBooster_DRC_*`, `set_DRC_limit_gain` | — | | 🆕 | лимитер на входе, 8 блоков по 108 |
+| `Biquad_Narrow_int2int_stereo` | — | 252 | 🆕 ✅ replay | коэф. Q28 `coeffs` / `coeffs96andbelow` |
+| `powercalc`, `CalculateLimitGain` | — | 228/492 | 🆕 ✅ replay | |
+| `SoundBooster_DRC_*`, `set_DRC_limit_gain` | — | | 🆕 ✅ replay | лимитер на входе, 8 блоков по 108 |
 
 ## Режимы (`tables.json`)
 

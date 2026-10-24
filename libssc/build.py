@@ -15,8 +15,13 @@ SRC = LIBSSC / "src"
 DEFINES = ["-DFIXED_POINT=1", "-DOPUS_BUILD=1", "-DVAR_ARRAYS=1", "-DDISABLE_FLOAT_API=1"]
 
 
+# Opus files compiled through a wrapper (renamed symbols), not on their own.
+INCLUDED_BY_WRAPPER = {"pitch.c", "celt_lpc.c"}
+
+
 def sources():
-    return sorted(SRC.glob("*.c")) + sorted((SRC / "opus").glob("*.c"))
+    opus = [p for p in sorted((SRC / "opus").glob("*.c")) if p.name not in INCLUDED_BY_WRAPPER]
+    return sorted(SRC.glob("*.c")) + opus
 
 
 def main():
