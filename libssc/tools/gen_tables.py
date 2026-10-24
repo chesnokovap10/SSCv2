@@ -32,11 +32,10 @@ def main():
         "_Static_assert(sizeof(ssc_fft_state) == 24, \"fft state layout\");",
         "_Static_assert(sizeof(ssc_mdct_lookup) == 32, \"mdct layout\");",
         "_Static_assert(sizeof(ssc_pulse_cache) == 32, \"cache layout\");",
-        "_Static_assert(sizeof(SscMode) == 136, \"mode layout\");",
+        "_Static_assert(sizeof(SscMode) == 128, \"mode layout\");",
         "_Static_assert(offsetof(SscMode, allocVectors) == 40, \"mode layout\");",
-        "_Static_assert(offsetof(SscMode, window) == 64, \"mode layout\");",
-        "_Static_assert(offsetof(SscMode, mdct) == 72, \"mode layout\");",
-        "_Static_assert(offsetof(SscMode, cache) == 104, \"mode layout\");",
+        "_Static_assert(offsetof(SscMode, mdct) == 64, \"mode layout\");",
+        "_Static_assert(offsetof(SscMode, cache) == 96, \"mode layout\");",
         "",
         "/* shared MDCT / FFT tables */",
         arr("int32_t", "ssc_trig", sh["trig"], 6),
@@ -45,7 +44,7 @@ def main():
         arr("int32_t", "ssc_twiddles", sh["twiddles"], 6),
     ]
     m48 = t["modes"]["48k"]
-    out.append(arr("int32_t", "ssc_window", m48["window"], 6))
+    out.append(arr("int32_t", "ssc_window", m48["window"], 6, static=False))
     out.append(arr("uint8_t", "ssc_alloc_vectors", m48["allocVectors"], 22))
     assert m48["allocVectors"] == t["modes"]["96k"]["allocVectors"]
     assert m48["window"] == t["modes"]["96k"]["window"]
@@ -67,7 +66,7 @@ def main():
             f"const SscMode ssc_mode_{label} = {{",
             f"    {m['Fs']}, {m['overlap']}, {m['nbEBands']}, {m['effEBands']}, eBands_{label},",
             f"    {m['nbShortMdcts']}, {m['shortMdctSize']}, {m['nbAllocVectors']},",
-            f"    ssc_alloc_vectors, alloc2_{label}, logN_{label}, ssc_window,",
+            f"    ssc_alloc_vectors, alloc2_{label}, logN_{label},",
             f"    {{ {m['mdct']['n']}, {m['mdct']['maxshift']}, {{ &ssc_kfft144, &ssc_kfft18 }}, ssc_trig }},",
             f"    {{ {c['size']}, cache_index_{label}, cache_bits_{label}, cache_caps_{label} }},",
             "};\n",
@@ -75,16 +74,16 @@ def main():
     nm = t["named"]
     out += [
         "/* named data objects (blob exports) */",
-        arr("int8_t", "eMeans", nm["eMeans"], 25, static=False),
-        arr("int8_t", "tf_select_table", nm["tf_select_table"], 8, static=False),
+        arr("int8_t", "eMeans", nm["ssc_eMeans_tmp"], 25, static=False),  # ssc_names.h
+        arr("int8_t", "tf_select_table", nm["ssc_tf_select_table"], 8, static=False),
         arr("int32_t", "coeffs", nm["coeffs"], 5, static=False),
         arr("int32_t", "coeffs96andbelow", nm["coeffs96andbelow"], 5, static=False),
-        arr("int32_t", "cutoff_start_index", nm["cutoff_start_index"], 8, static=False, const=False),
-        arr("int32_t", "cutoff_start_uhq_index", nm["cutoff_start_uhq_index"], 8, static=False,
-            const=False),
         arr("int32_t", "win_square", nm["win_square"], 8, static=False, const=False),
         f"int32_t margin = {nm['margin'][0]};\n",
         arr("int32_t", "headroom_gain", nm["headroom_gain"], 12, static=False, const=False),
+        "/* Q15 constants (blob exports, int16) */",
+        *[f"const int16_t {k} = {v[0]};" for k, v in nm.items() if k.startswith("GAIN_")],
+        "",
     ]
     OUT.write_text("\n".join(out), encoding="utf-8")
     print(OUT)

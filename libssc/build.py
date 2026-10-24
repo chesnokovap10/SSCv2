@@ -30,7 +30,9 @@ def main():
     dll = out / "libssc.dll"
     # -ffp-contract=off: the float transient detector must not get fused multiply-adds
     # (the blob uses plain fmul/fadd); keep it in the cgo flags too.
+    # -include ssc_names.h: exported symbols get the blob's names (ssc_quant_all_bands, ...).
     cmd = ["gcc", "-std=gnu11", "-O2", "-ffp-contract=off", "-Wall", "-Wno-unused-function", "-shared",
+           "-include", "ssc_names.h",
            "-o", str(dll), *DEFINES, f"-I{SRC}", f"-I{SRC / 'opus'}",
            *map(str, sources())]
     r = subprocess.run(cmd, capture_output=True, text=True)

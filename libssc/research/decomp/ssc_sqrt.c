@@ -1,36 +1,34 @@
-/* ssc_sqrt @ 00106bec size 232 */
+/* ssc_sqrt @ 001115c0 size 176 */
 
 ulong ssc_sqrt(ulong param_1)
 
 {
   uint uVar1;
   int iVar2;
-  uint uVar3;
-  int iVar4;
-  int iVar5;
+  short sVar3;
+  uint uVar4;
+  uint uVar5;
   
-  iVar4 = (int)param_1;
-  if (iVar4 != 0) {
-    if (iVar4 < 0x40000000) {
-      iVar5 = ec_ilog(param_1 & 0xffffffff);
-      iVar5 = (iVar5 + -1) * 0x10000 >> 0x11;
-      iVar2 = iVar5 + -7;
-      uVar3 = 0xe - iVar5;
-      iVar5 = iVar4 >> (iVar2 * 2 & 0x1fU);
-      if (iVar2 < 1) {
-        iVar5 = iVar4 << (ulong)(iVar2 * -2 & 0x1f);
-      }
-      iVar4 = (int)(iVar5 << 0x10 ^ 0x80000000U) >> 0x10;
-      iVar4 = (int)((((int)((((int)((((iVar4 * -0x298 >> 0xf) + 0x6a3) * iVar4 * 2 & 0xffff0000U) +
-                                   0xf43d0000) >> 0x10) * iVar4 * 2 & 0xffff0000U) + 0x2d290000) >>
-                     0x10) * iVar4 * 2 & 0xffff0000U) + 0x5a870000) >> 0x10;
-      uVar1 = iVar4 >> (uVar3 & 0x1f);
-      if ((int)uVar3 < 1) {
-        uVar1 = iVar4 << (ulong)(-uVar3 & 0x1f);
-      }
-      return (ulong)uVar1;
+  uVar5 = (uint)param_1;
+  if (uVar5 != 0) {
+    if (0x3fffffff < (int)uVar5) {
+      return 0x7fff;
     }
-    param_1 = 0x7fff;
+    uVar1 = (uint)LZCOUNT(uVar5) & 0x1e;
+    uVar4 = (uint)LZCOUNT(uVar5) >> 1;
+    sVar3 = (short)((int)uVar5 >> (0x10 - uVar1 & 0x1f));
+    if (uVar5 >> 0x10 == 0) {
+      sVar3 = (short)(uVar5 << (ulong)(uVar1 - 0x10 & 0x1f));
+    }
+    uVar1 = (int)sVar3 ^ 0xffff8000;
+    iVar2 = (int)(uVar1 * 2 *
+                  ((((int)(uVar1 * 2 * ((uVar1 * -0x298 >> 0xf) + 0x6a3 & 0xffff) + -0xbc30000) >>
+                    0x10) * uVar1 >> 0xf) + 0x2d29 & 0xffff) + 0x5a870000) >> 0x10;
+    uVar1 = iVar2 >> (uVar4 - 1 & 0x1f);
+    if (uVar5 >> 0x1c != 0) {
+      uVar1 = iVar2 << (ulong)(1 - uVar4 & 0x1f);
+    }
+    param_1 = (ulong)uVar1;
   }
   return param_1;
 }

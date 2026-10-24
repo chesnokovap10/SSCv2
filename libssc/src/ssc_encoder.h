@@ -1,9 +1,8 @@
 /* libssc — encoder state, ABI twin of the blob's CELT-derived encoder struct.
  *
- * Header is 300 bytes (blob: get_size = (nb*6 + overlap*4 + 4096)*C + 300:
- * sizeof = 0x130 with a one-element in_mem[] at 0x128, as in Opus 1.1),
- * followed by per-channel arrays laid out like Opus 1.1 celt_encoder.c:
- *   int32 in_mem[C*overlap]          at +0x128
+ * Header is 0xe0 bytes, then per-channel arrays laid out like Opus 1.1
+ * celt_encoder.c:
+ *   int32 in_mem[C*overlap]          at +0xe0
  *   int32 prefilter_mem[C*1024]
  *   int16 oldBandE[C*nb], oldLogE[C*nb], oldLogE2[C*nb]
  * Field names are ours; `fXX` fields are not understood yet (XX = offset).
@@ -38,7 +37,7 @@ typedef struct SscEncoder {
     int16_t prefilter_gain;     /* 0x3c */
     int16_t f3e;
     int32_t consec_transient;   /* 0x40 */
-    int32_t preemph_memE[2];    /* 0x44  computed, never subtracted (see prefilter) */
+    int32_t preemph_memE[2];    /* 0x44  Opus preemphasis memory: always 0 (older builds computed it) */
     int32_t overlap_max;        /* 0x4c  max |pcm| over the last overlap samples */
     int32_t intensity;          /* 0x50  intensity stereo start band */
     uint8_t f54[0x60 - 0x54];
@@ -46,16 +45,11 @@ typedef struct SscEncoder {
     int32_t fs;                 /* 0x64  real input rate */
     int32_t bitrate;            /* 0x68  bps, set per frame */
     int32_t bit_depth;          /* 0x6c  24 */
-    /* 0x70..0xd4: patch_transient_decision_temporal (float, per channel) */
-    int32_t tr_flag;            /* 0x70  a transient was seen last frame */
-    int32_t tr_pos[2];          /* 0x74  last sub-block above the running energy */
-    float tr_energy[2][8];      /* 0x7c  high-passed energy of the 8 sub-blocks */
-    float tr_avg[2];            /* 0xbc  running energy average */
-    float tr_hp[2][2];          /* 0xc4  high-pass memory: last input, last output */
-    uint16_t frame_counter;     /* 0xd4  8-bit, wraps at 256 */
-    uint16_t hdr_low_bits;      /* 0xd6  low 2 bits of header byte 2 (1 after init) */
-    int64_t biquad[10];         /* 0xd8  Biquad_Narrow_int2int_stereo state */
-    int32_t in_mem[1];          /* 0x128 per-channel arrays follow */
+    uint8_t f70[0x8c - 0x70];   /* 0x70  not understood yet (zero after init) */
+    uint16_t frame_counter;     /* 0x8c  8-bit, wraps at 256 */
+    uint16_t hdr_low_bits;      /* 0x8e  low 2 bits of header byte 2 (1 after init) */
+    int64_t biquad[10];         /* 0x90  Biquad_Narrow_int2int_stereo state */
+    int32_t in_mem[];           /* 0xe0  per-channel arrays follow */
 } SscEncoder;
 
 /* Shared work buffers. The blob keeps them as process globals with these names. */
@@ -69,7 +63,10 @@ enum {
     SSC_STAGE_PRE_MDCT = 1,
     SSC_STAGE_POST_MDCT = 2,
     SSC_STAGE_POST_NORMALISE = 3,
-    SSC_STAGE_PRE_PVQ = 4  /* entry of quant_all_bands */
+    SSC_STAGE_PRE_PVQ = 4,  /* entry of quant_all_bands */
+    SSC_STAGE_PRE_COARSE = 5,
+    SSC_STAGE_PRE_ALLOC = 6,
+    SSC_STAGE_PRE_FINE = 7
 };
 
 /* Filled before SSC_STAGE_PRE_PVQ: the quant_all_bands arguments and the
@@ -81,6 +78,17 @@ typedef struct {
     int16_t error[44];
 } SscStageAlloc;
 extern SscStageAlloc ssc_stage_alloc;
+/* Filled before SSC_STAGE_PRE_COARSE: the scalar arguments of quant_coarse_energy
+ * and its bandLogE input. */
+typedef struct {
+    int32_t nbBands, end, budget, nbAvailableBytes, force_intra;
+    int16_t bandLogE[44];
+} SscStageCoarse;
+extern SscStageCoarse ssc_stage_coarse;
+/* Copy of the frame's SscAlloc (ssc_internal.h, 0x184 bytes) before
+ * SSC_STAGE_PRE_ALLOC and SSC_STAGE_PRE_FINE, and codedBands for the latter. */
+extern uint8_t ssc_stage_a[0x184];
+extern int32_t ssc_stage_coded;
 typedef void (*ssc_stage_fn)(int stage, const struct SscEncoder *st, const void *enc);
 extern ssc_stage_fn ssc_stage_hook;
 

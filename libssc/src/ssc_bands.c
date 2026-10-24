@@ -50,15 +50,43 @@ void compute_band_energies(const SscMode *m, const int32_t *X, int32_t *bandE, i
                 range_energy(X + c * N, M8 * eBands[i], M8 * eBands[i + 1]);
 }
 
-void amp2Log2(const SscMode *m, int effEnd, int end, const int32_t *bandE, int16_t *bandLogE,
-              int C) {
-    int c = 0, i;
+/* Samsung: ssc_amp2Log2_asm on the even part (two bands per step, run at least
+ * once), then C on the odd last band. Both take the second channel at an offset
+ * of `end` (even part: end rounded down to even), not nbEBands: ssc_encode
+ * always passes end = nbEBands = 22, where the two agree.
+ * log2 step by step as the asm: celt_log2 without the zero check, in 32-bit
+ * lanes; e << 2 wraps for energies >= 2^29 (short blocks of loud input) and the
+ * negative value goes through the same shifts. */
+static int32_t q15_step(int32_t n, int32_t acc, int32_t c) {
+    return (int32_t)(int16_t)((int32_t)((uint32_t)n * (uint32_t)acc) >> 15) + c;
+}
+
+static int16_t log2_band(int32_t e, int i) {
+    int32_t x = (int32_t)((uint32_t)e << 2), n, f;
+    int i13 = 18 - (x ? __builtin_clz((uint32_t)x) : 32), sh = 2 - i13;
+    n = sh >= 0 ? (int32_t)((uint32_t)x << sh) : x >> -sh;
+    n -= 0xc000;
+    f = (int16_t)(((int32_t)((uint32_t)n * (uint32_t)-1401) >> 15) + 2545);
+    f = (int16_t)q15_step(n, f, -5217);
+    f = (int16_t)q15_step(n, f, 15746);
+    f = (int16_t)q15_step(n, f, -6793);
+    return (int16_t)((f >> 4) + (int32_t)((uint32_t)i13 << 10) - eMeans[i] * 64);
+}
+
+void amp2Log2(const SscMode *m, int end, const int32_t *bandE, int16_t *bandLogE) {
+    int even = end - end % 2, i = 0;
+    (void)m;
     do {
-        for (i = 0; i < effEnd; i++)
-            bandLogE[i + c * m->nbEBands] =
-                (int16_t)(celt_log2(SHL32(bandE[i + c * m->nbEBands], 2)) - SHL16(eMeans[i], 6));
-        for (i = effEnd; i < end; i++) bandLogE[c * m->nbEBands + i] = -QCONST16(14.f, DB_SHIFT);
-    } while (++c < C);
+        bandLogE[i] = log2_band(bandE[i], i);
+        bandLogE[i + 1] = log2_band(bandE[i + 1], i + 1);
+        bandLogE[even + i] = log2_band(bandE[even + i], i);
+        bandLogE[even + i + 1] = log2_band(bandE[even + i + 1], i + 1);
+        i += 2;
+    } while (i < even);
+    for (i = even; i < end; i++) {
+        bandLogE[i] = log2_band(bandE[i], i);
+        bandLogE[end + i] = log2_band(bandE[end + i], i);
+    }
 }
 
 /* X (int16) overwrites freq (int32) in place, as in the blob: element j of X
@@ -87,24 +115,28 @@ void normalise_bands(const SscMode *m, const int32_t *freq, int16_t *X, const in
     }
 }
 
+/* Sub-band ends (bins) above the last band; unnamed .rodata in the blob. */
+static const int16_t cutoff_normal[4] = {708, 744, 780, 816};  /* blob va 0x27f8 */
+static const int16_t cutoff_uhq[4][8] = {                      /* blob va 0x2840 */
+    {738, 756, 774, 792, 810, 828, 846, 864}, {594, 612, 630, 648, 666, 684, 702, 720},
+    {450, 468, 486, 504, 522, 540, 558, 576}, {306, 324, 342, 360, 378, 396, 414, 432}};
+
 /* Energies of the narrow sub-bands above the last band, out[0..n) for the
- * first channel and out[n..2n) for the second. Sub-band ends come from the
- * int16 tables cutoff_start_index (4 x 36 bins from band 21) or, for UHQ,
- * row `row` of cutoff_start_uhq_index (8 x 18 bins from band 21 - row).
- * The second channel always starts at band 21 (blob quirk, kept). */
+ * first channel and out[n..2n) for the second: 4 x 36 bins from band 21 or,
+ * for UHQ, row `row` (8 x 18 bins from band 21 - row), both channels alike
+ * (older builds started the second channel at band 21). */
 void compute_band_energies_for_lastband(const SscMode *m, const int32_t *X, int32_t *out, int n,
                                         int uhq, int row) {
-    const int16_t *ends = uhq ? (const int16_t *)cutoff_start_uhq_index + 8 * row
-                              : (const int16_t *)cutoff_start_index;
+    const int16_t *ends = uhq ? cutoff_uhq[row] : cutoff_normal;
     const int32_t *X1 = X + (m->shortMdctSize << 3);
-    int j, lo;
+    int j, lo, lo0;
     if (n < 1) return;
-    lo = m->eBands[m->nbEBands - 1 - (uhq ? row : 0)] << 3;
+    lo = lo0 = m->eBands[m->nbEBands - 1 - (uhq ? row : 0)] << 3;
     for (j = 0; j < n; j++) {
         out[j] = range_energy(X, lo, ends[j]);
         lo = ends[j];
     }
-    lo = m->eBands[m->nbEBands - 1] << 3;
+    lo = lo0;
     for (j = 0; j < n; j++) {
         out[n + j] = range_energy(X1, lo, ends[j]);
         lo = ends[j];
@@ -141,58 +173,4 @@ int patch_transient_decision(const int16_t *newE, const int16_t *oldE, int nb, i
     den = 2 * end - 28;
     mean = den ? sum / den : 0;
     return mean > 0x400;
-}
-
-/* Samsung time-domain detector, single-precision float like the blob (plain
- * mul/sub/add, no FMA). Per channel: high-pass y = 0.7548 (x - x') + 0.5095 y'
- * over the 8 sub-blocks of `in`, energy of each; a sub-block is "loud" when its
- * energy beats r_k = 0.3 e_{k-1} + 0.7 r_{k-1}, seeded from the last sub-block
- * and running average of the previous frame. */
-int patch_transient_decision_temporal(const SscMode *m, SscEncoder *st, const int32_t *in) {
-    const float A = 0.7548f, B = 0.5095f;
-    int L = m->shortMdctSize, stride = m->overlap + 8 * L, c, b, k, count = 0;
-    int32_t pos[2] = {0, 0};  /* blob: uninitialised stack slots, observed 0 */
-    for (c = 0; c < C2; c++) {
-        const int32_t *x = in + c * stride;
-        float e[8] = {0}, r[8], r0, mx;
-        int any = 0, last = 0, hit;
-        if (L >= 1) {
-            float xp = st->tr_hp[c][0], yp = st->tr_hp[c][1];
-            for (b = 0; b < 8; b++) {
-                float s = 0.0f;
-                for (k = 0; k < L; k++) {
-                    float t1 = xp * A, t2 = yp * B, xf = (float)x[b * L + k];
-                    float t = xf * A - t1;
-                    yp = t + t2;
-                    s = s + yp * yp;
-                    xp = xf;
-                }
-                e[b] = s;
-            }
-            st->tr_hp[c][0] = xp;
-            st->tr_hp[c][1] = yp;
-        }
-        r0 = st->tr_energy[c][7] * 3.0f + st->tr_avg[c] * 7.0f;
-        r[0] = r0;
-        for (b = 1; b < 8; b++) r[b] = e[b - 1] * 3.0f + (r[b - 1] / 10.0f) * 7.0f;
-        mx = e[0] > 0.0f ? e[0] : 0.0f;
-        for (b = 0; b < 8; b++) {
-            if (b && !(mx > e[b])) mx = e[b];
-            if (e[b] > r[b]) {
-                any = 1;
-                if (b) last = b;
-            }
-        }
-        if (any) pos[c] = last;
-        st->tr_avg[c] = r[7] / 10.0f;
-        if (mx < 1e6f || !any)
-            hit = st->tr_flag ? st->tr_pos[c] == 7 : 0;
-        else
-            hit = 1;
-        count += hit;
-        st->tr_pos[c] = pos[c];
-        memcpy(st->tr_energy[c], e, sizeof e);
-    }
-    st->tr_flag = count != 0;
-    return st->tr_flag;
 }

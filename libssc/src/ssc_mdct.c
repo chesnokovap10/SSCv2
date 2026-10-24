@@ -147,8 +147,9 @@ void ssc_fft(const ssc_fft_state *st, const int32_t *fin, int32_t *fout) {
 #define ROT_COS(shift) ((shift) ? 0x7fffc88cll : 0x7fffff22ll)
 #define ROT_SIN(shift) ((shift) ? 0x7725c6ll : 0xee4bbll)
 
-void ssc_mdct_forward(const ssc_mdct_lookup *l, int32_t *in, int32_t *out, const int32_t *window,
-                      int overlap, int shift, int stride) {
+void ssc_mdct_forward(const ssc_mdct_lookup *l, int32_t *in, int32_t *out, int overlap, int shift,
+                      int stride) {
+    const int32_t *window = ssc_window;
     int N = l->n >> shift, N2 = N >> 1, N4 = N >> 2, i;
     int ov4 = (overlap + 3) >> 2, step = 1 << shift;
     const int32_t *trig = l->trig;

@@ -1,5 +1,5 @@
 /* libssc — Samsung input processing before CELT: Biquad_Narrow, powercalc,
- * CalculateLimitGain and the SoundBooster DRC peak limiter.
+ * CalculateLimitGain and the SSC_DRC peak limiter (SoundBooster DRC in older builds).
  *
  * Twin of the blob: same names, same globals (the blob keeps the DRC state in
  * process globals, so like the blob this is one stream per process for now;
@@ -10,7 +10,7 @@
 
 #include <stdint.h>
 
-/* drc_struct @ blob 0x295d0 (24 bytes). Field names are ours. */
+/* drc_struct @ blob 0x20500 (24 bytes). Field names are ours. */
 typedef struct {
     int32_t limit;      /* +0x00  threshold, set every frame by set_DRC_limit_gain */
     int32_t c_attack;   /* +0x04  Q22 smoothing when the gain goes down (0) */
@@ -35,10 +35,9 @@ void Biquad_Narrow_int2int_stereo(int32_t *out, const int32_t *in, const int32_t
 void powercalc(const int32_t *x, int n, int32_t *out);
 int CalculateLimitGain(int p_filtered, int p_rest, int bitrate, int fs);
 void set_DRC_limit_gain(int32_t limit);
-void SoundBooster_DRC_Init(int fs, int channels);
-void SoundBooster_DRC_SetPar(int mode, int32_t limit);
+void SSC_DRC_Init(int fs, int channels);
+void SSC_DRC_SetPar(int mode, int32_t limit);
 /* In place on n interleaved stereo frames. */
-void SoundBooster_DRC_Exe(int32_t *x, int n);
-const char *SoundBooster_DRC_Get_Version(void);
+void SSC_DRC_Exe(int32_t *x, int n);
 
 #endif

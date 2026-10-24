@@ -31,15 +31,45 @@ OUT_OFF = 0x80000            # oracle's output buffer is IO_BASE + OUT_OFF
 # moment is the entry (or, with "exit", the return) of the named function, first
 # call in the frame.
 STAGES = {1: ("pre-MDCT", "ssc_mdct_forward", "enter"),
-          2: ("post-MDCT", "compute_band_energies", "enter"),  # long MDCT + headroom
-          3: ("post-normalise", "normalise_bands", "exit"),   # 3d: analysis done
-          4: ("pre-PVQ", "quant_all_bands", "enter")}         # 3e: energy + allocation
+          2: ("post-MDCT", "ssc_compute_band_energies", "enter"),  # long MDCT + headroom
+          3: ("post-normalise", "ssc_normalise_bands", "exit"),   # analysis done
+          4: ("pre-PVQ", "ssc_quant_all_bands", "enter"),         # energy + allocation
+          5: ("pre-coarse", "ssc_quant_coarse_energy", "enter"),
+          6: ("pre-alloc", "ssc_compute_allocation", "enter"),
+          7: ("pre-fine", "ssc_quant_fine_energy", "enter")}
 BASE_VIEWS = ("in_shared", "_pre_shared", "state", "range coder", "bytes written")
 # Extra views at pre-PVQ: SscStageAlloc in libssc, the quant_all_bands arguments
 # (registers + stack) and the allocation/energy arrays in the blob.
 ALLOC_VIEWS = ("qab scalars", "tf_res", "pulses", "fine_quant", "fine_priority", "bandE",
                "error (coded bands)")
-STAGE_VIEWS = {s: BASE_VIEWS + (ALLOC_VIEWS if s == 4 else ()) for s in STAGES}
+ALLOC_CHECK = True
+STAGE_VIEWS = {s: BASE_VIEWS + (ALLOC_VIEWS if s == 4 and ALLOC_CHECK else ()) for s in STAGES}
+# SscAlloc (ssc_internal.h) going into ssc_compute_allocation and coming out of it
+A_SIZE = 0x184
+A_IN_VIEWS = ("alloc total", "alloc offsets", "alloc trim/dual_stereo/table2")
+A_OUT_VIEWS = ("alloc fine_quant", "alloc pulses", "alloc fine_priority",
+               "alloc dual_stereo/balance", "codedBands")
+STAGE_VIEWS[6] = BASE_VIEWS + A_IN_VIEWS
+STAGE_VIEWS[7] = BASE_VIEWS + A_OUT_VIEWS
+
+
+def a_views(raw, end, coded=None):
+    arr = lambda off: raw[off:off + 4 * end]  # noqa: E731  (beyond end: leftovers)
+    if coded is None:
+        return {"alloc total": raw[0:4], "alloc offsets": arr(0xc0),
+                "alloc trim/dual_stereo/table2": raw[0x170:0x178] + raw[0x180:0x184]}
+    return {"alloc fine_quant": arr(0x4), "alloc pulses": arr(0x5c),
+            "alloc fine_priority": arr(0x118), "alloc dual_stereo/balance": raw[0x174:0x17c],
+            "codedBands": struct.pack("<i", coded)}
+COARSE_VIEWS = ("coarse nbBands", "coarse end", "coarse budget", "coarse nbAvailableBytes",
+                "coarse force_intra", "coarse bandLogE")
+STAGE_VIEWS[5] = BASE_VIEWS + COARSE_VIEWS
+
+
+def coarse_views(ints, bandLogE):
+    v = {name: struct.pack("<i", x) for name, x in zip(COARSE_VIEWS, ints)}
+    v["coarse bandLogE"] = bandLogE
+    return v
 
 
 def alloc_views(raw, end):
@@ -90,9 +120,17 @@ class LibEncoder:
     def _on_stage(self, stage, st, enc):
         read = lambda p, n: ctypes.string_at(p, n)  # noqa: E731
         self.snaps[stage] = snapshot(read, st, self.size, enc, ctypes.addressof(self.out), self.glob)
-        if stage == 4:
+        if stage == 5:
+            raw = self.glob("ssc_stage_coarse", 20 + 88)
+            self.snaps[stage].update(coarse_views(struct.unpack_from("<5i", raw), raw[20:]))
+        if stage == 4 and ALLOC_CHECK:
             raw = self.glob("ssc_stage_alloc", 648)
             self.snaps[stage].update(alloc_views(raw, struct.unpack_from("<i", raw)[0]))
+        if stage in (6, 7):
+            raw = self.glob("ssc_stage_a", A_SIZE)
+            end = struct.unpack_from("<i", self.glob("ssc_stage_coarse", 8), 4)[0]
+            coded = struct.unpack("<i", self.glob("ssc_stage_coded", 4))[0] if stage == 7 else None
+            self.snaps[stage].update(a_views(raw, end, coded))
 
     def encode(self, pcm):
         self.snaps = {}
@@ -112,16 +150,24 @@ class BlobEncoder:
         self.o = Oracle(trace=True).open(rate, 2, bitrate)
         self.size = Oracle.s32(self.o.call("ssc_encoder_get_size", 2, rate))
         self.snaps, self.ec = {}, None
-        self.o.probes_enter["ec_enc_init"] = lambda o, rec: setattr(self, "ec", rec.args[0])
+        self.o.probes_enter["ssc_ec_enc_init"] = lambda o, rec: setattr(self, "ec", rec.args[0])
+        # several callbacks per function: the oracle keeps one probe per name
+        self.cb_enter, self.cb_exit = {}, {}
         for stage, (_name, fn, when) in STAGES.items():
-            probes = self.o.probes_exit if when == "exit" else self.o.probes_enter
-            probes[fn] = lambda o, rec, s=stage: self._on_stage(s, rec)
+            self.on(fn, when, lambda o, rec, s=stage: self._on_stage(s, rec))
         # pointers to arrays that quant_all_bands does not receive
         self.ptrs = {}
-        self.o.probes_enter["quant_fine_energy"] = lambda o, rec: self.ptrs.update(
-            error=rec.args[3], fine_quant=rec.args[4])
-        self.o.probes_enter["compute_allocation"] = lambda o, rec: self.ptrs.update(
-            fine_priority=self.stack_arg(11))
+        self.on("ssc_quant_fine_energy", "enter", lambda o, rec: self.ptrs.update(error=rec.args[3]))
+        self.on("ssc_compute_allocation", "enter", lambda o, rec: self.ptrs.update(
+            A=rec.args[1], end=Oracle.s32(rec.args[3])))
+        self.on("ssc_compute_allocation", "exit", lambda o, rec: self.ptrs.update(
+            coded=Oracle.s32(rec.ret)))
+
+    def on(self, fn, when, cb):
+        table, probes = ((self.cb_exit, self.o.probes_exit) if when == "exit"
+                         else (self.cb_enter, self.o.probes_enter))
+        table.setdefault(fn, []).append(cb)
+        probes[fn] = lambda o, rec, cbs=table[fn]: [c(o, rec) for c in cbs]
 
     def glob(self, name, size):
         return self.o.read(self.o.exports[name], size)
@@ -136,15 +182,27 @@ class BlobEncoder:
             return
         self.snaps[stage] = snapshot(self.o.read, self.o.state, self.size, self.ec,
                                      IO_BASE + OUT_OFF, self.glob)
-        if stage == 4:
+        if stage == 5:  # ssc_quant_coarse_energy(m, nbBands, end, bandLogE, oldE, budget,
+            a = rec.args  # error, enc, nbAvailableBytes, force_intra, &delayedIntra)
+            s32 = Oracle.s32
+            ints = [s32(a[1]), s32(a[2]), s32(a[5]), s32(self.stack_arg(8)), s32(self.stack_arg(9))]
+            self.snaps[stage].update(coarse_views(ints, self.o.read(a[3], 88)))
+        if stage == 6:
+            self.snaps[stage].update(a_views(self.o.read(rec.args[1], A_SIZE), Oracle.s32(rec.args[3])))
+        if stage == 7:
+            self.snaps[stage].update(a_views(self.o.read(self.ptrs["A"], A_SIZE), self.ptrs["end"],
+                                             self.ptrs["coded"]))
+        if stage == 4 and ALLOC_CHECK:
+            # ssc_quant_all_bands(m, end, X, collapse, bandE, pulses, shortBlocks, spread |
+            #   stack: dual_stereo, intensity, tf_res, total_bits, balance, ec, codedBands, seed, 1)
             a = rec.args
             s32 = Oracle.s32
             end = s32(a[1])
+            A = a[5] - 0x5c  # pulses lives in the SscAlloc
             scal = [end, s32(a[6]), s32(a[7])] + [s32(self.stack_arg(k)) for k in (8, 9, 11, 12, 14)]
             rd = lambda p, n: self.o.read(p, n)  # noqa: E731
             raw = (struct.pack("<8i", *scal) + rd(self.stack_arg(10), 88) + rd(a[5], 88)
-                   + rd(self.ptrs["fine_quant"], 88) + rd(self.ptrs["fine_priority"], 88)
-                   + rd(a[4], 176) + rd(self.ptrs["error"], 88))
+                   + rd(A + 4, 88) + rd(A + 0x118, 88) + rd(a[4], 176) + rd(self.ptrs["error"], 88))
             self.snaps[stage].update(alloc_views(raw, end))
 
     def encode(self, pcm):
@@ -182,7 +240,7 @@ CHECKPOINTS = {
                                lambda l: l.glob("_pcmpower", PCM_BYTES)),
     "drc_struct": (lambda o: o.read(o.exports["drc_struct"], 24),
                    lambda l: l.glob("drc_struct", 24)),
-    "state biquad (+0xd8)": (lambda o: o.read(o.state + 0xd8, 80), lambda l: l.st.raw[0xd8:0x128]),
+    "state biquad (+0x90)": (lambda o: o.read(o.state + 0x90, 80), lambda l: l.st.raw[0x90:0xe0]),
     "frame header (fixed bits)": (lambda o: hdr_fixed(o.last), lambda l: hdr_fixed(l.last)),
     "frame length": (lambda o: len(o.last).to_bytes(4, "little"),
                      lambda l: len(l.last).to_bytes(4, "little")),

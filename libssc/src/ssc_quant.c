@@ -12,6 +12,7 @@
 #include "opus/entenc.h"
 #include "opus/laplace.h"
 #include "opus/mathops.h"
+#include "ssc_encoder.h"
 #include "ssc_internal.h"
 
 #define C2 2
@@ -87,29 +88,31 @@ static int coarse_impl(const SscMode *m, int end, const int16_t *eBands, int16_t
 }
 
 /* Opus quant_coarse_energy with two_pass on, no loss_rate and start 0.
- * nbBands only gates max_decay (end - start > 10). */
+ * nbBands is unused. Samsung: the intra pass is kept only while its bytes fit
+ * a 150-byte buffer, and the distortion that feeds delayedIntra runs over the
+ * first 2*end entries of the arrays (not end per channel: blob quirk, kept). */
+#define INTRA_BUF 150
 void quant_coarse_energy(const SscMode *m, int nbBands, int end, const int16_t *eBands,
                          int16_t *oldEBands, uint32_t budget, int16_t *error, ec_enc *enc,
                          int nbAvailableBytes, int force_intra, int32_t *delayedIntra) {
-    int nb = m->nbEBands, c, i, badness1 = 0, badness2, intra;
+    int nb = m->nbEBands, i, badness1 = 0, badness2, intra, intra_ok;
     int16_t oldE_intra[2 * SSC_NB_EBANDS], error_intra[2 * SSC_NB_EBANDS], max_decay;
     uint32_t dist = 0, tell;
-    int32_t new_distortion, tell_intra;
+    int32_t new_distortion, tell_intra, md;
     ec_enc start_state, intra_state;
-    unsigned char intra_bits[1280];
+    unsigned char intra_bits[INTRA_BUF];
     uint32_t nstart, nintra;
+    (void)nbBands;
 
-    /* loss_distortion over the coded bands, unsigned min (blob) */
-    for (c = 0; c < C2; c++)
-        for (i = 0; i < end; i++) {
-            int d = (eBands[i + c * nb] >> 3) - (oldEBands[i + c * nb] >> 3);
-            dist += (uint32_t)(d * d);
-        }
-    new_distortion = (int32_t)((dist >> 14) < 200 ? dist >> 14 : 200);
+    for (i = 0; i < 2 * end; i++) {
+        int d = (eBands[i] >> 3) - (oldEBands[i] >> 3);
+        dist += (uint32_t)(d * d);
+    }
+    new_distortion = end > 0 ? (int32_t)((dist >> 14) < 200 ? dist >> 14 : 200) : 0;
 
     tell = ec_tell(enc);
-    max_decay = QCONST16(16.f, DB_SHIFT);
-    if (nbBands > 10) max_decay = (int16_t)IMIN(max_decay, nbAvailableBytes << (DB_SHIFT - 3));
+    md = (int32_t)((uint32_t)nbAvailableBytes << 7);
+    max_decay = (int16_t)(md > 0x3fff ? 0x4000 : md);
     start_state = *enc;
     memcpy(oldE_intra, oldEBands, sizeof(int16_t) * C2 * nb);
     if (tell + 3 <= budget)
@@ -120,15 +123,19 @@ void quant_coarse_energy(const SscMode *m, int nbBands, int end, const int16_t *
         memcpy(oldEBands, oldE_intra, sizeof(int16_t) * C2 * nb);
         memcpy(error, error_intra, sizeof(int16_t) * C2 * nb);
     } else {
+        intra_ok = tell + 3 <= budget;
         tell_intra = ec_tell_frac(enc);
         intra_state = *enc;
         nstart = ec_range_bytes(&start_state);
         nintra = ec_range_bytes(&intra_state);
-        memcpy(intra_bits, ec_get_buffer(&intra_state) + nstart, nintra - nstart);
+        if (nintra - nstart < INTRA_BUF)
+            memcpy(intra_bits, ec_get_buffer(&intra_state) + nstart, nintra - nstart);
+        else
+            intra_ok = 0;
         *enc = start_state;
         badness2 = coarse_impl(m, end, eBands, oldEBands, budget, tell, e_prob_inter, error, enc,
                                0, max_decay);
-        if (tell + 3 <= budget &&
+        if (intra_ok &&
             (badness1 < badness2 ||
              (badness1 == badness2 && (int32_t)ec_tell_frac(enc) > tell_intra))) {
             *enc = intra_state;
@@ -140,14 +147,13 @@ void quant_coarse_energy(const SscMode *m, int nbBands, int end, const int16_t *
     }
     if (intra)
         *delayedIntra = new_distortion;
-    else /* MULT16_32_Q15(.25 (pred_coef^2), delayedIntra) + new */
-        *delayedIntra = (((*delayedIntra >> 2) & 0x3fff) | ((*delayedIntra >> 16) << 14)) +
-                        new_distortion;
+    else
+        *delayedIntra = (*delayedIntra >> 2) + new_distortion;
 }
 
 /* Opus quant_fine_energy, start 0. */
 void quant_fine_energy(const SscMode *m, int end, int16_t *oldEBands, int16_t *error,
-                       const int *fine_quant, ec_enc *enc, int C) {
+                       const int32_t *fine_quant, ec_enc *enc) {
     int i, c;
     for (i = 0; i < end; i++) {
         int16_t frac = (int16_t)(1 << fine_quant[i]);
@@ -166,17 +172,22 @@ void quant_fine_energy(const SscMode *m, int end, int16_t *oldEBands, int16_t *e
                                QCONST16(.5f, DB_SHIFT));
             oldEBands[i + c * m->nbEBands] += offset;
             error[i + c * m->nbEBands] -= offset;
-        } while (++c < C);
+        } while (++c < C2);
     }
 }
 
 /* ------------------------------------------------------------ spreading */
 
 /* Samsung spreading_decision: only bands 8..end-1, tcounts kept doubled (so
- * hf_sum is twice Opus'), no SPREAD_NONE shortcut, hysteresis on 4x scale. */
-int spreading_decision(const SscMode *m, const int16_t *X, int *average, int last_decision,
-                       int *hf_average, int *tapset_decision, int update_hf, int end) {
+ * hf_sum is twice Opus'), no SPREAD_NONE shortcut, hysteresis on 4x scale.
+ * State in the encoder: spread_decision (last), tonal_average, hf_average,
+ * tapset_decision. hf_sum is divided by 8 whatever end is (older builds:
+ * by 2 (end + 4 - nbEBands)). */
+int spreading_decision(SscEncoder *st, const int16_t *X, int update_hf, int end) {
+    const SscMode *m = st->mode;
     const int16_t *eBands = m->eBands;
+    int *average = &st->tonal_average, last_decision = st->spread_decision;
+    int *hf_average = &st->hf_average, *tapset_decision = &st->tapset_decision;
     int N0 = 8 * m->shortMdctSize, c, i, j, sum = 0, nbBands = 0, hf_sum = 0, v;
     if (end >= 9)
         for (c = 0; c < C2; c++)
@@ -196,8 +207,7 @@ int spreading_decision(const SscMode *m, const int16_t *X, int *average, int las
                 nbBands++;
             }
     if (update_hf) {
-        if (hf_sum) hf_sum /= (end + 4 - m->nbEBands) * 2;
-        *hf_average = (*hf_average + hf_sum) >> 1;
+        *hf_average = (*hf_average + (hf_sum >> 3)) >> 1;
         hf_sum = *hf_average;
         if (*tapset_decision == 0) hf_sum -= 4;
         else if (*tapset_decision == 2) hf_sum += 4;
@@ -373,14 +383,17 @@ static int interp_bits2pulses(const SscMode *m, int end, int skip_start, const i
     return codedBands;
 }
 
-/* Opus compute_allocation, start 0, C 2, LM 3, encoder. Samsung: hi_rate
+/* Opus compute_allocation, start 0, C 2, LM 3, encoder. Samsung: a->table2
  * (bitrate > 192k) picks the second allocation table (mode->allocVectors2). */
-int compute_allocation(const SscMode *m, int end, const int *offsets, const int *cap,
-                       int alloc_trim, int *intensity, int *dual_stereo, int32_t total,
-                       int32_t *balance, int *pulses, int *ebits, int *fine_priority, ec_enc *ec,
-                       int prev, int signalBandwidth, int hi_rate) {
+int compute_allocation(SscEncoder *st, SscAlloc *a, ec_enc *ec, int end, int signalBandwidth) {
+    const SscMode *m = st->mode;
+    const int *offsets = a->offsets, *cap = a->caps;
+    int alloc_trim = a->alloc_trim, *intensity = &st->intensity, *dual_stereo = &a->dual_stereo;
+    int32_t total = a->total, *balance = &a->balance;
+    int *pulses = a->pulses, *ebits = a->fine_quant, *fine_priority = a->fine_priority;
+    int prev = st->lastCodedBands;
     const int16_t *eBands = m->eBands;
-    const uint8_t *alloc = hi_rate ? m->allocVectors2 : m->allocVectors;
+    const uint8_t *alloc = a->table2 ? m->allocVectors2 : m->allocVectors;
     int len = m->nbEBands, lo, hi, j, skip_start = 0, skip_rsv, intensity_rsv, dual_stereo_rsv;
     int bits1[SSC_NB_EBANDS], bits2[SSC_NB_EBANDS], thresh[SSC_NB_EBANDS];
     int trim_offset[SSC_NB_EBANDS];

@@ -1,12 +1,13 @@
 # libssc — план: своя библиотека SSC (энкодер + декодер)
 
-Статус: **в работе**, начато 2026-10-24. Фаза 3 (бит-точный энкодер) готова.
+Статус: **в работе**, начато 2026-10-24. Фаза 3 (бит-точный энкодер) готова,
+включая 3g — переход на энкодер из текущей прошивки телефона.
 
 ## Решения
 
 | Вопрос | Решение |
 |--------|---------|
-| Цель | **Бит-точное** совпадение с `libScalable_Encoder.so` на всех профилях |
+| Цель | **Бит-точное** совпадение с `libScalable_Encoder.so` **из текущей прошивки телефона** (на нём сейчас работают телефон и Buds3 FE) на всех профилях. Старая сборка блоба (clang 8, из чужой программы) больше не эталон и удалена (3g) |
 | Распространение | Только приватно, под наше железо (Buds3 FE + наши донглы). Публичного релиза нет |
 | Где живёт | `libssc/` в SSCv2 (Go-трей). Подключение — cgo-пакет `internal/codec/ssc`, точка входа `internal/engine/codecs.go` → `newSSC` |
 | Декодер | Нужен (фаза 6) |
@@ -83,6 +84,11 @@ C99, fixed-point, на основе CELT-энкодера libopus (BSD-3). API �
 - **3f** ✅ `quant_all_bands` (PVQ, стерео, cwrs), `quant_energy_finalise`,
   флаги заголовка. Критерий фазы: голдены и корпус `test/signals.py` совпадают
   байт в байт.
+- **3g** ✅ переход на энкодер из прошивки телефона (другая сборка Samsung):
+  раскладки, имена, сигнатуры и отличия в арифметике; голдены переснят с него.
+
+Подэтапы 3a–3f сделаны против старой сборки блоба; их итоги ниже — история,
+текущие отличия описаны в итогах 3g.
 
 ### Фаза 4 — Полная проверка
 
@@ -130,7 +136,7 @@ Samsung `0x00000075`, codec `0x0103` + байт capability — перенест�
   `compute_band_energies(..., 0x16)` → 22 полосы (в Opus 21).
 
 - 2026-10-24 — **фаза 1 готова.** Всё в `libssc/research/`:
-  [FUNCTIONS.md](research/FUNCTIONS.md) (карта 75 функций),
+  карта 75 функций (FUNCTIONS.md, удалена в 3g вместе со старым блобом),
   `dump_mode.py` → `tables.json`, `header_model.py`, `disasm.py`, `difftest/`.
 
 ### Итоги фазы 1
@@ -605,3 +611,93 @@ tf_analysis → `quant_coarse_energy` → tf_encode → spread → dynalloc (а�
 SSCv2). Для фазы 5 уже известно: `-ffp-contract=off` в cgo, вход в шкале
 2^23, глобалы (`in_shared`, `_pre_shared`, DRC) — по одному энкодеру на
 процесс, если не перенести их в `SscEncoder`.
+
+- 2026-10-24 — **разбор свежей прошивки** (`ref/firm/unpacked`, в `.gitignore`)
+  и **подэтап 3g готов: libssc — двойник энкодера из прошивки телефона.**
+
+### Что в прошивке
+
+- `/system/lib64/libScalable_Encoder.so` — **другая сборка** энкодера: clang 14.0.7
+  (NDK r25), а libssc до этого сверялся со сборкой clang 8 из чужой программы.
+  Выход у них разный (одинаковых кадров ~30 %). Телефон и наушники пользователя
+  работают на новой, поэтому эталоном стала она: `ref/libScalable_Encoder.so`
+  заменён, старый блоб, его голдены и декомпиляция удалены (есть в истории git).
+- Вызывающий код — `libbluetooth_jni.so` из `system/apex/com.android.bt.apex`
+  (ext4 внутри APEX, скопирован в `ref/`, 16 МБ, в `.gitignore`): `packages/modules/Bluetooth/system/
+  stack/a2dp/a2dp_vendor_ssc{,_encoder}.cc` — `dlopen("libScalable_Encoder.so")`,
+  `a2dp_vendor_ssc_encoder_init/update`, `a2dp_ssc_encode_frames`,
+  `SscBitrateByBusyLevel`, «dual play» со вторым экземпляром энкодера, путь
+  offload (`ssc_offloading_capability_match`). Отсюда снимать формат и шкалу PCM,
+  выбор битрейта и упаковку в пакеты (фазы 4–5).
+- `vendor/lib64/lib_bt_bundle.so` — плагин Qualcomm PAL, только конфигурация
+  offload-энкодера (`ssc_pack_enc_config`). Кодека нет. Декодера SSC в прошивке
+  телефона нет (он в наушниках).
+
+### Итоги 3g
+
+**Результат:** голдены нового блоба (переснятые `oracle make-golden`, 6 × 16
+кадров) и корпус `test/corpus.py` (14 битрейтов × 10 сигналов × 12 кадров =
+**1680 кадров**) совпадают байт в байт; twin 17/17; stages `--rates all` — все
+контрольные точки на 1680 кадрах, включая новые (до coarse, до/после
+`compute_allocation`); replay — 33/33 функции на всех битрейтах.
+
+**ABI нового блоба** (libssc повторяет его):
+- имена: почти всё CELT с префиксом `ssc_` (`ssc_quant_all_bands`,
+  `ssc_ec_encode`, …), `SoundBooster_DRC_*` → `SSC_DRC_*`. В libssc исходники Opus
+  не тронуты: `src/ssc_names.h` подключается ко всем файлам (`-include`, нужно и
+  в cgo) и переименовывает символы;
+- режим 128 байт (было 136): нет указателя на окно, окно MDCT — константа
+  (`ssc_window`, va 0x3d80), `ssc_mdct_forward` без аргумента окна; режимы
+  va 0x1b9c0 / 0x1ba40; все таблицы те же;
+- состояние: заголовок 0xe0 (был 0x128) — состояние float-детектора транзиентов
+  удалено, счётчик кадров `+0x8c`, biquad `+0x90`, массивы с `+0xe0`;
+  `get_size` = … + 0xdc, то есть **на 4 байта меньше**, чем нужно до конца
+  `oldLogE2` (блоб их не трогает; `ssc_encoder_create` в libssc выделяет +4);
+- распределение бит — одна структура `SscAlloc` (0x184 байта: бюджет,
+  `fine_quant`, `pulses`, `caps`, `offsets`, `fine_priority`, trim, dual_stereo,
+  balance, флаг второй таблицы): `ssc_compute_allocation(st, A, ec, end, bw)`,
+  `ssc_quant_fine_energy`/`_finalise` без `C`, `ssc_spreading_decision(st, X,
+  update_hf, end)`, `ssc_amp2Log2(m, end, bandE, bandLogE)`,
+  `ssc_pitch_downsample(x0, x1, x_lp, len)`, `ssc_stereo_itheta(X, Y, N)`,
+  `normal_headroom(…, N)`, у `ssc_quant_all_bands` 17-й аргумент (1);
+- нет больше экспортов `ec_ilog`, `init_caps`, `dual_inner_prod`,
+  `ssc_lcg_rand`, `patch_transient_decision_temporal`, таблиц `cutoff_start_*`.
+
+**Отличия в арифметике:**
+- Biquad: выход округляется `(y + 8) >> 4` (было `y >> 4`), состояние каналов
+  переставлено (R в `[0..4]`, L в `[5..9]`), считает по 2 кадра;
+- `powercalc`: каждый 32-й кадр × 32, квадрат без обрезки до 32 бит;
+- DRC: отпускание `0x3ca4a1` для всех частот (было `0x3e6f79` на 96 кГц); при
+  пике 0 цель `0x2000`; `CalculateLimitGain` тот же;
+- предыскажение: память `memE` больше не считается (остаётся 0);
+- **float-детектор транзиентов `patch_transient_decision_temporal` удалён**, решение
+  только по энергиям полос;
+- `normal_headroom` ≥96k: ослабление с `(M/4)·34` бинов полосы 20, а не с её начала;
+- обнуление спектра выше последней полосы (<192k) в длинном MDCT — и для широких
+  битрейтов (152k UHQ), в коротких — как раньше, только для узких;
+- `compute_band_energies_for_lastband`: второй канал с той же полосы, что первый
+  (ошибка старой сборки исправлена);
+- `amp2Log2` — asm-ядро на чётные полосы; `log2` от `bandE << 2`, которое для
+  энергий ≥ 2^29 (короткие блоки громкого входа) уходит в минус. В C это
+  переполнение со знаком — gcc его «оптимизировал», libssc считало иначе.
+  Теперь `log2_band` повторяет ядро шаг в шаг на беззнаковых операциях;
+- `quant_coarse_energy`: искажение для `delayedIntra` по первым `2·end`
+  элементам подряд (ошибка Samsung, повторена), intra-проход принимается,
+  только если его байты < 150, `max_decay = min(16384, nbAvailableBytes·128)`;
+- `spreading_decision`: `hf_sum >> 3` (было деление на `2·(end + 4 − nb)`);
+- dynalloc: при упоре в предел `offsets[i] = effectiveBytes·16 − tot_boost`
+  (Opus и старая сборка: `(effectiveBytes/4)·64`).
+Не изменились: pitch/префильтр, MDCT/FFT, `uhq_headroom`, грубое квантование
+(ядро), tf, stereo/intensity/trim, `compute_allocation`, PVQ, range coder.
+
+**Стенды:**
+- оракул: заглушка `printf`, `make-golden`, адреса режимов (`MODE_VA`);
+- `test/corpus.py` — новый: кадры целиком по всем битрейтам и сигналам;
+- replay: аргументы-структуры с указателем внутри (`state`, `alloc`),
+  `alias:N+EXPR`; ошибки записи помечаются `SIG`, а не роняют прогон;
+- stages: точки «pre-coarse» (аргументы и `bandLogE`), «pre-alloc» / «pre-fine»
+  (`SscAlloc` на входе и выходе, `codedBands`), пробы блоба цепочкой;
+- `research/decomp/` — декомпиляция нового блоба, `dump_mode.py` и `tables.json`
+  под новую раскладку.
+
+**Дальше — фаза 4** на этом энкодере.

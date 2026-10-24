@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """SSC oracle: runs Samsung's libScalable_Encoder.so (aarch64) under Unicorn.
 
-No WSL2/qemu and no Qiling. The blob only imports 8 libc functions, so a tiny
+No WSL2/qemu and no Qiling. The blob only imports 9 libc functions, so a tiny
 ELF loader plus Python stubs is enough. Every Oracle instance is a fresh
 "process": the blob keeps encoder state in .bss globals, so one stream = one
 instance.
@@ -31,8 +31,11 @@ from unicorn import (UC_ARCH_ARM64, UC_HOOK_CODE, UC_HOOK_MEM_INVALID,
 from unicorn import arm64_const as A
 
 LIBSSC = Path(__file__).resolve().parents[1]
-DEFAULT_BLOB = LIBSSC / "ref" / "libScalable_Encoder.so"
 TESTDATA = LIBSSC / "testdata"
+
+DEFAULT_BLOB = LIBSSC / "ref" / "libScalable_Encoder.so"
+# Static modes of the blob (.data.rel.ro): ssc_custom_mode_create returns these.
+MODE_VA = {"ssc_mode_48k": 0x1b9c0, "ssc_mode_96k": 0x1ba40}
 GOLDEN_SEED = 0x5A5C_2026
 PCM_SCALE = 1 << 29
 
@@ -57,7 +60,8 @@ R_AARCH64_RELATIVE = 1027
 RET_INSN = struct.pack("<I", 0xD65F03C0)
 
 IMPORTS = ("malloc", "free", "memcpy", "memset", "__stack_chk_fail",
-           "__cxa_finalize", "__cxa_atexit", "__register_atfork")
+           "__cxa_finalize", "__cxa_atexit", "__register_atfork",
+           "printf")  # printf: print_enc_fields (debug, never called by ssc_encode)
 
 FRAME_SAMPLES = 864
 MAX_ENCODE = 4096
@@ -246,7 +250,7 @@ class Oracle:
         elif name == "__stack_chk_fail":
             uc.emu_stop()
             raise BlobError("blob reported stack corruption (__stack_chk_fail)")
-        else:  # __cxa_finalize / __cxa_atexit / __register_atfork
+        else:  # __cxa_finalize / __cxa_atexit / __register_atfork / printf
             uc.reg_write(A.UC_ARM64_REG_X0, 0)
 
     def _on_bad_mem(self, uc, access, address, size, _value, _user):
@@ -419,6 +423,17 @@ def read_golden(path):
                 payloads=payloads)
 
 
+def write_golden(path, blob, rate, bitrate, frames, seed=GOLDEN_SEED, channels=2):
+    """Encode the golden test signal with `blob` and store it as an SSCG v1 file."""
+    o = Oracle(blob).open(rate, channels, bitrate)
+    out = bytearray(struct.pack("<4sIIIIII", b"SSCG", 1, rate, channels, bitrate, frames, seed))
+    for i in range(frames):
+        payload = o.encode(golden_pcm(seed, i, rate, channels))
+        out += struct.pack("<I", len(payload)) + payload
+    Path(path).parent.mkdir(parents=True, exist_ok=True)
+    Path(path).write_bytes(bytes(out))
+
+
 def check_golden(path, blob):
     g = read_golden(path)
     o = Oracle(blob).open(g["rate"], g["channels"], g["bitrate"])
@@ -441,6 +456,9 @@ def main(argv=None):
     c = sub.add_parser("check-golden", help="byte-compare against libssc/testdata/*.golden")
     c.add_argument("goldens", nargs="*")
 
+    m = sub.add_parser("make-golden", help="rewrite libssc/testdata/*.golden with this blob")
+    m.add_argument("--out", default=str(TESTDATA))
+
     t = sub.add_parser("trace", help="print the call tree of one frame")
     t.add_argument("--rate", type=int, default=48000)
     t.add_argument("--bitrate", type=int, default=229000)
@@ -449,6 +467,15 @@ def main(argv=None):
     t.add_argument("--max-depth", type=int, default=99)
 
     args = ap.parse_args(argv)
+
+    if args.cmd == "make-golden":  # the existing goldens define the profiles
+        out = Path(args.out)
+        for f in sorted(TESTDATA.glob("*.golden")):
+            g = read_golden(f)
+            write_golden(out / f.name, args.blob, g["rate"], g["bitrate"], g["frames"], g["seed"],
+                         g["channels"])
+            print(out / f.name)
+        return 0
 
     if args.cmd == "check-golden":
         files = args.goldens or sorted(str(p) for p in TESTDATA.glob("*.golden"))

@@ -1,4 +1,4 @@
-/* ssc_encoder_create @ 0010bb18 size 176 */
+/* ssc_encoder_create @ 0010a0b8 size 180 */
 
 void * ssc_encoder_create(ulong param_1,int param_2,undefined4 param_3,int *param_4)
 
@@ -8,8 +8,8 @@ void * ssc_encoder_create(ulong param_1,int param_2,undefined4 param_3,int *para
   void *__ptr;
   
   lVar2 = ssc_custom_mode_create(param_1,0x360,0);
-  __ptr = malloc((ulong)((*(int *)(lVar2 + 8) * 6 + *(int *)(lVar2 + 4) * 4 + 0x1000) * param_2 +
-                        300));
+  __ptr = malloc((long)((*(int *)(lVar2 + 8) * 6 + *(int *)(lVar2 + 4) * 4 + 0x1000) * param_2 +
+                       0xdc));
   if (__ptr == (void *)0x0) {
     if (param_4 != (int *)0x0) {
       *param_4 = -7;

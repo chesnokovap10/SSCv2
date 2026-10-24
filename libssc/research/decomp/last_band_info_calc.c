@@ -1,26 +1,24 @@
-/* last_band_info_calc @ 0010d118 size 80 */
+/* last_band_info_calc @ 0010b05c size 72 */
 
-int last_band_info_calc(int param_1,int param_2,long param_3)
+ulong last_band_info_calc(int param_1,uint param_2,long param_3)
 
 {
-  int iVar1;
-  long lVar2;
-  int iVar3;
+  ulong uVar1;
+  int iVar2;
   
-  if (0 < param_2) {
-    iVar3 = param_2 * 2;
-    lVar2 = 0;
-    iVar1 = param_2;
-    do {
-      iVar3 = iVar3 + -1;
-      if (param_1 < *(int *)(param_3 + (long)iVar3 * 4) + *(int *)(param_3 + (long)(iVar1 + -1) * 4)
-                    >> 1) {
-        return iVar1;
-      }
-      lVar2 = lVar2 + 1;
-      iVar1 = iVar1 + -1;
-    } while (lVar2 < param_2);
+  if ((int)param_2 < 1) {
+    return 0;
   }
+  uVar1 = (ulong)param_2;
+  iVar2 = param_2 << 1;
+  do {
+    if (param_1 < *(int *)(param_3 + (long)(iVar2 + -1) * 4) +
+                  *(int *)(param_3 + (long)((int)uVar1 + -1) * 4) >> 1) {
+      return uVar1;
+    }
+    uVar1 = uVar1 - 1;
+    iVar2 = iVar2 + -1;
+  } while (uVar1 != 0);
   return 0;
 }
 

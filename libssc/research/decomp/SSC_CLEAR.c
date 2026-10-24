@@ -1,10 +1,10 @@
-/* SSC_CLEAR @ 00111c08 size 48 */
+/* SSC_CLEAR @ 00115640 size 36 */
 
-void SSC_CLEAR(long param_1,uint param_2)
+void SSC_CLEAR(void *param_1,uint param_2)
 
 {
-  if (param_2 != 0) {
-    memset((void *)(param_1 + ~(ulong)(param_2 - 1) + (long)(int)param_2),0,(ulong)param_2);
+  if (0 < (int)param_2) {
+    memset(param_1,0,(ulong)param_2);
   }
   return;
 }

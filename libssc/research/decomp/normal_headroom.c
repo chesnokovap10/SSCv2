@@ -1,311 +1,343 @@
-/* normal_headroom @ 0010c424 size 1028 */
+/* normal_headroom @ 0010a36c size 1240 */
 
-void normal_headroom(long param_1,int param_2,int param_3,long param_4)
+void normal_headroom(long param_1,int param_2,int param_3,long param_4,int param_5)
 
 {
-  short sVar1;
-  short sVar2;
-  short sVar3;
-  uint uVar4;
-  undefined8 *puVar5;
-  ulong uVar6;
-  long lVar7;
-  uint *puVar8;
-  short *psVar9;
-  ulong uVar10;
-  undefined8 *puVar11;
-  long lVar12;
-  long lVar13;
+  undefined1 *puVar1;
+  undefined1 *puVar2;
+  undefined1 *puVar3;
+  undefined1 *puVar4;
+  short sVar5;
+  short sVar6;
+  short sVar7;
+  uint uVar8;
+  int iVar9;
+  undefined8 *puVar10;
+  uint *puVar11;
+  ulong uVar12;
+  undefined8 *puVar13;
   ulong uVar14;
-  int iVar15;
-  int iVar16;
-  int iVar17;
-  undefined8 uVar18;
-  undefined8 uVar19;
-  int iVar20;
-  int iVar21;
-  int iVar22;
-  int iVar23;
+  uint *puVar15;
+  ulong uVar16;
+  long lVar17;
+  long lVar18;
+  ulong uVar19;
+  long lVar20;
+  ulong uVar21;
+  undefined8 uVar22;
+  undefined8 uVar23;
   int iVar24;
   int iVar25;
   int iVar26;
   int iVar27;
-  int iVar28;
-  undefined8 uVar29;
+  int iVar29;
+  undefined8 uVar28;
   int iVar30;
-  int iVar31;
-  undefined8 uVar32;
+  int iVar32;
   int iVar33;
+  undefined8 uVar31;
   int iVar34;
+  int iVar35;
+  int iVar36;
+  int iVar37;
+  int iVar38;
+  int iVar39;
+  int iVar40;
+  int iVar41;
   
   if (95999 < param_2) {
-    iVar23 = *(short *)(param_4 + 0x28) * param_3;
-    param_3 = *(short *)(param_4 + 0x2c) * param_3;
-    if (param_3 <= iVar23) {
+    sVar5 = *(short *)(param_4 + 0x28);
+    uVar8 = (param_3 >> 2) * 0x22;
+    iVar24 = uVar8 + sVar5 * param_3;
+    lVar17 = (long)*(short *)(param_4 + 0x2c) * (long)param_3;
+    if ((int)lVar17 <= iVar24) {
       return;
     }
-    lVar7 = (long)iVar23;
-    lVar13 = (long)param_3;
-    uVar14 = lVar13 - lVar7;
-    lVar12 = lVar7;
+    uVar16 = (ulong)iVar24;
+    lVar18 = (long)param_5;
+    uVar14 = lVar17 - uVar16;
+    uVar21 = uVar16;
     if ((3 < uVar14) &&
-       ((puVar5 = (undefined8 *)(param_1 + lVar7 * 4), &headroom_gain + uVar14 * 2 <= puVar5 ||
-        (param_1 + lVar13 * 4 + 0xd80U < (long)&headroom_gain + 1U)))) {
-      uVar10 = uVar14 & 0xfffffffffffffffc;
-      puVar11 = (undefined8 *)&headroom_gain;
-      uVar6 = uVar10;
-      do {
-        uVar19 = puVar5[1];
-        uVar18 = *puVar5;
-        uVar6 = uVar6 - 4;
-        iVar23 = (int)(short)*puVar11;
-        iVar15 = (int)(short)((ulong)*puVar11 >> 0x20);
-        iVar16 = (int)(short)puVar11[1];
-        iVar17 = (int)(short)((ulong)puVar11[1] >> 0x20);
-        puVar5[1] = CONCAT44((int)((long)uVar19 >> 0x30) * iVar17 * 2 +
-                             ((int)(iVar17 * (uint)(ushort)(CONCAT15((char)((ulong)uVar19 >> 0x28),
-                                                                     CONCAT14((char)((ulong)uVar19
-                                                                                    >> 0x20),
-                                                                              (uint)(ushort)uVar19))
-                                                           >> 0x20)) >> 0xf),
-                             ((int)uVar19 >> 0x10) * iVar16 * 2 +
-                             ((int)(iVar16 * (uint)(ushort)uVar19) >> 0xf));
-        *puVar5 = CONCAT44((int)((long)uVar18 >> 0x30) * iVar15 * 2 +
-                           ((int)(iVar15 * (uint)(ushort)(CONCAT15((char)((ulong)uVar18 >> 0x28),
-                                                                   CONCAT14((char)((ulong)uVar18 >>
-                                                                                  0x20),
-                                                                            (uint)(ushort)uVar18))
-                                                         >> 0x20)) >> 0xf),
-                           ((int)uVar18 >> 0x10) * iVar23 * 2 +
-                           ((int)(iVar23 * (uint)(ushort)uVar18) >> 0xf));
-        uVar19 = puVar5[0x1b1];
-        uVar18 = puVar5[0x1b0];
-        iVar23 = (int)(short)*puVar11;
-        iVar15 = (int)(short)((ulong)*puVar11 >> 0x20);
-        iVar16 = (int)(short)puVar11[1];
-        iVar17 = (int)(short)((ulong)puVar11[1] >> 0x20);
-        puVar5[0x1b1] =
-             CONCAT44((int)((long)uVar19 >> 0x30) * iVar17 * 2 +
-                      ((int)(iVar17 * (uint)(ushort)(CONCAT15((char)((ulong)uVar19 >> 0x28),
-                                                              CONCAT14((char)((ulong)uVar19 >> 0x20)
-                                                                       ,(uint)(ushort)uVar19)) >>
-                                                    0x20)) >> 0xf),
-                      ((int)uVar19 >> 0x10) * iVar16 * 2 +
-                      ((int)(iVar16 * (uint)(ushort)uVar19) >> 0xf));
-        puVar5[0x1b0] =
-             CONCAT44((int)((long)uVar18 >> 0x30) * iVar15 * 2 +
-                      ((int)(iVar15 * (uint)(ushort)(CONCAT15((char)((ulong)uVar18 >> 0x28),
-                                                              CONCAT14((char)((ulong)uVar18 >> 0x20)
-                                                                       ,(uint)(ushort)uVar18)) >>
-                                                    0x20)) >> 0xf),
-                      ((int)uVar18 >> 0x10) * iVar23 * 2 +
-                      ((int)(iVar23 * (uint)(ushort)uVar18) >> 0xf));
-        puVar5 = puVar5 + 2;
-        puVar11 = puVar11 + 2;
-      } while (uVar6 != 0);
-      lVar12 = uVar10 + lVar7;
-      if (uVar14 == uVar10) {
-        return;
+       ((int)uVar8 <= (int)(uVar8 + (int)(~uVar16 + lVar17)) && ~uVar16 + lVar17 >> 0x20 == 0)) {
+      puVar1 = (undefined1 *)(param_1 + uVar16 * 4);
+      puVar2 = (undefined1 *)(param_1 + lVar17 * 4);
+      puVar3 = (undefined1 *)(param_1 + (lVar18 + uVar16) * 4);
+      puVar4 = (undefined1 *)(param_1 + (lVar18 + lVar17) * 4);
+      if ((puVar4 <= puVar1 || puVar2 <= puVar3) &&
+         ((headroom_gain + ((lVar17 + (int)uVar8) - uVar16) * 4 <= puVar1 ||
+           puVar2 <= headroom_gain + (long)(int)uVar8 * 4 &&
+          (headroom_gain + ((lVar17 + (int)uVar8) - uVar16) * 4 <= puVar3 ||
+           puVar4 <= headroom_gain + (long)(int)uVar8 * 4)))) {
+        uVar19 = uVar14 & 0xfffffffffffffffc;
+        uVar21 = uVar19 + uVar16;
+        uVar12 = uVar19;
+        puVar10 = (undefined8 *)(param_1 + (lVar18 + uVar16) * 4);
+        puVar13 = (undefined8 *)(param_1 + uVar16 * 4);
+        do {
+          uVar16 = -(ulong)(uVar8 >> 0x1f) & 0xfffffffc00000000 | (ulong)uVar8 << 2;
+          uVar23 = puVar13[1];
+          uVar22 = *puVar13;
+          uVar31 = puVar10[1];
+          uVar28 = *puVar10;
+          uVar8 = uVar8 + 4;
+          uVar12 = uVar12 - 4;
+          iVar24 = (int)(short)*(undefined8 *)(headroom_gain + uVar16);
+          iVar33 = (int)(short)((ulong)*(undefined8 *)(headroom_gain + uVar16) >> 0x20);
+          iVar25 = (int)(short)*(undefined8 *)(headroom_gain + uVar16 + 8);
+          iVar26 = (int)(short)((ulong)*(undefined8 *)(headroom_gain + uVar16 + 8) >> 0x20);
+          puVar13[1] = CONCAT44(((uint)((long)uVar23 >> 0x2f) & 0xfffffffe) * iVar26 +
+                                ((int)(iVar26 * (uint)(ushort)(CONCAT15((char)((ulong)uVar23 >> 0x28
+                                                                              ),CONCAT14((char)((
+                                                  ulong)uVar23 >> 0x20),(uint)(ushort)uVar23)) >>
+                                                  0x20)) >> 0xf),
+                                ((int)uVar23 >> 0xf & 0xfffffffeU) * iVar25 +
+                                ((int)(iVar25 * (uint)(ushort)uVar23) >> 0xf));
+          *puVar13 = CONCAT44(((uint)((long)uVar22 >> 0x2f) & 0xfffffffe) * iVar33 +
+                              ((int)(iVar33 * (uint)(ushort)(CONCAT15((char)((ulong)uVar22 >> 0x28),
+                                                                      CONCAT14((char)((ulong)uVar22
+                                                                                     >> 0x20),
+                                                                               (uint)(ushort)uVar22)
+                                                                     ) >> 0x20)) >> 0xf),
+                              ((int)uVar22 >> 0xf & 0xfffffffeU) * iVar24 +
+                              ((int)(iVar24 * (uint)(ushort)uVar22) >> 0xf));
+          puVar10[1] = CONCAT44(((uint)((long)uVar31 >> 0x2f) & 0xfffffffe) * iVar26 +
+                                ((int)(iVar26 * (uint)(ushort)(CONCAT15((char)((ulong)uVar31 >> 0x28
+                                                                              ),CONCAT14((char)((
+                                                  ulong)uVar31 >> 0x20),(uint)(ushort)uVar31)) >>
+                                                  0x20)) >> 0xf),
+                                ((int)uVar31 >> 0xf & 0xfffffffeU) * iVar25 +
+                                ((int)(iVar25 * (uint)(ushort)uVar31) >> 0xf));
+          *puVar10 = CONCAT44(((uint)((long)uVar28 >> 0x2f) & 0xfffffffe) * iVar33 +
+                              ((int)(iVar33 * (uint)(ushort)(CONCAT15((char)((ulong)uVar28 >> 0x28),
+                                                                      CONCAT14((char)((ulong)uVar28
+                                                                                     >> 0x20),
+                                                                               (uint)(ushort)uVar28)
+                                                                     ) >> 0x20)) >> 0xf),
+                              ((int)uVar28 >> 0xf & 0xfffffffeU) * iVar24 +
+                              ((int)(iVar24 * (uint)(ushort)uVar28) >> 0xf));
+          puVar10 = puVar10 + 2;
+          puVar13 = puVar13 + 2;
+        } while (uVar12 != 0);
+        if (uVar14 == uVar19) {
+          return;
+        }
       }
     }
-    puVar8 = (uint *)(param_1 + lVar12 * 4);
-    lVar13 = lVar13 - lVar12;
-    psVar9 = &headroom_gain + (lVar12 - lVar7) * 2;
+    lVar18 = param_1 + lVar18 * 4;
     do {
-      lVar13 = lVar13 + -1;
-      *puVar8 = ((int)*puVar8 >> 0x10) * (int)*psVar9 * 2 +
-                ((int)((int)*psVar9 * (*puVar8 & 0xffff)) >> 0xf);
-      puVar8[0x360] =
-           ((int)puVar8[0x360] >> 0x10) * (int)*psVar9 * 2 +
-           ((int)((int)*psVar9 * (puVar8[0x360] & 0xffff)) >> 0xf);
-      puVar8 = puVar8 + 1;
-      psVar9 = psVar9 + 2;
-    } while (lVar13 != 0);
+      lVar20 = uVar21 * 4;
+      uVar8 = (int)uVar21 - param_3 * sVar5;
+      uVar16 = -(ulong)(uVar8 >> 0x1f) & 0xfffffffc00000000 | (ulong)uVar8 << 2;
+      uVar21 = uVar21 + 1;
+      *(uint *)(param_1 + lVar20) =
+           ((int)*(uint *)(param_1 + lVar20) >> 0xf & 0xfffffffeU) *
+           (int)*(short *)(headroom_gain + uVar16) +
+           ((int)((int)*(short *)(headroom_gain + uVar16) * (*(uint *)(param_1 + lVar20) & 0xffff))
+           >> 0xf);
+      uVar8 = *(uint *)(lVar18 + lVar20);
+      *(uint *)(lVar18 + lVar20) =
+           ((int)uVar8 >> 0xf & 0xfffffffeU) * (int)*(short *)(headroom_gain + uVar16) +
+           ((int)((int)*(short *)(headroom_gain + uVar16) * (uVar8 & 0xffff)) >> 0xf);
+    } while ((long)uVar21 < lVar17);
     return;
   }
-  sVar1 = *(short *)(param_4 + 0x28);
-  sVar2 = *(short *)(param_4 + 0x22);
-  sVar3 = *(short *)(param_4 + 0x2c);
-  iVar23 = sVar1 * param_3;
-  iVar15 = sVar2 * param_3;
-  iVar17 = iVar23 + -0xf;
-  iVar16 = sVar3 * param_3;
-  if (iVar17 <= iVar15) {
-    iVar15 = 0x7767;
-    goto joined_r0x0010c4b8;
-  }
-  lVar13 = (long)iVar15;
-  uVar14 = iVar17 - lVar13;
-  if (uVar14 < 4) {
-    uVar10 = 0;
-LAB_0010c54c:
-    puVar8 = (uint *)(param_1 + lVar13 * 4);
-    lVar12 = iVar17 - lVar13;
-    uVar4 = ((int)lVar13 + 1) - iVar15;
-    do {
-      iVar20 = (int)uVar10 * -0x30000 + 0x7fff0000;
-      iVar15 = iVar20 >> 0xf;
-      iVar20 = iVar20 >> 0x10;
-      lVar12 = lVar12 + -1;
-      uVar10 = (ulong)uVar4;
-      *puVar8 = iVar15 * ((int)*puVar8 >> 0x10) + ((int)((*puVar8 & 0xffff) * iVar20) >> 0xf);
-      puVar8[0x360] =
-           iVar15 * ((int)puVar8[0x360] >> 0x10) + ((int)((puVar8[0x360] & 0xffff) * iVar20) >> 0xf)
-      ;
-      puVar8 = puVar8 + 1;
-      uVar4 = uVar4 + 1;
-    } while (lVar12 != 0);
-  }
-  else {
-    iVar22 = 2;
-    iVar24 = 3;
-    iVar20 = 0;
-    iVar21 = 1;
-    uVar10 = uVar14 & 0xfffffffffffffffc;
-    puVar5 = (undefined8 *)(param_1 + lVar13 * 4);
-    lVar13 = uVar10 + lVar13;
-    uVar6 = uVar10;
-    do {
-      uVar19 = puVar5[1];
-      uVar18 = *puVar5;
-      uVar32 = puVar5[0x1b1];
-      uVar29 = puVar5[0x1b0];
-      iVar25 = iVar20 * -0x30000 + 0x7fff0000;
-      iVar26 = iVar21 * -0x30000 + 0x7fff0000;
-      iVar27 = iVar22 * -0x30000 + 0x7fff0000;
-      iVar28 = iVar24 * -0x30000 + 0x7fff0000;
-      iVar30 = iVar25 >> 0xf;
-      iVar31 = iVar26 >> 0xf;
-      iVar33 = iVar27 >> 0xf;
-      iVar34 = iVar28 >> 0xf;
-      iVar25 = iVar25 >> 0x10;
-      iVar26 = iVar26 >> 0x10;
-      iVar27 = iVar27 >> 0x10;
-      iVar28 = iVar28 >> 0x10;
-      uVar6 = uVar6 - 4;
-      iVar20 = iVar20 + 4;
-      iVar21 = iVar21 + 4;
-      iVar22 = iVar22 + 4;
-      iVar24 = iVar24 + 4;
-      puVar5[1] = CONCAT44(iVar34 * (int)((long)uVar19 >> 0x30) +
-                           ((int)((uint)(ushort)(CONCAT15((char)((ulong)uVar19 >> 0x28),
-                                                          CONCAT14((char)((ulong)uVar19 >> 0x20),
-                                                                   (uint)(ushort)uVar19)) >> 0x20) *
-                                 iVar28) >> 0xf),
-                           iVar33 * ((int)uVar19 >> 0x10) +
-                           ((int)((uint)(ushort)uVar19 * iVar27) >> 0xf));
-      *puVar5 = CONCAT44(iVar31 * (int)((long)uVar18 >> 0x30) +
-                         ((int)((uint)(ushort)(CONCAT15((char)((ulong)uVar18 >> 0x28),
-                                                        CONCAT14((char)((ulong)uVar18 >> 0x20),
-                                                                 (uint)(ushort)uVar18)) >> 0x20) *
-                               iVar26) >> 0xf),
-                         iVar30 * ((int)uVar18 >> 0x10) +
-                         ((int)((uint)(ushort)uVar18 * iVar25) >> 0xf));
-      puVar5[0x1b1] =
-           CONCAT44(iVar34 * (int)((long)uVar32 >> 0x30) +
-                    ((int)((uint)(ushort)(CONCAT15((char)((ulong)uVar32 >> 0x28),
-                                                   CONCAT14((char)((ulong)uVar32 >> 0x20),
-                                                            (uint)(ushort)uVar32)) >> 0x20) * iVar28
-                          ) >> 0xf),
-                    iVar33 * ((int)uVar32 >> 0x10) + ((int)((uint)(ushort)uVar32 * iVar27) >> 0xf));
-      puVar5[0x1b0] =
-           CONCAT44(iVar31 * (int)((long)uVar29 >> 0x30) +
-                    ((int)((uint)(ushort)(CONCAT15((char)((ulong)uVar29 >> 0x28),
-                                                   CONCAT14((char)((ulong)uVar29 >> 0x20),
-                                                            (uint)(ushort)uVar29)) >> 0x20) * iVar26
-                          ) >> 0xf),
-                    iVar30 * ((int)uVar29 >> 0x10) + ((int)((uint)(ushort)uVar29 * iVar25) >> 0xf));
-      puVar5 = puVar5 + 2;
-    } while (uVar6 != 0);
-    if (uVar14 != uVar10) goto LAB_0010c54c;
-  }
-  iVar15 = ((int)sVar1 - (int)sVar2) * param_3 * -3 + 0x7794;
-joined_r0x0010c4b8:
-  if (iVar17 < iVar16) {
-    iVar20 = -(((int)sVar1 - (int)sVar3) * param_3);
-    lVar13 = (long)iVar17;
-    uVar14 = (ulong)(iVar20 + 0xe) + 1;
-    if (3 < uVar14) {
-      uVar4 = iVar20 + 0xfU & 3;
-      lVar12 = uVar14 - uVar4;
-      puVar5 = (undefined8 *)(param_1 + lVar13 * 4);
-      lVar13 = lVar12 + lVar13;
-      iVar21 = iVar23 + -0xe;
-      iVar22 = iVar23 + -0xd;
-      iVar23 = iVar23 + -0xc;
-      iVar20 = iVar17;
-      do {
-        uVar19 = puVar5[1];
-        uVar18 = *puVar5;
-        uVar32 = puVar5[0x1b1];
-        uVar29 = puVar5[0x1b0];
-        iVar24 = (iVar15 + (iVar20 - iVar17) * -5) * 0x10000;
-        iVar25 = (iVar15 + (iVar21 - iVar17) * -5) * 0x10000;
-        iVar26 = (iVar15 + (iVar22 - iVar17) * -5) * 0x10000;
-        iVar27 = (iVar15 + (iVar23 - iVar17) * -5) * 0x10000;
-        iVar28 = iVar24 >> 0xf;
-        iVar30 = iVar25 >> 0xf;
-        iVar31 = iVar26 >> 0xf;
-        iVar33 = iVar27 >> 0xf;
-        iVar24 = iVar24 >> 0x10;
-        iVar25 = iVar25 >> 0x10;
-        iVar26 = iVar26 >> 0x10;
-        iVar27 = iVar27 >> 0x10;
-        iVar20 = iVar20 + 4;
-        iVar21 = iVar21 + 4;
-        iVar22 = iVar22 + 4;
-        iVar23 = iVar23 + 4;
-        lVar12 = lVar12 + -4;
-        puVar5[1] = CONCAT44(iVar33 * (int)((long)uVar19 >> 0x30) +
-                             ((int)((uint)(ushort)(CONCAT15((char)((ulong)uVar19 >> 0x28),
-                                                            CONCAT14((char)((ulong)uVar19 >> 0x20),
-                                                                     (uint)(ushort)uVar19)) >> 0x20)
-                                   * iVar27) >> 0xf),
-                             iVar31 * ((int)uVar19 >> 0x10) +
-                             ((int)((uint)(ushort)uVar19 * iVar26) >> 0xf));
-        *puVar5 = CONCAT44(iVar30 * (int)((long)uVar18 >> 0x30) +
-                           ((int)((uint)(ushort)(CONCAT15((char)((ulong)uVar18 >> 0x28),
-                                                          CONCAT14((char)((ulong)uVar18 >> 0x20),
-                                                                   (uint)(ushort)uVar18)) >> 0x20) *
-                                 iVar25) >> 0xf),
-                           iVar28 * ((int)uVar18 >> 0x10) +
-                           ((int)((uint)(ushort)uVar18 * iVar24) >> 0xf));
-        puVar5[0x1b1] =
-             CONCAT44(iVar33 * (int)((long)uVar32 >> 0x30) +
-                      ((int)((uint)(ushort)(CONCAT15((char)((ulong)uVar32 >> 0x28),
-                                                     CONCAT14((char)((ulong)uVar32 >> 0x20),
-                                                              (uint)(ushort)uVar32)) >> 0x20) *
-                            iVar27) >> 0xf),
-                      iVar31 * ((int)uVar32 >> 0x10) + ((int)((uint)(ushort)uVar32 * iVar26) >> 0xf)
-                     );
-        puVar5[0x1b0] =
-             CONCAT44(iVar30 * (int)((long)uVar29 >> 0x30) +
-                      ((int)((uint)(ushort)(CONCAT15((char)((ulong)uVar29 >> 0x28),
-                                                     CONCAT14((char)((ulong)uVar29 >> 0x20),
-                                                              (uint)(ushort)uVar29)) >> 0x20) *
-                            iVar25) >> 0xf),
-                      iVar28 * ((int)uVar29 >> 0x10) + ((int)((uint)(ushort)uVar29 * iVar24) >> 0xf)
-                     );
-        puVar5 = puVar5 + 2;
-      } while (lVar12 != 0);
-      if (uVar4 == 0) {
-        return;
+  sVar5 = *(short *)(param_4 + 0x22);
+  sVar6 = *(short *)(param_4 + 0x28);
+  sVar7 = *(short *)(param_4 + 0x2c);
+  iVar24 = sVar5 * param_3;
+  iVar33 = sVar6 * param_3;
+  iVar25 = sVar7 * param_3;
+  iVar26 = iVar33 + -0xf;
+  iVar9 = iVar24;
+  if (iVar24 < iVar26) {
+    lVar17 = (long)iVar24;
+    lVar18 = (long)iVar26;
+    lVar20 = (long)param_5;
+    uVar21 = lVar18 - lVar17;
+    iVar9 = iVar26;
+    if (3 < uVar21) {
+      puVar10 = (undefined8 *)(param_1 + lVar17 * 4);
+      puVar13 = (undefined8 *)(param_1 + (lVar20 + lVar17) * 4);
+      if (((undefined8 *)(param_1 + (lVar20 + lVar18) * 4) <= puVar10) ||
+         ((undefined8 *)(param_1 + lVar18 * 4) <= puVar13)) {
+        uVar14 = uVar21 & 0xfffffffffffffffc;
+        lVar17 = uVar14 + lVar17;
+        iVar29 = iVar24 + 1;
+        iVar30 = iVar24 + 2;
+        iVar32 = iVar24 + 3;
+        uVar16 = uVar14;
+        iVar27 = iVar24;
+        do {
+          iVar34 = iVar27 - iVar24;
+          iVar35 = iVar29 - iVar24;
+          iVar36 = iVar30 - iVar24;
+          iVar37 = iVar32 - iVar24;
+          uVar31 = puVar10[1];
+          uVar28 = *puVar10;
+          uVar16 = uVar16 - 4;
+          iVar27 = iVar27 + 4;
+          iVar29 = iVar29 + 4;
+          iVar30 = iVar30 + 4;
+          iVar32 = iVar32 + 4;
+          iVar34 = iVar34 * -0x30000 + 0x7fff0000;
+          iVar35 = iVar35 * -0x30000 + 0x7fff0000;
+          iVar36 = iVar36 * -0x30000 + 0x7fff0000;
+          iVar37 = iVar37 * -0x30000 + 0x7fff0000;
+          uVar23 = puVar13[1];
+          uVar22 = *puVar13;
+          iVar38 = iVar34 >> 0xf;
+          iVar39 = iVar35 >> 0xf;
+          iVar40 = iVar36 >> 0xf;
+          iVar41 = iVar37 >> 0xf;
+          iVar34 = iVar34 >> 0x10;
+          iVar35 = iVar35 >> 0x10;
+          iVar36 = iVar36 >> 0x10;
+          iVar37 = iVar37 >> 0x10;
+          puVar10[1] = CONCAT44(iVar41 * (int)((long)uVar31 >> 0x30) +
+                                ((int)((uint)(ushort)(CONCAT15((char)((ulong)uVar31 >> 0x28),
+                                                               CONCAT14((char)((ulong)uVar31 >> 0x20
+                                                                              ),(uint)(ushort)uVar31
+                                                                       )) >> 0x20) * iVar37) >> 0xf)
+                                ,iVar40 * ((int)uVar31 >> 0x10) +
+                                 ((int)((uint)(ushort)uVar31 * iVar36) >> 0xf));
+          *puVar10 = CONCAT44(iVar39 * (int)((long)uVar28 >> 0x30) +
+                              ((int)((uint)(ushort)(CONCAT15((char)((ulong)uVar28 >> 0x28),
+                                                             CONCAT14((char)((ulong)uVar28 >> 0x20),
+                                                                      (uint)(ushort)uVar28)) >> 0x20
+                                                   ) * iVar35) >> 0xf),
+                              iVar38 * ((int)uVar28 >> 0x10) +
+                              ((int)((uint)(ushort)uVar28 * iVar34) >> 0xf));
+          puVar13[1] = CONCAT44(iVar41 * (int)((long)uVar23 >> 0x30) +
+                                ((int)((uint)(ushort)(CONCAT15((char)((ulong)uVar23 >> 0x28),
+                                                               CONCAT14((char)((ulong)uVar23 >> 0x20
+                                                                              ),(uint)(ushort)uVar23
+                                                                       )) >> 0x20) * iVar37) >> 0xf)
+                                ,iVar40 * ((int)uVar23 >> 0x10) +
+                                 ((int)((uint)(ushort)uVar23 * iVar36) >> 0xf));
+          *puVar13 = CONCAT44(iVar39 * (int)((long)uVar22 >> 0x30) +
+                              ((int)((uint)(ushort)(CONCAT15((char)((ulong)uVar22 >> 0x28),
+                                                             CONCAT14((char)((ulong)uVar22 >> 0x20),
+                                                                      (uint)(ushort)uVar22)) >> 0x20
+                                                   ) * iVar35) >> 0xf),
+                              iVar38 * ((int)uVar22 >> 0x10) +
+                              ((int)((uint)(ushort)uVar22 * iVar34) >> 0xf));
+          puVar10 = puVar10 + 2;
+          puVar13 = puVar13 + 2;
+        } while (uVar16 != 0);
+        if (uVar21 == uVar14) goto LAB_0010a4f8;
       }
     }
-    puVar8 = (uint *)(param_1 + lVar13 * 4);
-    iVar23 = (iVar15 + param_3 * sVar1 * 5 + -0x4b + (int)lVar13 * -5) * 0x10000;
-    iVar16 = iVar16 - (int)lVar13;
+    iVar27 = (int)lVar17 * -0x30000 + param_3 * sVar5 * 0x30000 + 0x7fff0000;
+    lVar18 = lVar18 - lVar17;
+    puVar11 = (uint *)(param_1 + lVar17 * 4);
+    puVar15 = (uint *)(param_1 + (lVar17 + lVar20) * 4);
     do {
-      iVar15 = iVar23 >> 0xf;
-      iVar16 = iVar16 + -1;
-      iVar17 = iVar23 >> 0x10;
-      iVar23 = iVar23 + -0x50000;
-      *puVar8 = iVar15 * ((int)*puVar8 >> 0x10) + ((int)((*puVar8 & 0xffff) * iVar17) >> 0xf);
-      puVar8[0x360] =
-           iVar15 * ((int)puVar8[0x360] >> 0x10) + ((int)((puVar8[0x360] & 0xffff) * iVar17) >> 0xf)
-      ;
-      puVar8 = puVar8 + 1;
-    } while (iVar16 != 0);
+      iVar29 = iVar27 >> 0x10;
+      iVar30 = iVar27 >> 0xf;
+      iVar27 = iVar27 + -0x30000;
+      lVar18 = lVar18 + -1;
+      *puVar11 = iVar30 * ((int)*puVar11 >> 0x10) + ((int)((*puVar11 & 0xffff) * iVar29) >> 0xf);
+      *puVar15 = iVar30 * ((int)*puVar15 >> 0x10) + ((int)((*puVar15 & 0xffff) * iVar29) >> 0xf);
+      puVar11 = puVar11 + 1;
+      puVar15 = puVar15 + 1;
+    } while (lVar18 != 0);
+  }
+LAB_0010a4f8:
+  if (iVar26 < iVar25) {
+    uVar8 = ((int)sVar7 - (int)sVar6) * param_3 + 0xe;
+    uVar21 = (ulong)uVar8;
+    lVar17 = (long)iVar26;
+    if (2 < uVar8) {
+      lVar18 = param_5 + lVar17;
+      puVar10 = (undefined8 *)(param_1 + lVar17 * 4);
+      puVar13 = (undefined8 *)(param_1 + lVar18 * 4);
+      if (((undefined8 *)(param_1 + (lVar18 + uVar21) * 4 + 4) <= puVar10) ||
+         ((undefined8 *)(param_1 + (lVar17 + uVar21) * 4 + 4) <= puVar13)) {
+        iVar24 = (iVar9 - iVar24) * -3 + 0x7767;
+        uVar14 = uVar21 + 1 & 0x1fffffffc;
+        lVar17 = uVar14 + lVar17;
+        iVar29 = iVar33 + -0xe;
+        iVar30 = iVar33 + -0xd;
+        iVar33 = iVar33 + -0xc;
+        uVar16 = uVar14;
+        iVar27 = iVar26;
+        do {
+          iVar32 = iVar27 - iVar26;
+          iVar34 = iVar29 - iVar26;
+          iVar35 = iVar30 - iVar26;
+          iVar36 = iVar33 - iVar26;
+          uVar31 = puVar13[1];
+          uVar28 = *puVar13;
+          uVar16 = uVar16 - 4;
+          iVar27 = iVar27 + 4;
+          iVar29 = iVar29 + 4;
+          iVar30 = iVar30 + 4;
+          iVar33 = iVar33 + 4;
+          uVar23 = puVar10[1];
+          uVar22 = *puVar10;
+          iVar32 = (iVar24 + iVar32 * -5) * 0x10000;
+          iVar34 = (iVar24 + iVar34 * -5) * 0x10000;
+          iVar35 = (iVar24 + iVar35 * -5) * 0x10000;
+          iVar36 = (iVar24 + iVar36 * -5) * 0x10000;
+          iVar37 = iVar32 >> 0xf;
+          iVar38 = iVar34 >> 0xf;
+          iVar39 = iVar35 >> 0xf;
+          iVar40 = iVar36 >> 0xf;
+          iVar32 = iVar32 >> 0x10;
+          iVar34 = iVar34 >> 0x10;
+          iVar35 = iVar35 >> 0x10;
+          iVar36 = iVar36 >> 0x10;
+          puVar10[1] = CONCAT44(iVar40 * (int)((long)uVar23 >> 0x30) +
+                                ((int)((uint)(ushort)(CONCAT15((char)((ulong)uVar23 >> 0x28),
+                                                               CONCAT14((char)((ulong)uVar23 >> 0x20
+                                                                              ),(uint)(ushort)uVar23
+                                                                       )) >> 0x20) * iVar36) >> 0xf)
+                                ,iVar39 * ((int)uVar23 >> 0x10) +
+                                 ((int)((uint)(ushort)uVar23 * iVar35) >> 0xf));
+          *puVar10 = CONCAT44(iVar38 * (int)((long)uVar22 >> 0x30) +
+                              ((int)((uint)(ushort)(CONCAT15((char)((ulong)uVar22 >> 0x28),
+                                                             CONCAT14((char)((ulong)uVar22 >> 0x20),
+                                                                      (uint)(ushort)uVar22)) >> 0x20
+                                                   ) * iVar34) >> 0xf),
+                              iVar37 * ((int)uVar22 >> 0x10) +
+                              ((int)((uint)(ushort)uVar22 * iVar32) >> 0xf));
+          puVar13[1] = CONCAT44(iVar40 * (int)((long)uVar31 >> 0x30) +
+                                ((int)((uint)(ushort)(CONCAT15((char)((ulong)uVar31 >> 0x28),
+                                                               CONCAT14((char)((ulong)uVar31 >> 0x20
+                                                                              ),(uint)(ushort)uVar31
+                                                                       )) >> 0x20) * iVar36) >> 0xf)
+                                ,iVar39 * ((int)uVar31 >> 0x10) +
+                                 ((int)((uint)(ushort)uVar31 * iVar35) >> 0xf));
+          *puVar13 = CONCAT44(iVar38 * (int)((long)uVar28 >> 0x30) +
+                              ((int)((uint)(ushort)(CONCAT15((char)((ulong)uVar28 >> 0x28),
+                                                             CONCAT14((char)((ulong)uVar28 >> 0x20),
+                                                                      (uint)(ushort)uVar28)) >> 0x20
+                                                   ) * iVar34) >> 0xf),
+                              iVar37 * ((int)uVar28 >> 0x10) +
+                              ((int)((uint)(ushort)uVar28 * iVar32) >> 0xf));
+          puVar10 = puVar10 + 2;
+          puVar13 = puVar13 + 2;
+        } while (uVar16 != 0);
+        if (uVar21 + 1 == uVar14) {
+          return;
+        }
+      }
+    }
+    iVar25 = iVar25 - (int)lVar17;
+    iVar24 = (iVar9 * -3 + param_3 * (sVar6 * 5 + sVar5 * 3) + (int)lVar17 * -5) * 0x10000 +
+             0x771c0000;
+    puVar11 = (uint *)(param_1 + (lVar17 + param_5) * 4);
+    puVar15 = (uint *)(param_1 + lVar17 * 4);
+    do {
+      iVar33 = iVar24 >> 0x10;
+      iVar26 = iVar24 >> 0xf;
+      iVar24 = iVar24 + -0x50000;
+      iVar25 = iVar25 + -1;
+      *puVar15 = iVar26 * ((int)*puVar15 >> 0x10) + ((int)((*puVar15 & 0xffff) * iVar33) >> 0xf);
+      *puVar11 = iVar26 * ((int)*puVar11 >> 0x10) + ((int)((*puVar11 & 0xffff) * iVar33) >> 0xf);
+      puVar11 = puVar11 + 1;
+      puVar15 = puVar15 + 1;
+    } while (iVar25 != 0);
   }
   return;
 }

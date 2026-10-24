@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
-"""Model of the SSC frame header and byte budget (from ssc_encode @0xd168..0xd504),
+"""Model of the SSC frame header and byte budget (set_data_frame_header and the start of ssc_encode),
 checked against every frame of libssc/testdata/*.golden.
 
 Header (4 bytes):
   byte0 = 0xFF
   byte1 = 0xEE (basic) | UHQ: 0xE0 | (frame_counter >> 4)
-  byte2 = (frame_counter << 4) | flags  (bits 0-1: state+0xd6, bits 2-3 set later in encode)
+  byte2 = (frame_counter << 4) | flags  (bits 0-1: state+0x8e, bits 2-3 set later in encode)
   byte3 = (top3 << 5) | rate_index  (rate_index from the table below; top 3 bits can be
           rewritten later in encode, 0b111 in every golden so far)
 Budget:
@@ -40,7 +40,7 @@ RATES = {
     152000: (0xE6, True, True, 0x79F800),
 }
 # Note: the DRC gains above are for 24-bit input (state+0x6c == 24); other bit depths
-# use different constants (0x76f2 / 0x78b4 / 0x7a94 ...), see ssc_encode @0xd25c.
+# use different constants (0x76f2 / 0x78b4 / 0x7a94 ...), see set_limit_gain_from_bitrate.
 
 
 def budget(bitrate, mode_fs, frame_size=864):

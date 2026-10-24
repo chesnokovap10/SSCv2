@@ -75,7 +75,7 @@ static int32_t div_q15(int16_t num, int16_t den) {
     return q > 0x7ffe ? 0x7fff : q;
 }
 
-int stereo_itheta(const int16_t *X, const int16_t *Y, int stereo, int N) {
+static int compute_itheta(const int16_t *X, const int16_t *Y, int stereo, int N) {
     int32_t Emid = 1, Eside = 1;
     int16_t mid, side, a, r;
     int i;
@@ -104,6 +104,9 @@ int stereo_itheta(const int16_t *X, const int16_t *Y, int stereo, int N) {
     }
     return (r * 0x517d) >> 15;
 }
+
+/* Exported mid/side variant (the mono split goes through compute_itheta). */
+int stereo_itheta(const int16_t *X, const int16_t *Y, int N) { return compute_itheta(X, Y, 1, N); }
 
 /* Samsung intensity_stereo: each product shifted on its own. */
 static void intensity_stereo(const SscMode *m, int16_t *X, const int16_t *Y, const int32_t *bandE,
@@ -313,7 +316,7 @@ static void compute_theta_mono(band_ctx *ctx, split_ctx *s, int16_t *X, int16_t 
                                int B, int B0, int LM, int *fill) {
     int pulse_cap = ctx->m->logN[ctx->i] + LM * (1 << BITRES);
     int offset = (pulse_cap >> 1) - QTHETA_OFFSET;
-    int qn = compute_qn(N, *b, offset, pulse_cap), itheta = stereo_itheta(X, Y, 0, N);
+    int qn = compute_qn(N, *b, offset, pulse_cap), itheta = compute_itheta(X, Y, 0, N);
     int32_t tell = ec_tell_frac(ctx->ec);
     if (qn != 1) {
         itheta = (itheta * qn + 8192) >> 14;
@@ -467,7 +470,7 @@ void quant_all_bands(const SscMode *m, int end, int16_t *X_, unsigned char *coll
         } else {
             /* compute_theta (stereo) */
             int pulse_cap = m->logN[i] + LM3 * (1 << BITRES), offset = (pulse_cap >> 1) - QTHETA_OFFSET;
-            int qn = compute_qn(N, b, offset, pulse_cap), itheta = stereo_itheta(X, Y, 1, N);
+            int qn = compute_qn(N, b, offset, pulse_cap), itheta = compute_itheta(X, Y, 1, N);
             int32_t t0 = ec_tell_frac(ec), rebalance;
             int mbits, sbits, sfill = fill;
             split_ctx s;
@@ -521,9 +524,9 @@ void quant_all_bands(const SscMode *m, int end, int16_t *X_, unsigned char *coll
 
 /* Opus quant_energy_finalise, start 0. */
 void quant_energy_finalise(const SscMode *m, int end, int16_t *oldEBands, const int16_t *error,
-                           const int *fine_quant, const int *fine_priority, int bits_left,
-                           ec_enc *enc, int C) {
-    int i, prio, c;
+                           const int32_t *fine_quant, const int32_t *fine_priority, int bits_left,
+                           ec_enc *enc) {
+    int i, prio, c, C = 2;
     for (prio = 0; prio < 2; prio++)
         for (i = 0; i < end && bits_left >= C; i++) {
             if (fine_quant[i] >= 8 || fine_priority[i] != prio) continue;

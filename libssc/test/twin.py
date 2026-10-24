@@ -8,7 +8,7 @@ Checks:
   modes      both SscMode structs field by field, including every pointed-to table
   functions  math helpers, haar1, the whole range coder (random inputs)
   state      ssc_encoder_init: state bytes after init (mode pointer excluded)
-  frames     ssc_encode on the goldens: header bytes and frame length (payload: phase 3)
+  frames     ssc_encode on the goldens: whole frames byte for byte
 """
 
 import argparse
@@ -22,7 +22,7 @@ from pathlib import Path
 LIBSSC = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(LIBSSC / "oracle"))
 sys.path.insert(0, str(LIBSSC / "research" / "difftest"))
-from ssc_oracle import IMAGE_BASE, IO_BASE, TESTDATA, Oracle, golden_pcm, read_golden  # noqa
+from ssc_oracle import IMAGE_BASE, IO_BASE, MODE_VA, TESTDATA, Oracle, golden_pcm, read_golden  # noqa
 import difftest as dt  # noqa: E402  (random input generators)
 
 S32 = Oracle.s32
@@ -33,15 +33,15 @@ def load_lib():
     lib = ctypes.CDLL(str(LIBSSC / "build" / "libssc.dll"))
     i32, u32 = ctypes.c_int32, ctypes.c_uint32
     sigs = {
-        "ec_ilog": ([u32], i32), "ssc_rcp": ([i32], i32), "ssc_sqrt": ([i32], i32),
+        "ssc_rcp": ([i32], i32), "ssc_sqrt": ([i32], i32),
         "ssc_rsqrt_norm": ([i32], ctypes.c_int16), "ssc_cos_norm": ([i32], ctypes.c_int16),
-        "frac_div32": ([i32, i32], i32), "ssc_lcg_rand": ([u32], u32),
-        "haar1": ([VP, i32, i32], None),
-        "ec_enc_init": ([VP, VP, u32], None), "ec_encode": ([VP, u32, u32, u32], None),
-        "ec_encode_bin": ([VP, u32, u32, u32], None), "ec_enc_bit_logp": ([VP, i32, u32], None),
-        "ec_enc_icdf": ([VP, i32, VP, u32], None), "ec_enc_uint": ([VP, u32, u32], None),
-        "ec_enc_bits": ([VP, u32, u32], None), "ec_laplace_encode": ([VP, VP, u32, i32], None),
-        "ec_tell_frac": ([VP], u32), "ec_enc_done": ([VP], None),
+        "ssc_frac_div32": ([i32, i32], i32),
+        "ssc_haar1": ([VP, i32, i32], None),
+        "ssc_ec_enc_init": ([VP, VP, u32], None), "ssc_ec_encode": ([VP, u32, u32, u32], None),
+        "ssc_ec_encode_bin": ([VP, u32, u32, u32], None), "ssc_ec_enc_bit_logp": ([VP, i32, u32], None),
+        "ssc_ec_enc_icdf": ([VP, i32, VP, u32], None), "ssc_ec_enc_uint": ([VP, u32, u32], None),
+        "ssc_ec_enc_bits": ([VP, u32, u32], None), "ssc_ec_laplace_encode": ([VP, VP, u32, i32], None),
+        "ssc_ec_tell_frac": ([VP], u32), "ssc_ec_enc_done": ([VP], None),
         "ssc_custom_mode_create": ([i32, i32, VP], VP),
         "ssc_encoder_get_size": ([i32, i32], i32),
         "ssc_encoder_init": ([VP, i32, i32, i32], i32),
@@ -59,28 +59,29 @@ MODE_ARRAYS = [  # (offset of pointer, element fmt, count(mode) )
     (40, "B", lambda m: m["na"] * m["nb"], "allocVectors"),
     (48, "B", lambda m: m["na"] * m["nb"], "allocVectors2"),
     (56, "h", lambda m: m["nb"], "logN"),
-    (64, "i", lambda m: m["ov"], "window"),
-    (96, "i", lambda m: 433, "mdct.trig"),
-    (112, "h", lambda m: 5 * m["nb"], "cache.index"),
-    (120, "B", lambda m: m["csize"], "cache.bits"),
-    (128, "i", lambda m: m["nb"], "cache.caps"),
+    (88, "i", lambda m: 433, "mdct.trig"),
+    (104, "h", lambda m: 5 * m["nb"], "cache.index"),
+    (112, "B", lambda m: m["csize"], "cache.bits"),
+    (120, "i", lambda m: m["nb"], "cache.caps"),
 ]
+WINDOW_VA = 0x3d80  # the MDCT window is not in the mode any more (ssc_window in libssc)
 
 
-def mode_view(read, base):
-    raw = read(base, 136)
+def mode_view(read, base, window):
+    raw = read(base, 128)
     fs, ov, nb, eff = struct.unpack_from("<4i", raw, 0)
     na, = struct.unpack_from("<i", raw, 32)
-    csize, = struct.unpack_from("<i", raw, 104)
+    csize, = struct.unpack_from("<i", raw, 96)
     m = dict(nb=nb, na=na, ov=ov, csize=csize)
-    scalars = (raw[0:16], raw[24:36], raw[72:80], raw[104:108])
+    scalars = (raw[0:16], raw[24:36], raw[64:72], raw[96:100])
     arrays = {}
     for off, fmt, cnt, name in MODE_ARRAYS:
         p, = struct.unpack_from("<Q", raw, off)
         n = cnt(m)
         arrays[name] = read(p, struct.calcsize(fmt) * n)
+    arrays["window"] = read(window, 4 * ov)
     for i in range(2):  # kfft states and their tables
-        k, = struct.unpack_from("<Q", raw, 80 + 8 * i)
+        k, = struct.unpack_from("<Q", raw, 72 + 8 * i)
         ks = read(k, 24)
         nfft, shift, br, tw = struct.unpack("<iiQQ", ks)
         arrays[f"kfft{i}"] = ks[:8]
@@ -93,8 +94,9 @@ def test_modes(o, lib):
     bad = []
     lread = lambda p, n: ctypes.string_at(p, n)  # noqa: E731
     for fs in (48000, 96000):
-        b = mode_view(o.read, o.call("ssc_custom_mode_create", fs, 864, 0))
-        l = mode_view(lread, lib.ssc_custom_mode_create(fs, 864, None))
+        b = mode_view(o.read, o.call("ssc_custom_mode_create", fs, 864, 0), IMAGE_BASE + WINDOW_VA)
+        l = mode_view(lread, lib.ssc_custom_mode_create(fs, 864, None),
+                      ctypes.addressof(ctypes.c_char.in_dll(lib, "ssc_window")))
         if b[0] != l[0]:
             bad.append(f"{fs}: scalar fields differ")
         for name in b[1]:
@@ -126,12 +128,12 @@ def test_haar1(o, lib, rng, n):
         n0 = rng.choice([2, 4, 8, 16, 36, 54])  # per-stride count; buffer is n0*stride
         raw = struct.pack(f"<{n0 * stride}h", *[rng.randrange(-32768, 32768) for _ in range(n0 * stride)])
         o.uc.mem_write(IO_BASE, raw)
-        o.call("haar1", IO_BASE, n0, stride)
+        o.call("ssc_haar1", IO_BASE, n0, stride)
         buf = ctypes.create_string_buffer(raw, len(raw))
-        lib.haar1(buf, n0, stride)
+        lib.ssc_haar1(buf, n0, stride)
         if o.read(IO_BASE, len(raw)) != buf.raw:
-            return [("haar1", (n0, stride))]
-    return [("haar1", None)]
+            return [("ssc_haar1", (n0, stride))]
+    return [("ssc_haar1", None)]
 
 
 def test_last_band_info(o, lib, rng, n):
@@ -151,46 +153,31 @@ def test_last_band_info(o, lib, rng, n):
     return [("last_band_info_calc", None)]
 
 
-def test_init_caps(o, lib):
-    """init_caps is exported but never called by the blob (it reads cache.caps)."""
-    lib.init_caps.argtypes = [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_int, ctypes.c_int]
-    for name, va in (("ssc_mode_48k", 0x28a18), ("ssc_mode_96k", 0x28aa0)):
-        for lm in range(4):
-            for c in (1, 2):
-                o.call("init_caps", IMAGE_BASE + va, IO_BASE, lm, c)
-                want = o.read(IO_BASE, 88)
-                buf = ctypes.create_string_buffer(88)
-                lib.init_caps(ctypes.addressof(ctypes.c_char.in_dll(lib, name)), buf, lm, c)
-                if buf.raw != want:
-                    return [("init_caps", (name, lm, c))]
-    return [("init_caps (both modes, LM 0-3, C 1-2)", None)]
-
-
 def lib_script(lib, size, ops):
     ec = ctypes.create_string_buffer(0x100)
     buf = ctypes.create_string_buffer(size)
     icdf = [ctypes.create_string_buffer(t, len(t)) for t in dt.ICDF]
     val = ctypes.c_int(0)
-    lib.ec_enc_init(ec, buf, size)
+    lib.ssc_ec_enc_init(ec, buf, size)
     tells = []
     for k, a, b, c in ops:
         if k == 0:
-            lib.ec_encode(ec, a, b, c)
+            lib.ssc_ec_encode(ec, a, b, c)
         elif k == 1:
-            lib.ec_encode_bin(ec, a, b, c)
+            lib.ssc_ec_encode_bin(ec, a, b, c)
         elif k == 2:
-            lib.ec_enc_bit_logp(ec, a, b)
+            lib.ssc_ec_enc_bit_logp(ec, a, b)
         elif k == 3:
-            lib.ec_enc_icdf(ec, a, icdf[b], c)
+            lib.ssc_ec_enc_icdf(ec, a, icdf[b], c)
         elif k == 4:
-            lib.ec_enc_uint(ec, a, b)
+            lib.ssc_ec_enc_uint(ec, a, b)
         elif k == 5:
-            lib.ec_enc_bits(ec, a, b)
+            lib.ssc_ec_enc_bits(ec, a, b)
         elif k == 6:
             val.value = a
-            lib.ec_laplace_encode(ec, ctypes.byref(val), b, c)
-        tells.append(S32(lib.ec_tell_frac(ec)))
-    lib.ec_enc_done(ec)
+            lib.ssc_ec_laplace_encode(ec, ctypes.byref(val), b, c)
+        tells.append(S32(lib.ssc_ec_tell_frac(ec)))
+    lib.ssc_ec_enc_done(ec)
     return buf.raw, tells
 
 
@@ -267,7 +254,6 @@ def main():
     rows += test_scalars(o, lib, rng, a.n)
     rows += test_haar1(o, lib, rng, a.n)
     rows += test_last_band_info(o, lib, rng, a.n)
-    rows += test_init_caps(o, lib)
     rows += test_ec(o, lib, rng, a.n)
     rows += test_state(o, lib)
     rows += test_frames(lib)

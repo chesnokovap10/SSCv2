@@ -1,4 +1,4 @@
-/* libssc â€” encoder entry points (ssc_encoder_* / ssc_encode).
+/* libssc — encoder entry points (ssc_encoder_* / ssc_encode).
  *
  * Ported stage by stage (libssc/PLAN.md, phase 3). Bit-exact so far: header,
  * byte budget, input processing (3a), silence flag and prefilter (3b), long
@@ -20,12 +20,14 @@
 _Static_assert(offsetof(SscEncoder, prefilter_period) == 0x38, "encoder layout");
 _Static_assert(offsetof(SscEncoder, overlap_max) == 0x4c, "encoder layout");
 _Static_assert(offsetof(SscEncoder, fs_mode) == 0x60, "encoder layout");
-_Static_assert(offsetof(SscEncoder, tr_energy) == 0x7c, "encoder layout");
-_Static_assert(offsetof(SscEncoder, tr_hp) == 0xc4, "encoder layout");
-_Static_assert(offsetof(SscEncoder, frame_counter) == 0xd4, "encoder layout");
-_Static_assert(offsetof(SscEncoder, biquad) == 0xd8, "encoder layout");
-_Static_assert(offsetof(SscEncoder, in_mem) == 0x128, "encoder layout");
-_Static_assert(sizeof(SscEncoder) == 0x130, "encoder layout");
+_Static_assert(offsetof(SscEncoder, frame_counter) == 0x8c, "encoder layout");
+_Static_assert(offsetof(SscEncoder, biquad) == 0x90, "encoder layout");
+_Static_assert(offsetof(SscEncoder, in_mem) == 0xe0, "encoder layout");
+_Static_assert(sizeof(SscEncoder) == 0xe0, "encoder layout");
+_Static_assert(offsetof(SscAlloc, caps) == 0xb8, "alloc layout");
+_Static_assert(offsetof(SscAlloc, offsets) == 0xc0, "alloc layout");
+_Static_assert(offsetof(SscAlloc, alloc_trim) == 0x170, "alloc layout");
+_Static_assert(offsetof(SscAlloc, table2) == 0x180, "alloc layout");
 
 int32_t in_shared[2 * (864 + SSC_OVERLAP)];
 int32_t _pre_shared[2 * (864 + SSC_COMBFILTER_MAXPERIOD)];
@@ -57,20 +59,17 @@ typedef struct {
     int tf_res[SSC_NB_EBANDS];
     int tf_select;
     int16_t error[2 * SSC_NB_EBANDS];
-    int offsets[SSC_NB_EBANDS];
     int32_t total_boost;
-    int dual_stereo;
-    int alloc_trim;
     int anti_collapse_rsv;
-    int32_t alloc_bits;      /* total passed to compute_allocation */
-    int32_t balance;
     int codedBands;
-    int pulses[SSC_NB_EBANDS];
-    int fine_quant[SSC_NB_EBANDS];
-    int fine_priority[SSC_NB_EBANDS];
+    SscAlloc a;              /* offsets, trim, dual_stereo, allocation results */
 } SscFrame;
 
 SscStageAlloc ssc_stage_alloc;
+SscStageCoarse ssc_stage_coarse;
+uint8_t ssc_stage_a[0x184];
+int32_t ssc_stage_coded;
+_Static_assert(offsetof(SscAlloc, table2) + 4 == sizeof ssc_stage_a, "alloc layout");
 
 const SscMode *ssc_custom_mode_create(int fs, int frame_size, int *err) {
     (void)frame_size; /* the blob ignores it: both modes are fixed at 864 */
@@ -81,8 +80,10 @@ const SscMode *ssc_custom_mode_create(int fs, int frame_size, int *err) {
     return NULL;
 }
 
+/* As the blob: + 0xdc, although the arrays start at 0xe0, so the size is 4 bytes
+ * short of the end of oldLogE2 (its last two entries are never touched). */
 static int state_size(const SscMode *m, int channels) {
-    return (m->nbEBands * 6 + m->overlap * 4 + 4 * SSC_COMBFILTER_MAXPERIOD) * channels + 300;
+    return (m->nbEBands * 6 + m->overlap * 4 + 4 * SSC_COMBFILTER_MAXPERIOD) * channels + 0xdc;
 }
 
 int ssc_encoder_get_size(int channels, int fs) {
@@ -93,9 +94,9 @@ int ssc_encoder_get_size(int channels, int fs) {
 int ssc_encoder_init(SscEncoder *st, int fs, int channels, int bit_depth) {
     const SscMode *m = ssc_custom_mode_create(fs, SSC_FRAME_SIZE, NULL);
     int ret;
-    if (channels > 2) return -1;  /* blob: -1, and it touches st below anyway */
+    if (st && m) memset(st, 0, state_size(m, channels));  /* blob clears before the checks */
+    if (channels > 2) return -1;
     if (!st || !m) return -7;
-    memset(st, 0, state_size(m, channels));
     st->mode = m;
     st->overlap = m->overlap;
     st->channels = channels;
@@ -111,8 +112,8 @@ int ssc_encoder_init(SscEncoder *st, int fs, int channels, int bit_depth) {
     st->frame_counter = 0;
     st->hdr_low_bits = 1;
     previous_uhq_index = 0;
-    SoundBooster_DRC_Init(fs, channels);
-    SoundBooster_DRC_SetPar(1, 0x7b8e); /* blob also passes (0, 50000, 0), unused */
+    SSC_DRC_Init(fs, channels);
+    SSC_DRC_SetPar(1, 0x7b8e); /* blob also passes (0, 50000, 0), unused */
     return ret;
 }
 
@@ -124,7 +125,7 @@ SscEncoder *ssc_encoder_create(int fs, int channels, int bit_depth, int *err) {
         if (err) *err = -1;
         return NULL;
     }
-    st = (SscEncoder *)malloc(state_size(m, channels));
+    st = (SscEncoder *)malloc(state_size(m, channels) + 4);  /* + the 4 bytes the blob misses */
     if (!st) {
         if (err) *err = -7;
         return NULL;
@@ -140,7 +141,8 @@ SscEncoder *ssc_encoder_create(int fs, int channels, int bit_depth, int *err) {
 
 void ssc_encoder_destroy(SscEncoder *st) { free(st); } /* blob: empty (leaks) */
 
-/* Bitrate table from ssc_encode @0xd1d0..0xd47c. */
+/* Bitrate table (get_header_from_bitrate / get_uhq_info_from_bitrate /
+ * set_limit_gain_from_bitrate in the blob, inlined into ssc_encode). */
 typedef struct {
     int32_t bitrate;
     uint8_t byte3;    /* (flags << 5) | rate index; flags may change later in the frame */
@@ -166,7 +168,7 @@ static const SscRate *find_rate(int bitrate) {
     return NULL;
 }
 
-/* Input processing before CELT (ssc_encode @0xd504..0xd688): a biquad copy of
+/* Input processing before CELT: a biquad copy of
  * the input drives CalculateLimitGain, then the DRC limiter rewrites pcm in
  * place in 8 blocks of frame_size/8 stereo frames. */
 static void preprocess(SscEncoder *st, int32_t *pcm, int frame_size, int bitrate, int wide) {
@@ -186,7 +188,7 @@ static void preprocess(SscEncoder *st, int32_t *pcm, int frame_size, int bitrate
         gain = CalculateLimitGain(p_filtered, p_input, bitrate, st->fs) << 8;
     }
     set_DRC_limit_gain(gain);
-    for (i = 0; i < 8; i++) SoundBooster_DRC_Exe(pcm + i * block, frame_size >> 3);
+    for (i = 0; i < 8; i++) SSC_DRC_Exe(pcm + i * block, frame_size >> 3);
 }
 
 /* max(max, -min) with max/min starting at 0, like celt_maxabs32. */
@@ -201,7 +203,7 @@ static int32_t maxabs32(const int32_t *x, int n) {
     return mx <= neg ? neg : mx;
 }
 
-/* Silence flag and the CELT input buffer (ssc_encode @0xd690..0xdb90).
+/* Silence flag and the CELT input buffer.
  * Samsung computes the pre-emphasis memory like Opus but never subtracts it:
  * `in` is just pcm << shift (4 for 24-bit input, 12 otherwise on narrow rates). */
 static void silence_and_input(SscEncoder *st, const int32_t *pcm, ec_enc *enc, SscFrame *f,
@@ -240,40 +242,37 @@ static void silence_and_input(SscEncoder *st, const int32_t *pcm, ec_enc *enc, S
     if (N < 1) return;
     for (c = 0; c < 2; c++) {  /* the blob hard-codes a stride of 2 */
         int32_t *dst = in_shared + c * (N + ov) + ov;
-        uint32_t x;
         for (i = 0; i < N; i++) dst[i] = (int32_t)((uint32_t)pcm[2 * i + c] << shift);
-        x = (uint32_t)dst[N - 1];
-        st->preemph_memE[c] = (int32_t)(0u - ((uint32_t)(((int32_t)x >> 16) * 0xd99a) +
-                                               (((x & 0xfff0) * 0x6ccd) >> 15)));
     }
 }
 
-/* MDCT of the prefiltered input (ssc_encode @0xe01c..0xe1a0). The spectrum
+/* MDCT of the prefiltered input. The spectrum
  * lives in _pre_shared after the FFT scratch, like the blob's. */
 #define SSC_FREQ (_pre_shared + 1944)
 
 /* Shared tail of the long and short MDCT paths. */
-static void spectrum_fixup(SscEncoder *st, int bitrate, int wide) {
+static void spectrum_fixup(SscEncoder *st, int bitrate, int wide, int is_short) {
     const SscMode *m = st->mode;
     int32_t *freq = SSC_FREQ;
     int i, top;
-    /* Narrow rates below 192k: nothing above the last band (M = 8 hard-coded). */
+    /* Below 192k: nothing above the last band (M = 8 hard-coded). The long MDCT
+     * path does it for wide rates too (152k UHQ), the short one only for narrow. */
     top = m->eBands[st->end - 1];
-    if (!wide && bitrate < 192000 && top < 108)
+    if (!(is_short && wide) && bitrate < 192000 && top < 108)
         for (i = top * 8; i < 864; i++) freq[i] = freq[i + 864] = 0;
     if (wide)
         uhq_headroom(freq, bitrate, 8, m->eBands);
     else
-        normal_headroom(freq, bitrate, 8, m->eBands);
+        normal_headroom(freq, bitrate, 8, m->eBands, SSC_FRAME_SIZE);
 }
 
 static void long_mdct(SscEncoder *st, SscFrame *f, int bitrate, int wide) {
     const SscMode *m = st->mode;
     int N = f->N, ov = f->overlap, c;
     for (c = 0; c < 2; c++)  /* stride 2 hard-coded, like the input copy */
-        ssc_mdct_forward(&m->mdct, in_shared + c * (N + ov), SSC_FREQ + c * N, m->window, ov, 0,
+        ssc_mdct_forward(&m->mdct, in_shared + c * (N + ov), SSC_FREQ + c * N, ov, 0,
                          1);
-    spectrum_fixup(st, bitrate, wide);
+    spectrum_fixup(st, bitrate, wide, 0);
 }
 
 /* 8 short MDCTs per channel, interleaved (stride 8), as Opus compute_mdcts. */
@@ -283,15 +282,14 @@ static void short_mdcts(SscEncoder *st, SscFrame *f, int bitrate, int wide) {
     for (c = 0; c < 2; c++)
         for (b = 0; b < 8; b++)
             ssc_mdct_forward(&m->mdct, in_shared + c * (8 * L + ov) + b * L,
-                             SSC_FREQ + c * 8 * L + b, m->window, ov, 3, 8);
-    spectrum_fixup(st, bitrate, wide);
+                             SSC_FREQ + c * 8 * L + b, ov, 3, 8);
+    spectrum_fixup(st, bitrate, wide, 1);
 }
 
 static int32_t add32(int32_t a, int32_t b) { return (int32_t)((uint32_t)a + (uint32_t)b); }
 
-/* Header bandwidth flags from the sub-band energies above the last band
- * (ssc_encode @0xe228..0xeb44 and @0xe890). Narrow rates: byte 2 += 4k for the
- * highest of 3 sub-bands with energy > 30001 (two channels summed). UHQ (not
+/* Header bandwidth flags from the sub-band energies above the last band.
+ * Narrow rates: byte 2 += 4k for the highest of 3 sub-bands with energy > 30001 (two channels summed). UHQ (not
  * 152k): rows 0..3 drop 0..3 top bands; the first row with a sub-band > 12001
  * sets byte 2 += 4·row and the sub-band index into byte 3 bits 5..7. */
 static void bandwidth_flags(SscEncoder *st, SscFrame *f, uint8_t *out, int wide, int uhq) {
@@ -330,7 +328,7 @@ static void bandwidth_flags(SscEncoder *st, SscFrame *f, uint8_t *out, int wide,
 }
 
 /* Band energies, transient decision, bandwidth flags, normalisation
- * (ssc_encode @0xe184..0xebcc; Opus 1.1 celt_encode_with_ec order). */
+ * (Opus 1.1 celt_encode_with_ec order). */
 static void analysis(SscEncoder *st, ec_enc *enc, SscFrame *f, uint8_t *out, int bitrate,
                      int wide, int uhq) {
     const SscMode *m = st->mode;
@@ -338,20 +336,17 @@ static void analysis(SscEncoder *st, ec_enc *enc, SscFrame *f, uint8_t *out, int
     const int16_t *oldBandE = (const int16_t *)(st->in_mem + (f->overlap + 1024) * C);
 
     compute_band_energies(m, SSC_FREQ, f->bandE, end);
-    amp2Log2(m, end, end, f->bandE, f->bandLogE, C);
+    amp2Log2(m, end, f->bandE, f->bandLogE);
     memcpy(f->bandLogE2, f->bandLogE, sizeof(int16_t) * nb * C);
     f->isTransient = 0;
     f->shortBlocks = 0;
     f->tf_estimate = 0;
     checked = f->transient_checked = ec_tell(enc) + 3 <= f->total_bits;
     if (checked) {
-        /* Both detectors always run (the temporal one keeps state). */
-        int t1 = patch_transient_decision(f->bandLogE, oldBandE, nb, end - previous_uhq_index);
-        int t2 = patch_transient_decision_temporal(m, st, in_shared);
-        if (t1 || t2) {
+        if (patch_transient_decision(f->bandLogE, oldBandE, nb, end - previous_uhq_index)) {
             short_mdcts(st, f, bitrate, wide);
             compute_band_energies(m, SSC_FREQ, f->bandE, end);
-            amp2Log2(m, end, end, f->bandE, f->bandLogE, C);
+            amp2Log2(m, end, f->bandE, f->bandLogE);
             for (i = 0; i < 2 * nb; i++)  /* short vs long MDCT scaling: LM/2 */
                 f->bandLogE2[i] = (int16_t)(f->bandLogE2[i] + 0x600);
             f->isTransient = 1;
@@ -364,7 +359,7 @@ static void analysis(SscEncoder *st, ec_enc *enc, SscFrame *f, uint8_t *out, int
     normalise_bands(m, SSC_FREQ, (int16_t *)SSC_FREQ, f->bandE, end - f->drop);
 }
 
-/* Pitch pre-filter (Opus run_prefilter, Samsung variant; @0xdb90..0xdfdc). */
+/* Pitch pre-filter (Opus run_prefilter, Samsung variant). */
 static void prefilter(SscEncoder *st, ec_enc *enc, SscFrame *f) {
     int N = f->N, ov = f->overlap, c, d, qg = 0, pf_on = 0, pitch_index;
     int32_t *prefilter_mem = st->in_mem + f->C * ov;
@@ -382,7 +377,7 @@ static void prefilter(SscEncoder *st, ec_enc *enc, SscFrame *f) {
     } else {
         int16_t *pitch_buf = (int16_t *)in_shared;  /* the blob reuses in_shared */
         int16_t g;
-        pitch_downsample(pre, pitch_buf, N + SSC_COMBFILTER_MAXPERIOD);
+        pitch_downsample(pre[0], pre[1], pitch_buf, N + SSC_COMBFILTER_MAXPERIOD);
         pitch_search(pitch_buf + (SSC_COMBFILTER_MAXPERIOD >> 1), pitch_buf, N,
                      SSC_COMBFILTER_MAXPERIOD - 3 * SSC_COMBFILTER_MINPERIOD, &pitch_index);
         pitch_index = SSC_COMBFILTER_MAXPERIOD - pitch_index;
@@ -448,7 +443,7 @@ static void prefilter(SscEncoder *st, ec_enc *enc, SscFrame *f) {
 
 #define C2 2
 
-/* Samsung intensity tables (blob 0x16b4c / 0x16b7a); ssc_encode always asks
+/* Samsung intensity tables (blob 0x3d18 / 0x3d46); ssc_encode always asks
  * with 510 kbps, so the decision ends up "intensity = end - drop". */
 static const int16_t kIntensityThr[23] = {1,  2,  3,  4,  5,  6,  7,  8,  16, 24, 36, 44,
                                           50, 56, 62, 67, 72, 77, 83, 89, 95, 102, 109};
@@ -615,7 +610,8 @@ static void dynalloc_analysis(const SscMode *m, const SscFrame *f, int end, int 
                 boost_bits = boost * 6 << 3;
             }
             if ((tot_boost + boost_bits) >> 6 > f->effectiveBytes / 4) {
-                int32_t cap = (f->effectiveBytes / 4) << 6;
+                /* Samsung: effectiveBytes * 16, not Opus' (effectiveBytes / 4) << 6 */
+                int32_t cap = f->effectiveBytes << 4;
                 offsets[i] = cap - tot_boost;
                 tot_boost = cap;
                 *tot_boost_ = tot_boost;
@@ -698,7 +694,7 @@ static int alloc_trim_analysis(const SscMode *m, const int16_t *X, const int16_t
 }
 
 /* Coarse energy, tf, spreading, dynalloc, trim, allocation, fine energy
- * (ssc_encode @0xebcc..0x11068, Opus 1.1 order with Samsung changes). */
+ * (Opus 1.1 order with Samsung changes). */
 static void quantise(SscEncoder *st, ec_enc *enc, SscFrame *f, int bitrate, int wide) {
     const SscMode *m = st->mode;
     const int16_t *X = (const int16_t *)SSC_FREQ;
@@ -707,6 +703,9 @@ static void quantise(SscEncoder *st, ec_enc *enc, SscFrame *f, int bitrate, int 
     const int32_t *caps = m->cache.caps;
     int32_t total_bits = f->total_bits, tell;
 
+    memset(&f->a, 0, sizeof f->a);
+    f->a.caps = caps;
+    f->a.table2 = bitrate > 192000;
     f->effectiveBytes = f->nbCompressedBytes;
     if (!wide && C * 15 <= f->effectiveBytes) {
         int lambda = f->effectiveBytes < 40 ? 24 : f->effectiveBytes < 60 ? 12
@@ -717,6 +716,16 @@ static void quantise(SscEncoder *st, ec_enc *enc, SscFrame *f, int bitrate, int 
         f->tf_select = 0;
     }
 
+    if (ssc_stage_hook) {
+        SscStageCoarse *sc = &ssc_stage_coarse;
+        sc->nbBands = end;
+        sc->end = endc;
+        sc->budget = total_bits;
+        sc->nbAvailableBytes = f->nbAvailableBytes;
+        sc->force_intra = st->force_intra;
+        memcpy(sc->bandLogE, f->bandLogE, sizeof sc->bandLogE);
+        ssc_stage_hook(SSC_STAGE_PRE_COARSE, st, enc);
+    }
     quant_coarse_energy(m, end, endc, f->bandLogE, oldBandE, (uint32_t)total_bits, f->error, enc,
                         f->nbAvailableBytes, st->force_intra, &st->delayedIntra);
 
@@ -729,13 +738,11 @@ static void quantise(SscEncoder *st, ec_enc *enc, SscFrame *f, int bitrate, int 
         if (f->nbAvailableBytes < C * 10 || f->shortBlocks)
             st->spread_decision = 2;
         else
-            st->spread_decision = spreading_decision(m, X, &st->tonal_average, st->spread_decision,
-                                                     &st->hf_average, &st->tapset_decision,
-                                                     f->pf_on, endc);
+            st->spread_decision = spreading_decision(st, X, f->pf_on, endc);
         ec_enc_icdf(enc, st->spread_decision, kSpreadIcdf, 5);
     }
 
-    dynalloc_analysis(m, f, endc, f->offsets, &f->total_boost);
+    dynalloc_analysis(m, f, endc, f->a.offsets, &f->total_boost);
 
     /* Encode the boosts (Opus 1.1 loop, caps straight from the mode). */
     total_bits <<= 3;
@@ -748,7 +755,7 @@ static void quantise(SscEncoder *st, ec_enc *enc, SscFrame *f, int bitrate, int 
             int quanta = IMIN(width << 3, IMAX(6 << 3, width));
             int loop_logp = dynalloc_logp, boost = 0, j;
             for (j = 0; tell + (loop_logp << 3) < total_bits - total_boost && boost < caps[i]; j++) {
-                int flag = j < f->offsets[i];
+                int flag = j < f->a.offsets[i];
                 ec_enc_bit_logp(enc, flag, loop_logp);
                 tell = ec_tell_frac(enc);
                 if (!flag) break;
@@ -757,44 +764,50 @@ static void quantise(SscEncoder *st, ec_enc *enc, SscFrame *f, int bitrate, int 
                 loop_logp = 1;
             }
             if (j) dynalloc_logp = IMAX(2, dynalloc_logp - 1);
-            f->offsets[i] = boost;
+            f->a.offsets[i] = boost;
         }
         f->total_boost = total_boost;
     }
     /* Samsung: a big boost on band 18, 19 or 20 next to an unboosted band
      * spills over to it when that band's (new) energy is high enough. */
     for (i = 18; i <= 20; i++)
-        if (f->offsets[i] > 1000 && f->offsets[i + 1] == 0) {
+        if (f->a.offsets[i] > 1000 && f->a.offsets[i + 1] == 0) {
             if (oldBandE[i + 1] > 7000 || oldBandE[i + 1] > oldBandE[i] >> 1)
-                f->offsets[i + 1] = f->offsets[i];
+                f->a.offsets[i + 1] = f->a.offsets[i];
             break;
         }
 
-    f->dual_stereo = stereo_analysis(m, X, N0);
+    f->a.dual_stereo = stereo_analysis(m, X, N0);
     i = hysteresis_decision(510, kIntensityThr, kIntensityHys, 22 - f->drop, st->intensity);
     st->intensity = IMIN(endc, IMAX(0, i));
 
-    f->alloc_trim = 5;
+    f->a.alloc_trim = 5;
     if (tell + (6 << 3) <= total_bits - f->total_boost) {
-        f->alloc_trim = alloc_trim_analysis(m, X, f->bandLogE, endc, N0, f->tf_estimate,
+        f->a.alloc_trim = alloc_trim_analysis(m, X, f->bandLogE, endc, N0, f->tf_estimate,
                                             st->intensity);
-        ec_enc_icdf(enc, f->alloc_trim, kTrimIcdf, 7);
+        ec_enc_icdf(enc, f->a.alloc_trim, kTrimIcdf, 7);
     }
 
-    f->alloc_bits = total_bits - (int32_t)ec_tell_frac(enc) - 1;
-    f->anti_collapse_rsv = f->isTransient && f->alloc_bits >= 40 ? 8 : 0;
-    f->alloc_bits -= f->anti_collapse_rsv;
-    f->codedBands = compute_allocation(m, endc, f->offsets, caps, f->alloc_trim, &st->intensity,
-                                       &f->dual_stereo, f->alloc_bits, &f->balance, f->pulses,
-                                       f->fine_quant, f->fine_priority, enc, st->lastCodedBands,
-                                       endc - 1, bitrate > 192000);
+    f->a.total = total_bits - (int32_t)ec_tell_frac(enc) - 1;
+    f->anti_collapse_rsv = f->isTransient && f->a.total >= 40 ? 8 : 0;
+    f->a.total -= f->anti_collapse_rsv;
+    if (ssc_stage_hook) {
+        memcpy(ssc_stage_a, &f->a, sizeof ssc_stage_a);
+        ssc_stage_hook(SSC_STAGE_PRE_ALLOC, st, enc);
+    }
+    f->codedBands = compute_allocation(st, &f->a, enc, endc, endc - 1);
     if (st->lastCodedBands)
         st->lastCodedBands =
             IMIN(st->lastCodedBands + 1, IMAX(st->lastCodedBands - 1, f->codedBands));
     else
         st->lastCodedBands = f->codedBands;
 
-    quant_fine_energy(m, endc, oldBandE, f->error, f->fine_quant, enc, C);
+    if (ssc_stage_hook) {
+        memcpy(ssc_stage_a, &f->a, sizeof ssc_stage_a);
+        ssc_stage_coded = f->codedBands;
+        ssc_stage_hook(SSC_STAGE_PRE_FINE, st, enc);
+    }
+    quant_fine_energy(m, endc, oldBandE, f->error, f->a.fine_quant, enc);
     (void)nb;
 }
 
@@ -804,23 +817,22 @@ static void fill_stage_alloc(const SscEncoder *st, const SscFrame *f) {
     a->end = st->end - f->drop;
     a->shortBlocks = f->shortBlocks;
     a->spread = st->spread_decision;
-    a->dual_stereo = f->dual_stereo;
+    a->dual_stereo = f->a.dual_stereo;
     a->intensity = st->intensity;
     a->total_bits = (f->total_bits << 3) - f->anti_collapse_rsv;
-    a->balance = f->balance;
+    a->balance = f->a.balance;
     a->codedBands = f->codedBands;
     for (i = 0; i < 22; i++) {
         a->tf_res[i] = f->tf_res[i];
-        a->pulses[i] = f->pulses[i];
-        a->fine_quant[i] = f->fine_quant[i];
-        a->fine_priority[i] = f->fine_priority[i];
+        a->pulses[i] = f->a.pulses[i];
+        a->fine_quant[i] = f->a.fine_quant[i];
+        a->fine_priority[i] = f->a.fine_priority[i];
     }
     memcpy(a->bandE, f->bandE, sizeof a->bandE);
     memcpy(a->error, f->error, sizeof a->error);
 }
 
-/* PVQ, anti-collapse flag, final energy bits and the end-of-frame state
- * (ssc_encode @0x110e4..0x113f4). */
+/* PVQ, anti-collapse flag, final energy bits and the end-of-frame state. */
 static void finish_frame(SscEncoder *st, ec_enc *enc, SscFrame *f) {
     const SscMode *m = st->mode;
     int nb = m->nbEBands, C = st->channels, endc = st->end - f->drop, i;
@@ -829,14 +841,14 @@ static void finish_frame(SscEncoder *st, ec_enc *enc, SscFrame *f) {
     unsigned char collapse_masks[2 * SSC_NB_EBANDS];
     uint32_t seed = (uint32_t)st->rng;
 
-    quant_all_bands(m, endc, (int16_t *)SSC_FREQ, collapse_masks, f->bandE, f->pulses,
-                    f->shortBlocks, st->spread_decision, f->dual_stereo, st->intensity, f->tf_res,
-                    (f->total_bits << 3) - f->anti_collapse_rsv, f->balance, enc, f->codedBands,
+    quant_all_bands(m, endc, (int16_t *)SSC_FREQ, collapse_masks, f->bandE, f->a.pulses,
+                    f->shortBlocks, st->spread_decision, f->a.dual_stereo, st->intensity, f->tf_res,
+                    (f->total_bits << 3) - f->anti_collapse_rsv, f->a.balance, enc, f->codedBands,
                     &seed);
     st->rng = (int32_t)seed;
     if (f->anti_collapse_rsv > 0) ec_enc_bits(enc, st->consec_transient < 2, 1);
-    quant_energy_finalise(m, endc, oldBandE, f->error, f->fine_quant, f->fine_priority,
-                          f->total_bits - ec_tell(enc), enc, C);
+    quant_energy_finalise(m, endc, oldBandE, f->error, f->a.fine_quant, f->a.fine_priority,
+                          f->total_bits - ec_tell(enc), enc);
     if (f->silence)
         for (i = 0; i < nb * C; i++) oldBandE[i] = -28672;
     for (i = endc; i < nb; i++) oldBandE[i] = oldBandE[nb + i] = -28672;  /* dropped bands */

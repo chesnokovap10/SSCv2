@@ -1,16 +1,19 @@
 #!/usr/bin/env python3
 """Dump the blob's two static CELT modes and named data tables.
 
-ssc_custom_mode_create(Fs, 864, &err): 44100/48000 -> va 0x28a18, 96000 -> va 0x28aa0.
+ssc_custom_mode_create(Fs, 864, &err): 44100/48000 -> va 0x1b9c0, 96000 -> va 0x1ba40.
 
-Samsung's struct differs from libopus OpusCustomMode (no preemph[], no maxLM,
-a second 11x22 allocation table, 2 FFT states, int32 caps per band):
+Samsung's struct (128 bytes) differs from libopus OpusCustomMode (no preemph[],
+no maxLM, no window pointer, a second 11x22 allocation table, 2 FFT states,
+int32 caps per band):
     0 Fs            4 overlap        8 nbEBands       12 effEBands
    16 eBands*      24 nbShortMdcts  28 shortMdctSize  32 nbAllocVectors
    40 allocVectors* (u8 11x22)      48 allocVectors2* (u8 11x22, Samsung)
-   56 logN*  (i16 x22)              64 window* (i32 Q31 x overlap)
-   72 mdct { n, maxshift, kfft[2]*, trig* }          (72..103)
-  104 cache { size, index*, bits*, caps* (i32 x22) } (104..135)
+   56 logN*  (i16 x22)
+   64 mdct { n, maxshift, kfft[2]*, trig* }          (64..95)
+   96 cache { size, index*, bits*, caps* (i32 x22) } (96..127)
+The MDCT window (i32 Q31 x overlap) is a constant table that ssc_mdct_forward
+addresses directly (va 0x3d80).
 
   py -3.14 libssc/research/dump_mode.py            # human-readable
   py -3.14 libssc/research/dump_mode.py --json F   # all tables for phase 2
@@ -25,12 +28,16 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "oracle"))
 from ssc_oracle import IMAGE_BASE, Oracle  # noqa: E402
 
-MODES = {"48k": 0x28A18, "96k": 0x28AA0}
+MODES = {"48k": 0x1B9C0, "96k": 0x1BA40}
+WINDOW_VA = 0x3D80
 NAMED = {  # exported data objects: name -> (element format, count)
-    "eMeans": ("b", 25), "tf_select_table": ("b", 8), "coeffs": ("i", 5),
-    "coeffs96andbelow": ("i", 5), "cutoff_start_index": ("i", 2),
-    "cutoff_start_uhq_index": ("i", 16), "win_square": ("i", 108), "margin": ("i", 1),
+    "ssc_eMeans_tmp": ("b", 25), "ssc_tf_select_table": ("b", 8), "coeffs": ("i", 5),
+    "coeffs96andbelow": ("i", 5), "win_square": ("i", 108), "margin": ("i", 1),
     "headroom_gain": ("i", 240),
+    **{g: ("h", 1) for g in ("GAIN_DB_MINUS_0_307", "GAIN_DB_MINUS_0_482", "GAIN_DB_MINUS_0_572",
+                            "GAIN_VALUE_0_047", "GAIN_VALUE_0_094", "GAIN_VALUE_0_100",
+                            "GAIN_VALUE_0_200", "GAIN_VALUE_0_400", "GAIN_VALUE_0_550",
+                            "GAIN_VALUE_0_700")},
 }
 
 
@@ -39,16 +46,17 @@ def va(p):
 
 
 def read_mode(o, mode_va):
-    r = o.read(IMAGE_BASE + mode_va, 136)
+    r = o.read(IMAGE_BASE + mode_va, 128)
     Fs, overlap, nb, eff = struct.unpack_from("<4i", r, 0)
     eBands_p, = struct.unpack_from("<Q", r, 16)
     nbShort, shortSize, nbAlloc = struct.unpack_from("<3i", r, 24)
-    alloc_p, alloc2_p, logN_p, window_p = struct.unpack_from("<4Q", r, 40)
-    n, maxshift = struct.unpack_from("<2i", r, 72)
-    kfft_p = struct.unpack_from("<2Q", r, 80)
-    trig_p, = struct.unpack_from("<Q", r, 96)
-    csize, = struct.unpack_from("<i", r, 104)
-    cidx_p, cbits_p, ccaps_p = struct.unpack_from("<3Q", r, 112)
+    alloc_p, alloc2_p, logN_p = struct.unpack_from("<3Q", r, 40)
+    window_p = IMAGE_BASE + WINDOW_VA
+    n, maxshift = struct.unpack_from("<2i", r, 64)
+    kfft_p = struct.unpack_from("<2Q", r, 72)
+    trig_p, = struct.unpack_from("<Q", r, 88)
+    csize, = struct.unpack_from("<i", r, 96)
+    cidx_p, cbits_p, ccaps_p = struct.unpack_from("<3Q", r, 104)
     kfft = []
     for k in kfft_p:
         nfft, shift = struct.unpack_from("<2i", o.read(k, 8), 0)

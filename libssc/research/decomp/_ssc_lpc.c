@@ -1,88 +1,73 @@
-/* _ssc_lpc @ 001117a8 size 372 */
+/* _ssc_lpc @ 00110e30 size 532 */
 
-void _ssc_lpc(undefined8 *param_1,int *param_2)
+void _ssc_lpc(undefined2 *param_1,int *param_2)
 
 {
   int iVar1;
-  ulong uVar2;
-  long lVar3;
-  ulong uVar4;
+  long lVar2;
+  int iVar3;
+  int iVar4;
   int iVar5;
-  long lVar6;
-  ulong uVar7;
-  int *piVar8;
-  int *piVar9;
-  int iVar10;
-  ulong uVar11;
-  int *piVar12;
-  ulong uVar13;
-  undefined8 uVar14;
-  int local_84;
-  int local_80 [6];
-  long local_68;
+  undefined2 uVar6;
+  int iVar7;
+  int iVar8;
   
-  lVar3 = tpidr_el0;
-  local_68 = *(long *)(lVar3 + 0x28);
-  iVar10 = *param_2;
-  local_80[0] = 0;
-  local_80[1] = 0;
-  local_80[2] = 0;
-  local_80[3] = 0;
-  if (iVar10 == 0) {
-    uVar14 = 0;
+  iVar5 = *param_2;
+  if (iVar5 == 0) {
+    iVar8 = 0;
+LAB_00110efc:
+    iVar7 = 0;
+    iVar3 = 0;
   }
   else {
-    uVar11 = 0;
-    piVar12 = &local_84;
-    uVar13 = 1;
-    uVar7 = 0;
-    do {
-      if (3 < uVar7) break;
-      iVar5 = 0;
-      uVar2 = uVar11;
-      piVar8 = local_80;
-      uVar4 = uVar7;
-      while (uVar4 != 0) {
-        iVar5 = iVar5 + (int)((ulong)((long)*(int *)((long)param_2 + uVar2) * (long)*piVar8) >> 0x1f
-                             );
-        uVar2 = uVar2 - 4;
-        piVar8 = piVar8 + 1;
-        uVar4 = uVar2;
-      }
-      uVar2 = uVar7 + 1;
-      iVar5 = frac_div32(param_2[uVar2] + iVar5 * 8 & 0xfffffff8,iVar10);
-      lVar6 = (long)-iVar5;
-      local_80[uVar7] = -iVar5 >> 3;
-      if ((uVar2 & 0xfffffffe) != 0) {
-        uVar7 = uVar13 >> 1;
-        piVar8 = local_80;
-        piVar9 = piVar12;
-        do {
-          iVar5 = *piVar9;
-          iVar1 = *piVar8;
-          uVar7 = uVar7 - 1;
-          *piVar8 = iVar1 + (int)((ulong)(iVar5 * lVar6) >> 0x1f);
-          *piVar9 = iVar5 + (int)((ulong)(iVar1 * lVar6) >> 0x1f);
-          piVar8 = piVar8 + 1;
-          piVar9 = piVar9 + -1;
-        } while (uVar7 != 0);
-      }
-      iVar10 = iVar10 - (int)(((ulong)(lVar6 * lVar6) >> 0x1f) * (long)iVar10 >> 0x1f);
-      uVar11 = uVar11 + 4;
-      piVar12 = piVar12 + 1;
-      uVar13 = uVar13 + 1;
-      uVar7 = uVar2;
-    } while (*param_2 >> 10 <= iVar10);
-    uVar14 = CONCAT26((short)((uint)(SUB84(local_80._8_8_,4) + 0x8000) >> 0x10),
-                      CONCAT24((short)((uint)((int)local_80._8_8_ + 0x8000) >> 0x10),
-                               CONCAT22((short)((uint)(SUB84(local_80._0_8_,4) + 0x8000) >> 0x10),
-                                        (short)((uint)((int)local_80._0_8_ + 0x8000) >> 0x10))));
+    iVar3 = ssc_frac_div32(param_2[1] & 0xfffffff8,iVar5);
+    iVar3 = -iVar3;
+    iVar1 = iVar5 >> 10;
+    iVar8 = iVar3 >> 3;
+    iVar5 = iVar5 - (int)(((ulong)((long)iVar3 * (long)iVar3) >> 0x1f) * (long)iVar5 >> 0x1f);
+    if (iVar5 < iVar1) goto LAB_00110efc;
+    iVar3 = ssc_frac_div32(((uint)((ulong)((long)param_2[1] * (long)iVar8) >> 0x1c) & 0xfffffff8) +
+                           param_2[2] & 0xfffffff8,iVar5);
+    iVar3 = -iVar3;
+    iVar7 = iVar3 >> 3;
+    iVar8 = iVar8 + (int)((ulong)((long)iVar3 * (long)iVar8) >> 0x1f);
+    iVar5 = iVar5 - (int)(((ulong)((long)iVar3 * (long)iVar3) >> 0x1f) * (long)iVar5 >> 0x1f);
+    if (iVar5 < iVar1) {
+      iVar3 = 0;
+      uVar6 = 0;
+      goto LAB_00110f08;
+    }
+    iVar4 = ssc_frac_div32(param_2[3] +
+                           ((int)((ulong)((long)param_2[1] * (long)iVar7) >> 0x1f) +
+                           (int)((ulong)((long)param_2[2] * (long)iVar8) >> 0x1f)) * 8 & 0xfffffff8,
+                           iVar5);
+    iVar4 = -iVar4;
+    iVar3 = iVar4 >> 3;
+    lVar2 = (long)iVar8;
+    iVar8 = iVar8 + (int)((ulong)((long)iVar4 * (long)iVar7) >> 0x1f);
+    iVar7 = iVar7 + (int)((ulong)(iVar4 * lVar2) >> 0x1f);
+    if (iVar1 <= iVar5 - (int)(((ulong)((long)iVar4 * (long)iVar4) >> 0x1f) * (long)iVar5 >> 0x1f))
+    {
+      iVar5 = ssc_frac_div32(param_2[4] +
+                             ((int)((ulong)((long)param_2[2] * (long)iVar7) >> 0x1f) +
+                              (int)((ulong)((long)param_2[3] * (long)iVar8) >> 0x1f) +
+                             (int)((ulong)((long)param_2[1] * (long)iVar3) >> 0x1f)) * 8 &
+                             0xfffffff8);
+      iVar5 = -iVar5;
+      lVar2 = (long)iVar8;
+      iVar8 = iVar8 + (int)((ulong)((long)iVar5 * (long)iVar3) >> 0x1f);
+      iVar3 = iVar3 + (int)((ulong)(iVar5 * lVar2) >> 0x1f);
+      iVar7 = iVar7 + (int)((ulong)((long)iVar5 * (long)iVar7) >> 0x1f);
+      uVar6 = (undefined2)((uint)((iVar5 >> 3) + 0x8000) >> 0x10);
+      goto LAB_00110f08;
+    }
   }
-  *param_1 = uVar14;
-  if (*(long *)(lVar3 + 0x28) == local_68) {
-    return;
-  }
-                    /* WARNING: Subroutine does not return */
-  __stack_chk_fail();
+  uVar6 = 0;
+LAB_00110f08:
+  param_1[3] = uVar6;
+  *param_1 = (short)((uint)(iVar8 + 0x8000) >> 0x10);
+  param_1[1] = (short)((uint)(iVar7 + 0x8000) >> 0x10);
+  param_1[2] = (short)((uint)(iVar3 + 0x8000) >> 0x10);
+  return;
 }
 

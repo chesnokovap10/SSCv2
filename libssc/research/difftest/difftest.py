@@ -54,14 +54,12 @@ def scalar_cases(rng, n):
     small = lambda: (rng.choice([rng.randrange(1, 1 << rng.randrange(1, 32)),  # noqa: E731
                                  rng.randrange(1, 1 << 31)]),)
     return [
-        ("ec_ilog", "ec_ilog", lambda: (rng.randrange(0, 1 << 32),), S32),
         ("ssc_rcp", "celt_rcp", small, S32),
         ("ssc_sqrt", "celt_sqrt", small, S32),
         ("ssc_rsqrt_norm", "celt_rsqrt_norm", lambda: (rng.randrange(16384, 65536),), s16),
         ("ssc_cos_norm", "celt_cos_norm", lambda: (rng.randrange(-(1 << 17), 1 << 17),), s16),
-        ("frac_div32", "frac_div32",
+        ("ssc_frac_div32", "frac_div32",
          lambda: (rng.randrange(-(1 << 30), 1 << 30), rng.randrange(1 << 20, 1 << 31)), S32),
-        ("ssc_lcg_rand", "lcg_rand", pos31, lambda v: v & 0xFFFFFFFF),
     ]
 
 
@@ -90,7 +88,7 @@ def run_haar1(o, ref, rng, n):
         x = [rng.randrange(-32768, 32768) for _ in range(n0 * stride)]
         raw = struct.pack(f"<{n0 * stride}h", *x)
         o.uc.mem_write(IO_BASE, raw)
-        o.call("haar1", IO_BASE, n0, stride)
+        o.call("ssc_haar1", IO_BASE, n0, stride)
         b = o.read_i16(IO_BASE, n0 * stride)
         buf = ctypes.create_string_buffer(raw, len(raw))
         ref.haar1(buf, n0, stride)
@@ -149,26 +147,26 @@ def blob_script(o, size, ops):
         o.uc.mem_write(icdf + off, t)
         icdf_addr.append(icdf + off)
         off += 8
-    o.call("ec_enc_init", ec, buf, size, max_insns=200_000)
+    o.call("ssc_ec_enc_init", ec, buf, size, max_insns=200_000)
     tells = []
     for k, a, b, c in ops:
         if k == 0:
-            o.call("ec_encode", ec, a, b, c, max_insns=200_000)
+            o.call("ssc_ec_encode", ec, a, b, c, max_insns=200_000)
         elif k == 1:
-            o.call("ec_encode_bin", ec, a, b, c, max_insns=200_000)
+            o.call("ssc_ec_encode_bin", ec, a, b, c, max_insns=200_000)
         elif k == 2:
-            o.call("ec_enc_bit_logp", ec, a, b, max_insns=200_000)
+            o.call("ssc_ec_enc_bit_logp", ec, a, b, max_insns=200_000)
         elif k == 3:
-            o.call("ec_enc_icdf", ec, a, icdf_addr[b], c, max_insns=200_000)
+            o.call("ssc_ec_enc_icdf", ec, a, icdf_addr[b], c, max_insns=200_000)
         elif k == 4:
-            o.call("ec_enc_uint", ec, a, b, max_insns=200_000)
+            o.call("ssc_ec_enc_uint", ec, a, b, max_insns=200_000)
         elif k == 5:
-            o.call("ec_enc_bits", ec, a, b, max_insns=200_000)
+            o.call("ssc_ec_enc_bits", ec, a, b, max_insns=200_000)
         elif k == 6:
             o.uc.mem_write(val, struct.pack("<i", a))
-            o.call("ec_laplace_encode", ec, val, b, c, max_insns=200_000)
-        tells.append(S32(o.call("ec_tell_frac", ec, max_insns=200_000)))
-    o.call("ec_enc_done", ec, max_insns=200_000)
+            o.call("ssc_ec_laplace_encode", ec, val, b, c, max_insns=200_000)
+        tells.append(S32(o.call("ssc_ec_tell_frac", ec, max_insns=200_000)))
+    o.call("ssc_ec_enc_done", ec, max_insns=200_000)
     return o.read(buf, size), tells
 
 

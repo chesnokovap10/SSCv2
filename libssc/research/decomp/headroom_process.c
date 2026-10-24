@@ -1,11 +1,11 @@
-/* headroom_process @ 0010d030 size 12 */
+/* headroom_process @ 0010add8 size 12 */
 
 void headroom_process(void)
 
 {
-  int in_w4;
+  int in_w5;
   
-  if (in_w4 != 0) {
+  if (in_w5 != 0) {
     uhq_headroom();
     return;
   }

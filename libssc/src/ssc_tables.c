@@ -6,11 +6,10 @@
 _Static_assert(sizeof(ssc_fft_state) == 24, "fft state layout");
 _Static_assert(sizeof(ssc_mdct_lookup) == 32, "mdct layout");
 _Static_assert(sizeof(ssc_pulse_cache) == 32, "cache layout");
-_Static_assert(sizeof(SscMode) == 136, "mode layout");
+_Static_assert(sizeof(SscMode) == 128, "mode layout");
 _Static_assert(offsetof(SscMode, allocVectors) == 40, "mode layout");
-_Static_assert(offsetof(SscMode, window) == 64, "mode layout");
-_Static_assert(offsetof(SscMode, mdct) == 72, "mode layout");
-_Static_assert(offsetof(SscMode, cache) == 104, "mode layout");
+_Static_assert(offsetof(SscMode, mdct) == 64, "mode layout");
+_Static_assert(offsetof(SscMode, cache) == 96, "mode layout");
 
 /* shared MDCT / FFT tables */
 static const int32_t ssc_trig[433] = {
@@ -256,7 +255,7 @@ static const int32_t ssc_twiddles[864] = {
     2145439719, 93671921, 2146575155, 62458958, 2147256513, 31232782,
 };
 
-static const int32_t ssc_window[108] = {
+const int32_t ssc_window[108] = {
     178392, 1605298, 4457900, 8733769, 14429242, 21539396,
     30058014, 39977549, 51289074, 63982232, 78045176, 93464506,
     110225207, 128310575, 147702149, 168379639, 190320859, 213501651,
@@ -294,7 +293,7 @@ static const uint8_t ssc_alloc_vectors[242] = {
 static const ssc_fft_state ssc_kfft144 = {144, 0, ssc_bitrev144, ssc_twiddles};
 static const ssc_fft_state ssc_kfft18 = {18, 3, ssc_bitrev18, ssc_twiddles};
 
-/* mode 48k: blob va 0x28a18 */
+/* mode 48k: blob va 0x1b9c0 */
 static const int16_t eBands_48k[23] = {
     0, 1, 2, 3, 4, 5, 6, 7, 8, 10, 12, 14,
     16, 20, 24, 28, 34, 40, 48, 60, 72, 84, 102,
@@ -360,12 +359,12 @@ static const int32_t cache_caps_48k[22] = {
 const SscMode ssc_mode_48k = {
     44100, 108, 22, 21, eBands_48k,
     8, 108, 11,
-    ssc_alloc_vectors, alloc2_48k, logN_48k, ssc_window,
+    ssc_alloc_vectors, alloc2_48k, logN_48k,
     { 1728, 3, { &ssc_kfft144, &ssc_kfft18 }, ssc_trig },
     { 346, cache_index_48k, cache_bits_48k, cache_caps_48k },
 };
 
-/* mode 96k: blob va 0x28aa0 */
+/* mode 96k: blob va 0x1ba40 */
 static const int16_t eBands_96k[23] = {
     0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11,
     12, 14, 16, 20, 24, 30, 36, 54, 72, 90, 108,
@@ -430,7 +429,7 @@ static const int32_t cache_caps_96k[22] = {
 const SscMode ssc_mode_96k = {
     96000, 108, 22, 21, eBands_96k,
     8, 108, 11,
-    ssc_alloc_vectors, alloc2_96k, logN_96k, ssc_window,
+    ssc_alloc_vectors, alloc2_96k, logN_96k,
     { 1728, 3, { &ssc_kfft144, &ssc_kfft18 }, ssc_trig },
     { 334, cache_index_96k, cache_bits_96k, cache_caps_96k },
 };
@@ -450,15 +449,6 @@ const int32_t coeffs[5] = {
 
 const int32_t coeffs96andbelow[5] = {
     179736481, 359472962, 179736481, -87442742, -94632269,
-};
-
-int32_t cutoff_start_index[2] = {
-    48759492, 53478156,
-};
-
-int32_t cutoff_start_uhq_index[16] = {
-    49545954, 51905286, 54264618, 56623950, 40108626, 42467958, 44827290, 47186622,
-    30671298, 33030630, 35389962, 37749294, 21233970, 23593302, 25952634, 28311966,
 };
 
 int32_t win_square[108] = {
@@ -502,3 +492,15 @@ int32_t headroom_gain[240] = {
     27334, 27319, 27305, 27290, 27275, 27260, 27245, 27231, 27216, 27201, 27186, 27171,
     27157, 27142, 27127, 27112, 27097, 27083, 27068, 27053, 27038, 27023, 27009, 26990,
 };
+
+/* Q15 constants (blob exports, int16) */
+const int16_t GAIN_DB_MINUS_0_307 = 31630;
+const int16_t GAIN_DB_MINUS_0_482 = 31000;
+const int16_t GAIN_DB_MINUS_0_572 = 30680;
+const int16_t GAIN_VALUE_0_047 = 1536;
+const int16_t GAIN_VALUE_0_094 = 3072;
+const int16_t GAIN_VALUE_0_100 = 3277;
+const int16_t GAIN_VALUE_0_200 = 6554;
+const int16_t GAIN_VALUE_0_400 = 13107;
+const int16_t GAIN_VALUE_0_550 = 18022;
+const int16_t GAIN_VALUE_0_700 = 22938;

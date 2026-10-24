@@ -1,35 +1,41 @@
 # libssc
 
 Своя реализация Samsung Scalable Codec (SSC): энкодер и декодер, бит-точные
-относительно `libScalable_Encoder.so`. Только приватное использование.
+относительно `libScalable_Encoder.so` из текущей прошивки телефона. Только
+приватное использование.
 План и журнал: [PLAN.md](PLAN.md).
 
 | Путь | Что |
 |---|---|
 | `oracle/` | эталон: оригинальный блоб под Unicorn + трассировка |
-| `ref/libScalable_Encoder.so` | блоб Samsung (aarch64, sha256 `9248e264…b461`), только для сверки |
+| `ref/libScalable_Encoder.so` | блоб Samsung из прошивки (aarch64, clang 14, sha256 `90c4c1cb…ce7`), только для сверки |
+| `ref/libbluetooth_jni.so` | Bluetooth-стек телефона (из `com.android.bt.apex`): кто и как вызывает энкодер |
 | `testdata/*.golden` | 6 профилей × 16 кадров, замороженный вывод блоба |
 | `src/` | **сама библиотека** (C, fixed-point): `src/opus/` — Opus 1.1.5 + патч ec24, `ssc_*.c` — наш код |
 | `test/twin.py` | стенд-двойник: libssc и блоб с одинаковыми входами, побайтное сравнение (в т.ч. кадры голденов целиком) |
 | `test/replay.py` | реальные вызовы функции из блоба (вход/выход/глобалы) → та же функция libssc |
 | `test/stages.py` | оба энкодера покадрово: контрольные точки по цепочке, кадр, состояние и общие буферы после кадра |
+| `test/corpus.py` | кадры целиком: все 14 битрейтов × 10 сигналов |
 | `test/signals.py` | детерминированные тестовые сигналы × профили |
 | `tools/gen_tables.py` | `research/tables.json` → `src/ssc_tables.c` |
-| `research/` | реверс: карта функций, таблицы режимов, модель заголовка, дифф-стенд, декомпиляция |
+| `research/` | реверс: таблицы режимов, модель заголовка, дифф-стенд, декомпиляция |
 
 ## Сборка и проверка
 
 ```powershell
 py -3.14 libssc\build.py          # MinGW gcc -> libssc\build\libssc.dll
-py -3.14 libssc\test\twin.py      # 20 проверок против блоба, включая голдены целиком
+py -3.14 libssc\test\twin.py      # 17 проверок против блоба, включая голдены целиком
+py -3.14 libssc\test\corpus.py    # кадры целиком, все битрейты и сигналы
 py -3.14 libssc\test\replay.py    # перенесённые функции на реальных вызовах
 py -3.14 libssc\test\stages.py    # покадровые контрольные точки
 # replay.py и stages.py: --rates all — все 14 битрейтов вместо 6 профилей
 ```
 
 libssc — ABI-двойник блоба: те же имена функций, сигнатуры и раскладки
-структур (режим, `ec_ctx`, состояние энкодера), поэтому любую функцию можно
-вызвать с обеих сторон на одной и той же памяти.
+структур (режим, `ec_ctx`, состояние энкодера, `SscAlloc`), поэтому любую
+функцию можно вызвать с обеих сторон на одной и той же памяти. Имена блоба
+(`ssc_quant_all_bands`, `ssc_ec_encode`, …) даёт `src/ssc_names.h`, который
+`build.py` подключает ко всем файлам (`-include`).
 
 ## research/
 
@@ -55,6 +61,7 @@ Windows, без WSL2 и Qiling. Это эталон для пошаговой с
 ```powershell
 py -3.14 -m pip install unicorn          # один раз (проверено на 2.1.4)
 py -3.14 libssc\oracle\ssc_oracle.py check-golden
+py -3.14 libssc\oracle\ssc_oracle.py make-golden   # переснять голдены с блоба
 py -3.14 libssc\oracle\ssc_oracle.py trace --bitrate 229000 --frame 1
 py -3.14 libssc\oracle\ssc_oracle.py trace --rate 96000 --bitrate 584000 --max-depth 1
 ```
@@ -64,7 +71,7 @@ py -3.14 libssc\oracle\ssc_oracle.py trace --rate 96000 --bitrate 584000 --max-d
 ```python
 from ssc_oracle import Oracle, golden_pcm
 o = Oracle(trace=True).open(48000, 2, 229000)
-o.probes_exit["compute_band_energies"] = lambda o, rec: print(rec.args[:4], rec.ret)
+o.probes_exit["ssc_compute_band_energies"] = lambda o, rec: print(rec.args[:4], rec.ret)
 frame = o.encode(golden_pcm(0x5A5C2026, 0, 48000))   # 864 x 2ch, int32, шкала 2^29
 for rec in o.calls: ...                               # дерево вызовов последнего кадра
 ```

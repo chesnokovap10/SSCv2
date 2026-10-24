@@ -7,6 +7,9 @@
  * order of accumulation does not matter). The Opus files are compiled here
  * under opus_* names; the blob-named entry points below fix the parameters.
  */
+#undef pitch_downsample  /* ssc_names.h: the wrappers below get the blob names */
+#undef pitch_search
+#undef remove_doubling
 #define pitch_downsample opus_pitch_downsample
 #define pitch_search opus_pitch_search
 #define remove_doubling opus_remove_doubling
@@ -43,15 +46,19 @@ void dual_inner_prod(const opus_val16 *x, const opus_val16 *y01, const opus_val1
     dual_inner_prod_c(x, y01, y02, 864 >> 1, xy1, xy2);
 }
 
-void pitch_downsample(celt_sig *x[], opus_val16 *x_lp, int len) {
+/* Channel pointers instead of Opus' array. The blob takes the max |x| over
+ * x0[0 .. 2*len), which is both channels because ssc_encode always passes
+ * x1 = x0 + len (the two halves of _pre_shared). */
+void ssc_pitch_downsample(celt_sig *x0, celt_sig *x1, opus_val16 *x_lp, int len) {
+    celt_sig *x[2] = {x0, x1};
     opus_pitch_downsample(x, x_lp, len, 2, 0);
 }
 
-void pitch_search(const opus_val16 *x_lp, opus_val16 *y, int len, int max_pitch, int *pitch) {
+void ssc_pitch_search(const opus_val16 *x_lp, opus_val16 *y, int len, int max_pitch, int *pitch) {
     opus_pitch_search(x_lp, y, len, max_pitch, pitch, 0);
 }
 
-opus_val16 remove_doubling(opus_val16 *x, int maxperiod, int minperiod, int N, int *T0,
+opus_val16 ssc_remove_doubling(opus_val16 *x, int maxperiod, int minperiod, int N, int *T0,
                            int prev_period, opus_val16 prev_gain) {
     return opus_remove_doubling(x, maxperiod, minperiod, N, T0, prev_period, prev_gain, 0);
 }
