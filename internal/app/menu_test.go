@@ -52,7 +52,7 @@ func TestMenuEnglishUHQ(t *testing.T) {
 			bitrate = &items[i]
 		}
 	}
-	if bitrate == nil || len(bitrate.Sub) != 8 {
+	if bitrate == nil || len(bitrate.Sub) != 7 { // 886 needs Max MTU
 		t.Fatalf("bitrate submenu: %+v", bitrate)
 	}
 	checked := 0
@@ -64,4 +64,24 @@ func TestMenuEnglishUHQ(t *testing.T) {
 	if checked != 584 {
 		t.Errorf("checked bitrate %d, want 584", checked)
 	}
+}
+
+func TestMenuAACNoMaxMTU(t *testing.T) {
+	t.Setenv("APPDATA", t.TempDir())
+	a := &App{mode: config.ModeAAC, s: &config.Settings{Mode: config.ModeAAC, AACBitrate: 256}}
+	for _, it := range a.menu() {
+		if it.Sub == nil || it.Sub[0].ID != idBitrateBase {
+			continue
+		}
+		for _, b := range it.Sub {
+			if b.ID == idBitrateBase+256 {
+				t.Error("256 offered without Max MTU")
+			}
+			if b.ID == idBitrateBase && !b.Checked {
+				t.Error("saved 256 without Max MTU should show as Auto")
+			}
+		}
+		return
+	}
+	t.Fatal("no bitrate submenu")
 }

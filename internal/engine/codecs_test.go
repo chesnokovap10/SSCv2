@@ -72,3 +72,34 @@ func TestSSCUHQ(t *testing.T) {
 		t.Fatalf("UHQ frame: %d % X %v", len(out), out[:4], err)
 	}
 }
+
+func TestMaxMTUAuto(t *testing.T) {
+	defer func() { sscMaxMTU = false }()
+	sscMaxMTU = true
+	if got, _ := sscBitrate(48000, 1005, 0x0C); got != 229000 {
+		t.Errorf("max MTU auto: %d, want 229000", got)
+	}
+	if got, _ := sscBitrate(48000, 1005, 0x04); got != 128000 {
+		t.Errorf("max MTU auto, limited sink: %d, want 128000", got)
+	}
+	if got, _ := sscBitrate(96000, 1005, 0x0A); got != 886000 {
+		t.Errorf("max MTU UHQ auto: %d, want 886000", got)
+	}
+}
+
+func TestBitrateFits(t *testing.T) {
+	for _, c := range []struct {
+		codec  string
+		kbps   int
+		maxMTU bool
+		want   bool
+	}{
+		{"aac", 0, false, true}, {"aac", 224, false, true}, {"aac", 256, false, false}, {"aac", 256, true, true},
+		{"ssc", 256, false, true}, {"ssc", 328, false, false}, {"ssc", 328, true, true},
+		{"ssc_uhq", 584, false, true}, {"ssc_uhq", 886, false, false}, {"ssc_uhq", 886, true, true},
+	} {
+		if got := BitrateFits(c.codec, c.kbps, c.maxMTU); got != c.want {
+			t.Errorf("%s %d maxMTU=%v: %v", c.codec, c.kbps, c.maxMTU, got)
+		}
+	}
+}

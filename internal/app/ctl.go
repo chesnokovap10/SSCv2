@@ -17,6 +17,7 @@ import (
 
 	"sscv2/internal/codec/ssc"
 	"sscv2/internal/config"
+	"sscv2/internal/engine"
 	"sscv2/internal/helper"
 	"sscv2/internal/ipc"
 	"sscv2/internal/keys"
@@ -197,6 +198,12 @@ func (a *App) ctl(args []string) string {
 			ok := false
 			for _, b := range bitrates[m] {
 				ok = ok || b == n && err == nil && n > 0
+			}
+			a.mu.Lock()
+			maxMTU := a.s.MaxMTU
+			a.mu.Unlock()
+			if ok && !engine.BitrateFits(string(m), n, maxMTU) {
+				return fmt.Sprintf("error: %d kbps needs maxmtu on", n)
 			}
 			if !ok {
 				return fmt.Sprintf("error: bitrate auto|%v for %s", bitrates[m][1:], m)

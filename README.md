@@ -47,7 +47,7 @@ green — streaming, red — error.
 | Codec | Bitrates, kbps | "Auto" |
 |---|---|---|
 | AAC | 128, 160, 192, 224, 256 | as much as the headphones' packet holds: `(MTU − 12) × 8 × rate / 1024`, at most 256 (Buds2 Pro: 250 at 48 kHz; 256 with "Max MTU") |
-| SSC | 88, 96, 128, 192, 229, 256, 328 | like the phone: 192 (128 if the headphones announce a limit) |
+| SSC | 88, 96, 128, 192, 229, 256, 328 | like the phone: 192 (128 if the headphones announce a limit); with "Max MTU" — 229, the best on Buds2 Pro |
 | SSC UHQ | 152, 250, 291, 308, 442, 584, 886 | the highest one packet holds (584; 886 with "Max MTU") |
 
 * SSC is our `libssc`, a bit-exact twin of the encoder in the phone firmware. Windows output
@@ -55,7 +55,9 @@ green — streaming, red — error.
   uses at 48 kHz) — 229 is the practical maximum.
 * SSC UHQ: the 48 kHz capture is upsampled 2× to 96 kHz, 9 ms frames. Buds2 Pro accept it
   although they do not announce it.
-* Frames larger than the announced packet go in packets of up to 1017 bytes automatically.
+* Bitrates whose frames do not fit the headphones' packet (AAC 256, SSC 328, UHQ 886) are
+  offered only with "Max MTU". The SSC configuration byte (`ctl ssccap`) is not saved — it lasts
+  until the tray restarts.
 
 ### Buttons and volume
 

@@ -337,8 +337,9 @@ func (a *App) startEngineLocked() {
 		SSCUHQ:       a.mode == config.ModeSSCUHQ,
 		SSCCap:       a.s.SSCCap,
 	}
+	cfg.AACBitrate = a.bitrateFor(config.ModeAAC)
 	if a.mode != config.ModeAAC {
-		cfg.SSCBitrate = a.s.Bitrate(a.mode)
+		cfg.SSCBitrate = a.bitrateFor(a.mode)
 	}
 	if a.s.Headphones != nil {
 		cfg.Headphones = a.s.Headphones.Addr
@@ -795,13 +796,29 @@ func autoHint(m config.Mode, maxMTU bool) string {
 		if maxMTU {
 			return T("256 кбит/с", "256 kbps")
 		}
-		return T("сколько вмещает пакет наушников", "as much as their packet holds")
+		return T("250 кбит/с - сколько вмещает пакет", "250 kbps - as much as a packet holds")
 	case config.ModeSSC:
+		if maxMTU {
+			return T("229 кбит/с - лучший на Buds2 Pro", "229 kbps - the best on Buds2 Pro")
+		}
 		return T("как телефон: 192 кбит/с", "like the phone: 192 kbps")
 	case config.ModeSSCUHQ:
-		return T("наибольший, что вмещает пакет", "the highest one packet holds")
+		if maxMTU {
+			return T("886 кбит/с", "886 kbps")
+		}
+		return T("584 кбит/с - сколько вмещает пакет", "584 kbps - as much as a packet holds")
 	}
 	return ""
+}
+
+// bitrateFor is the saved bitrate of a codec if it can be streamed with
+// the current Max MTU setting, else 0 (auto).
+func (a *App) bitrateFor(m config.Mode) int {
+	b := a.s.Bitrate(m)
+	if !engine.BitrateFits(string(m), b, a.s.MaxMTU) {
+		return 0
+	}
+	return b
 }
 
 func (a *App) menu() []tray.Item {
@@ -830,13 +847,16 @@ func (a *App) menu() []tray.Item {
 	}
 	items = append(items, tray.Item{Text: T("Кодек: ", "Codec: ") + modeName(mode), Sub: codecs})
 	if mode.Streaming() {
-		cur := a.s.Bitrate(mode)
+		cur := a.bitrateFor(mode)
 		label := T("Битрейт: ", "Bitrate: ") + bitrateText(cur)
 		if a.st.Streaming && a.st.BitrateKbps > 0 && cur == 0 {
 			label += fmt.Sprintf(" (%d)", a.st.BitrateKbps)
 		}
 		var sub []tray.Item
 		for _, b := range bitrates[mode] {
+			if !engine.BitrateFits(string(mode), b, a.s.MaxMTU) {
+				continue // needs Max MTU
+			}
 			t := bitrateText(b)
 			if b == 0 {
 				t += " (" + autoHint(mode, a.s.MaxMTU) + ")"
@@ -1115,7 +1135,7 @@ func (a *App) infoText() string {
 	if mode == config.ModeOff {
 		w(T("Кодек: выкл (Bluetooth Windows)", "Codec: off (Windows Bluetooth)"))
 	} else {
-		w(T("Кодек: %s, битрейт %s", "Codec: %s, bitrate %s"), modeName(mode), bitrateText(s.Bitrate(mode)))
+		w(T("Кодек: %s, битрейт %s", "Codec: %s, bitrate %s"), modeName(mode), bitrateText(a.bitrateFor(mode)))
 	}
 	w("")
 	if st.Mode == driver.NotPresent {

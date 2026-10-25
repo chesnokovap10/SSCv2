@@ -90,6 +90,7 @@ func Run(in io.Reader, stdout *os.File) int {
 	aacForced = e.cfg.AACBitrate * 1000
 	sscForced = e.cfg.SSCBitrate * 1000
 	sscUHQMode = e.cfg.SSCUHQ
+	sscMaxMTU = e.cfg.MaxMTU
 	logf("engine start %s: codec=%s uhq=%v bitrate aac=%d ssc=%d maxmtu=%v headphones=%q mouse=%q adapter=%04X:%04X debug=%v lang=%s",
 		ipc.Version, e.cfg.Codec, e.cfg.SSCUHQ, e.cfg.AACBitrate, e.cfg.SSCBitrate, e.cfg.MaxMTU, e.cfg.Headphones, e.cfg.Mouse,
 		e.cfg.VID, e.cfg.PID, e.cfg.Debug, i18n.Lang())
@@ -183,8 +184,7 @@ func (e *engine) run() error {
 		Logf:      logf,
 		Verbose:   e.cfg.Verbose,
 		Debug:     e.cfg.Debug,
-		ForceMediaMTU: map[bool]int{true: overMTU}[e.cfg.MaxMTU || e.cfg.AACMode == "over" ||
-			e.cfg.Codec == "ssc" && sscNeedsOver(e.cfg.SSCBitrate)],
+		ForceMediaMTU: map[bool]int{true: overMTU}[e.cfg.MaxMTU || e.cfg.AACMode == "over"],
 		USBIDs: [][2]uint16{{e.cfg.VID, e.cfg.PID}},
 	}
 	if e.cfg.Mouse != "" {

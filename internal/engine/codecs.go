@@ -141,8 +141,39 @@ func sscEncodeRate(captureRate int) int {
 	return captureRate
 }
 
-// sscNeedsOver: a forced bitrate whose frames exceed the Buds' packet goes
-// with our own larger media MTU (as Max MTU).
+// sscMaxMTU: Settings > Max MTU is on (1005-byte payload).
+var sscMaxMTU bool
+
+// sscBestBasic: "Auto" for 48 kHz SSC with Max MTU - the best-sounding
+// rate on Galaxy Buds2 Pro (256k/328k are the "wide" modes the phone never
+// sends at 48 kHz; they sound choked).
+const sscBestBasic = 229000
+
+// maxPayload: the media payload with Max MTU on / off (Galaxy Buds).
+func maxPayload(maxMTU bool) int {
+	if maxMTU {
+		return overMTU - 12
+	}
+	return budsMTU
+}
+
+// BitrateFits reports whether kbps can be streamed for the codec ("aac",
+// "ssc", "ssc_uhq") with Max MTU on or off: frames must fit one packet.
+func BitrateFits(codec string, kbps int, maxMTU bool) bool {
+	if kbps <= 0 {
+		return true
+	}
+	switch codec {
+	case "aac":
+		// whole frames in one packet: payload x 8 bits x 48000 / 1024 samples
+		return kbps*1000 <= maxPayload(maxMTU)*8*48000/1024
+	case "ssc_uhq":
+		return ssc.FrameBytes(96000, kbps*1000) <= maxPayload(maxMTU)
+	}
+	return ssc.FrameBytes(48000, kbps*1000) <= maxPayload(maxMTU)
+}
+
+// sscNeedsOver: a bitrate whose frames exceed the Buds' packet needs Max MTU.
 func sscNeedsOver(kbps int) bool {
 	if kbps <= 0 {
 		return false
@@ -165,6 +196,9 @@ func sscBitrate(sampleRate, mtu int, cfg uint8) (int, error) {
 	list := ssc.BasicBitrates
 	if sampleRate == 96000 {
 		list, top = ssc.UHQBitrates, ssc.UHQBitrates[len(ssc.UHQBitrates)-1]
+	}
+	if sscMaxMTU && sampleRate != 96000 && top == sscBitrateFull {
+		top = sscBestBasic
 	}
 	if sscForced > 0 {
 		top = sscForced

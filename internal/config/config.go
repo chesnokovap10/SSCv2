@@ -87,9 +87,11 @@ type Settings struct {
 	SSCBitrate int `json:"sscBitrate,omitempty"`
 	// SSCUHQBitrate: SSC UHQ kbps (152..886); 0 = as high as one packet allows.
 	SSCUHQBitrate int `json:"sscUhqBitrate,omitempty"`
-	// SSCCap: SSC configuration byte sent to the headphones (experiments);
-	// 0 = like the phone (0x04 | their 0x08 bit, UHQ 0x02 | their 0x08).
-	SSCCap int `json:"sscCap,omitempty"`
+	// SSCCap: SSC configuration byte sent to the headphones (experiments,
+	// "ctl ssccap"); 0 = like the phone (0x04 | their 0x08 bit, UHQ 0x02 |
+	// their 0x08). Not saved: a leftover experiment (0x0E: the UHQ bit on a
+	// 48 kHz stream) made the sound stutter.
+	SSCCap int `json:"-"`
 }
 
 // Bitrate is the chosen kbps for a mode's codec (0 = auto).
