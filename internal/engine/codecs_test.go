@@ -115,6 +115,9 @@ func TestWorkingMax(t *testing.T) {
 	if k, _ := WorkingMax("ssc", DevID{1, 0x0075, 0xA0FF}, "Buds2 Pro JK08"); k != 0 {
 		t.Errorf("another Samsung product id named like Buds2 Pro: %d", k)
 	}
+	if k, _ := WorkingMax("ssc_uhq", b2p, ""); k != Unsupported {
+		t.Errorf("UHQ on Buds2 Pro: %d, want Unsupported", k)
+	}
 	if k, _ := WorkingMax("aac", b2p, ""); k != 0 {
 		t.Errorf("AAC not profiled: %d", k)
 	}

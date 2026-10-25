@@ -245,6 +245,9 @@ func (a *App) state() (tray.Color, string) {
 		return tray.Gray, T("выкл - Bluetooth Windows", "off - Windows Bluetooth")
 	}
 	if a.eng == nil {
+		if a.noBitrate(a.mode) {
+			return tray.Red, a.unsupportedText(a.mode)
+		}
 		return tray.Red, T("движок не запущен", "engine not running")
 	}
 	st := a.st
@@ -294,6 +297,20 @@ func (a *App) enable(m config.Mode) {
 		a.eng = nil
 		a.mu.Unlock()
 	}
+	a.mu.Lock()
+	blocked := a.noBitrate(m)
+	a.mu.Unlock()
+	if blocked {
+		// codec chosen, but not supported by these headphones: no stream
+		// until Settings > All bitrates
+		a.setMode(m)
+		a.mu.Lock()
+		msg := a.unsupportedText(m)
+		a.mu.Unlock()
+		logf("mode %s: %s", m, msg)
+		a.t.Balloon("SSCv2", msg, 1)
+		return
+	}
 
 	st := a.refreshAdapter()
 	if st.Mode == driver.NotPresent {
@@ -325,6 +342,11 @@ func (a *App) enable(m config.Mode) {
 // startEngineLocked starts the engine for the current mode (opMu held).
 func (a *App) startEngineLocked() {
 	a.mu.Lock()
+	if a.noBitrate(a.mode) {
+		a.mu.Unlock()
+		a.refresh()
+		return
+	}
 	cfg := ipc.EngineConfig{
 		Codec:        a.mode.EngineCodec(),
 		VID:          a.adapter.ID.VID,
@@ -582,8 +604,14 @@ func (a *App) setAllBitrates(on bool) {
 	a.s.AllBitrates = on
 	_ = config.Save(a.s)
 	after := a.bitrateFor(m)
+	blocked, eng := a.noBitrate(m), a.eng
 	a.mu.Unlock()
-	if before != after {
+	switch {
+	case blocked && eng != nil:
+		a.restartEngine() // stops it: the codec is not supported here
+	case !blocked && eng == nil && m.Streaming():
+		a.enable(m) // the codec was waiting for "All bitrates"
+	case before != after:
 		a.restartEngine() // the saved bitrate is (no longer) hidden
 	}
 }
@@ -808,6 +836,9 @@ func bitrateText(kbps int) string {
 
 // autoHint explains what "Auto" means for a codec.
 func autoHint(m config.Mode, maxMTU bool, limit int, model string) string {
+	if limit < 0 {
+		return fmt.Sprintf(T("не проверен на %s", "not checked on %s"), model)
+	}
 	if limit > 0 {
 		return fmt.Sprintf(T("%d кбит/с - макс. рабочий для %s", "%d kbps - the highest working on %s"), limit, model)
 	}
@@ -860,7 +891,25 @@ func (a *App) offered(m config.Mode, kbps int) bool {
 		return false
 	}
 	lim, _ := a.workingMax(m)
-	return a.s.AllBitrates || lim == 0 || kbps <= lim
+	return a.s.AllBitrates || lim == 0 || lim > 0 && kbps <= lim
+}
+
+// noBitrate: nothing can be offered for the codec on these headphones (not
+// supported by their profile, Settings > All bitrates off). a.mu held.
+func (a *App) noBitrate(m config.Mode) bool {
+	for _, b := range bitrates[m] {
+		if a.offered(m, b) {
+			return false
+		}
+	}
+	return m.Streaming()
+}
+
+// unsupportedText: the status / menu note for such a codec. a.mu held.
+func (a *App) unsupportedText(m config.Mode) string {
+	_, model := a.workingMax(m)
+	return fmt.Sprintf(T("%s не поддерживается %s - включите «Настройки ▸ Все битрейты»",
+		"%s is not supported by %s - turn on \"Settings > All bitrates\""), modeName(m), model)
 }
 
 // bitrateFor is the saved bitrate of a codec if it is offered now, else 0
@@ -897,7 +946,9 @@ func (a *App) menu() []tray.Item {
 		{Text: T("SSC UHQ (96 кГц)", "SSC UHQ (96 kHz)"), ID: idModeUHQ, Radio: true, Checked: mode == config.ModeSSCUHQ, Disabled: busy},
 	}
 	items = append(items, tray.Item{Text: T("Кодек: ", "Codec: ") + modeName(mode), Sub: codecs})
-	if mode.Streaming() {
+	if a.noBitrate(mode) {
+		items = append(items, tray.Item{Text: T("Битрейт: — (", "Bitrate: - (") + a.unsupportedText(mode) + ")"})
+	} else if mode.Streaming() {
 		cur := a.bitrateFor(mode)
 		label := T("Битрейт: ", "Bitrate: ") + bitrateText(cur)
 		if a.st.Streaming && a.st.BitrateKbps > 0 && cur == 0 {
@@ -912,7 +963,7 @@ func (a *App) menu() []tray.Item {
 			t := bitrateText(b)
 			if b == 0 {
 				t += " (" + autoHint(mode, a.s.MaxMTU, lim, model) + ")"
-			} else if lim > 0 && b > lim {
+			} else if lim > 0 && b > lim || lim < 0 {
 				t += T(" - не проверен", " - not checked")
 			}
 			sub = append(sub, tray.Item{Text: t, ID: idBitrateBase + b, Radio: true, Checked: b == cur, Disabled: busy})

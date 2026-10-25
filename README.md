@@ -62,7 +62,9 @@ matched by its Bluetooth Device ID (vendor/product id, as Windows recorded it on
 `BTHPORT\Parameters\Devices\<mac>` `VID`/`PID`); by the Bluetooth name only when Windows does
 not know the device. Only **Samsung Galaxy Buds2 Pro** (SM-R510, Samsung `0x0075` / `0xA013`)
 are checked: SSC 229 kbps (256/328 sound
-choked). For them "Auto" is 229 and higher rates appear only with "Settings ▸ All bitrates".
+choked), SSC UHQ not supported (they do not announce it). For them "Auto" is 229, higher rates
+appear only with "Settings ▸ All bitrates"; SSC UHQ can be chosen, but its bitrate list stays
+empty and nothing streams until "All bitrates" is on.
 Headphones without a profile always see every bitrate.
 * SSC UHQ: the 48 kHz capture is upsampled 2× to 96 kHz, 9 ms frames. Samsung Galaxy Buds2 Pro accept it
   although they do not announce it.

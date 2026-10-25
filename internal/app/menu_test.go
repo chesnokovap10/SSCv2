@@ -120,3 +120,31 @@ func TestMenuWorkingBitrates(t *testing.T) {
 		t.Errorf("no profile: %v, want every bitrate", got)
 	}
 }
+
+func TestMenuUHQUnsupported(t *testing.T) {
+	t.Setenv("APPDATA", t.TempDir())
+	i18n.Set(i18n.RU)
+	defer i18n.Set("")
+	s := &config.Settings{Mode: config.ModeSSCUHQ, MaxMTU: true,
+		Headphones: &config.Device{Addr: "00:11:22:33:44:57", Name: "Buds2 Pro JK08"}}
+	a := &App{mode: config.ModeSSCUHQ, s: s}
+	if !a.noBitrate(config.ModeSSCUHQ) || len(sscOffered(a)) != 0 {
+		t.Fatalf("UHQ on Buds2 Pro should offer nothing: %v", sscOffered(a))
+	}
+	found := false
+	for _, it := range a.menu() {
+		if strings.HasPrefix(it.Text, "Битрейт: —") && it.Sub == nil {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("no empty bitrate row")
+	}
+	s.AllBitrates = true
+	if a.noBitrate(config.ModeSSCUHQ) || len(sscOffered(a)) != 8 {
+		t.Errorf("all bitrates: %v", sscOffered(a))
+	}
+	if a.noBitrate(config.ModeOff) {
+		t.Error("off is never blocked")
+	}
+}
