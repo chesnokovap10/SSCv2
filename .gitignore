@@ -6,5 +6,4 @@ libssc/research/difftest/build/
 libssc/build/
 libssc/research/decomp/_all.c
 libssc/ref/firm/
-libssc/ref/libbluetooth_jni.so
 libssc/research/decomp_bt/_callees.c

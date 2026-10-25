@@ -1,93 +1,107 @@
 # libssc
 
-Своя реализация Samsung Scalable Codec (SSC): энкодер и декодер, бит-точные
-относительно `libScalable_Encoder.so` из текущей прошивки телефона. Только
-приватное использование.
-План и журнал: [PLAN.md](PLAN.md).
+**English** · [Русский](README.ru.md)
 
-| Путь | Что |
+Our own Samsung Scalable Codec (SSC) encoder, **bit-exact** with `libScalable_Encoder.so`
+from the current phone firmware (clang 14, NDK r25). C99, fixed-point, built on CELT from
+Opus 1.1.5. SSCv2 uses it through the cgo package `internal/codec/ssc`. Personal use only.
+Plan and phase results: [PLAN.md](PLAN.md).
+
+## Contents
+
+| Path | What |
 |---|---|
-| `oracle/` | эталон: оригинальный блоб под Unicorn + трассировка |
-| `ref/libScalable_Encoder.so` | блоб Samsung из прошивки (aarch64, clang 14, sha256 `90c4c1cb…ce7`), только для сверки |
-| `ref/libbluetooth_jni.so` | Bluetooth-стек телефона (из `com.android.bt.apex`): кто и как вызывает энкодер |
-| `testdata/*.golden` | 6 профилей × 16 кадров, замороженный вывод блоба |
-| `src/` | **сама библиотека** (C, fixed-point): `src/opus/` — Opus 1.1.5 + патч ec24, `ssc_*.c` — наш код |
-| `test/twin.py` | стенд-двойник: libssc и блоб с одинаковыми входами, побайтное сравнение (в т.ч. кадры голденов целиком) |
-| `test/replay.py` | реальные вызовы функции из блоба (вход/выход/глобалы) → та же функция libssc |
-| `test/stages.py` | оба энкодера покадрово: контрольные точки по цепочке, кадр, состояние и общие буферы после кадра |
-| `test/corpus.py` | кадры целиком: все 14 битрейтов × 10 сигналов |
-| `test/edge.py` | фаза 4: длинные прогоны, неизвестные и меняющиеся битрейты, крайние сигналы, 16 бит, 44,1 кГц |
-| `test/signals.py` | детерминированные тестовые сигналы × профили |
-| `test/cgo_ref.py` | фаза 5: хэши кадров блоба для Go-теста `internal/codec/ssc` (cgo-сборка = блоб) |
+| `src/` | **the library**: `ssc_*.c` — our code, `src/opus/` — Opus 1.1.5 + patches (`PATCHES.md`, licence `COPYING`) |
+| `src/ssc_names.h` | the blob's names (`ssc_quant_all_bands`, `ssc_ec_encode`, …) for every file (`-include` in `build.py`, `#include` in the cgo wrappers) |
+| `ref/libScalable_Encoder.so` | Samsung's blob from the firmware (aarch64), for comparison only |
+| `ref/libbluetooth_jni.so` | the phone's Bluetooth stack (`com.android.bt.apex`): how the phone calls the encoder, picks the bitrate and packs frames |
+| `oracle/ssc_oracle.py` | reference: the blob under Unicorn, right on Windows, with call tracing |
+| `testdata/*.golden` | 6 profiles × 16 frames, frozen blob output |
+| `test/` | comparison benches (below) |
 | `tools/gen_tables.py` | `research/tables.json` → `src/ssc_tables.c` |
-| `research/` | реверс: таблицы режимов, модель заголовка, дифф-стенд, декомпиляция; `decomp_bt/` — SSC-часть BT-стека телефона |
+| `research/` | reverse engineering: disassembler, mode tables, header model, Opus diff bench, Ghidra decompilation (`decomp/` — encoder, `decomp_bt/` — the SSC part of the BT stack) |
 
-## Сборка и проверка
+libssc is an **ABI twin** of the blob: the same function names, signatures and struct layouts
+(mode, `ec_ctx`, encoder state, `SscAlloc`), so any function can be called on both sides with
+the same memory and compared byte by byte. Like the blob, the DRC state and work buffers are
+process globals: one encoder open at a time.
+
+## API
+
+```c
+SscEncoder *ssc_encoder_create(int rate, int channels, int bits, int *err); // 44100|48000|96000, 2, 16|24
+int ssc_encode(SscEncoder *st, int32_t *pcm, int frame, uint8_t *out, int bitrate); // pcm is modified (DRC)
+void ssc_encoder_destroy(SscEncoder *st);
+```
+
+* A frame is 864 samples per channel (18 ms at 48 kHz, 9 ms at 96 kHz); input int32 at 2^23
+  full scale (24 bit).
+* Bitrates: 48 kHz — 88/96/128/192/229/256/328k; UHQ 96 kHz — 152/250/291/308/442/584/886k.
+  The coder is CBR: frame size = `FrameBytes(rate, bitrate)` in `internal/codec/ssc`.
+
+## Build and verify
 
 ```powershell
 py -3.14 libssc\build.py          # MinGW gcc -> libssc\build\libssc.dll
-py -3.14 libssc\test\twin.py      # 17 проверок против блоба, включая голдены целиком
-py -3.14 libssc\test\corpus.py    # кадры целиком, все битрейты и сигналы
-py -3.14 libssc\test\edge.py      # 216 крайних сценариев (--only NAME, --list)
-py -3.14 libssc\test\replay.py    # перенесённые функции на реальных вызовах
-py -3.14 libssc\test\stages.py    # покадровые контрольные точки
-# replay.py и stages.py: --rates all — все 14 битрейтов вместо 6 профилей
+py -3.14 libssc\test\twin.py      # 17 checks against the blob, golden frames in full
+py -3.14 libssc\test\corpus.py    # whole frames: 14 bitrates × 10 signals
+py -3.14 libssc\test\edge.py      # 216 edge scenarios (--only NAME, --list)
+py -3.14 libssc\test\replay.py    # libssc functions on real calls recorded in the blob
+py -3.14 libssc\test\stages.py    # per-frame checkpoints along the chain
+# replay.py and stages.py: --rates all — all 14 bitrates instead of the 6 profiles
+
+go test ./internal/codec/ssc      # the cgo build against blob hashes (testdata/oracle.txt)
+py -3.14 libssc\test\cgo_ref.py   # re-take those hashes
 ```
 
-libssc — ABI-двойник блоба: те же имена функций, сигнатуры и раскладки
-структур (режим, `ec_ctx`, состояние энкодера, `SscAlloc`), поэтому любую
-функцию можно вызвать с обеих сторон на одной и той же памяти. Имена блоба
-(`ssc_quant_all_bands`, `ssc_ec_encode`, …) даёт `src/ssc_names.h`, который
-`build.py` подключает ко всем файлам (`-include`).
+| Bench | Compares |
+|---|---|
+| `test/twin.py` | math functions, range coder, modes, state after init, golden frames |
+| `test/replay.py` | recorded calls of a blob function (inputs, outputs, globals) → the same libssc function |
+| `test/stages.py` | both encoders frame by frame: checkpoints, frame, state and shared buffers |
+| `test/corpus.py` | whole frames on every bitrate and `test/signals.py` signal |
+| `test/edge.py` | long runs, unknown and changing bitrates, extreme signals, 16 bit, 44.1 kHz |
+| `test/cgo_ref.py` | blob frame hashes for the Go test |
 
-## research/
+After adding files to `src/`, regenerate the wrappers: `go run ./tools/genwrap`.
 
-```powershell
-py -3.14 -m pip install capstone                       # для disasm.py
-py -3.14 libssc\research\disasm.py ssc_encoder_create   # дизассемблер с символами
-py -3.14 libssc\research\dump_mode.py [--json F]        # режимы и таблицы
-py -3.14 libssc\research\header_model.py                # модель заголовка vs голдены
-# дифф-стенд: Opus (git clone xiph/opus, checkout v1.1.5) + MinGW gcc
-py -3.14 libssc\research\difftest\build_ref.py <opus-dir> --tag v1.1.5 --patch ec24
-py -3.14 libssc\research\difftest\difftest.py
-# декомпиляция (JDK 21 + Ghidra портативно в D:\2\tools)
-pwsh libssc\research\ghidra\decompile.ps1     # -> research\decomp\*.c
-pwsh libssc\research\ghidra\decompile_bt.ps1  # BT-стек телефона, SSC-функции -> research\decomp_bt (~15 мин)
-```
+## Oracle
 
-В каталогах нет `.go`-файлов, `go build` их не трогает. В приложение libssc
-входит через cgo-пакет `internal/codec/ssc` (обёртки `zssc_*.c` от `tools/genwrap`):
+`oracle/ssc_oracle.py` loads the blob (aarch64 ELF) into Unicorn: own relocations, 8 libc
+stubs, stack guard. It is the reference for step-by-step comparison.
 
 ```powershell
-go test ./internal/codec/ssc        # 14 битрейтов против хэшей блоба (testdata/oracle.txt)
-py -3.14 libssc\test\cgo_ref.py     # переснять хэши с блоба
-```
-
-## oracle/
-
-`ssc_oracle.py` запускает оригинальный блоб (aarch64) под Unicorn прямо в
-Windows, без WSL2 и Qiling. Это эталон для пошаговой сверки.
-
-```powershell
-py -3.14 -m pip install unicorn          # один раз (проверено на 2.1.4)
+py -3.14 -m pip install unicorn          # once (tested with 2.1.4)
 py -3.14 libssc\oracle\ssc_oracle.py check-golden
-py -3.14 libssc\oracle\ssc_oracle.py make-golden   # переснять голдены с блоба
+py -3.14 libssc\oracle\ssc_oracle.py make-golden   # re-take the goldens
 py -3.14 libssc\oracle\ssc_oracle.py trace --bitrate 229000 --frame 1
 py -3.14 libssc\oracle\ssc_oracle.py trace --rate 96000 --bitrate 584000 --max-depth 1
 ```
-
-Из Python:
 
 ```python
 from ssc_oracle import Oracle, golden_pcm
 o = Oracle(trace=True).open(48000, 2, 229000)
 o.probes_exit["ssc_compute_band_energies"] = lambda o, rec: print(rec.args[:4], rec.ret)
-frame = o.encode(golden_pcm(0x5A5C2026, 0, 48000))   # 864 x 2ch, int32, шкала 2^29
-for rec in o.calls: ...                               # дерево вызовов последнего кадра
+frame = o.encode(golden_pcm(0x5A5C2026, 0, 48000))
+for rec in o.calls: ...                               # call tree of the last frame
 ```
 
-- Один `Oracle` — один «процесс»: блоб держит состояние энкодера в глобалах
-  `.bss`, поэтому на каждый поток нужен новый экземпляр.
-- Порядок вызовов повторяет `ssc_blob_helper.c` старого демона
-  (get_size → init на warm-up состоянии → create → encode).
-- `malloc` — bump-аллокатор по обнулённой памяти, `free` ничего не делает.
+One `Oracle` is one "process" (the blob keeps its state in `.bss`); `malloc` is a bump
+allocator, `free` does nothing.
+
+## research/
+
+```powershell
+py -3.14 -m pip install capstone
+py -3.14 libssc\research\disasm.py ssc_encoder_create   # disassembler with symbols
+py -3.14 libssc\research\dump_mode.py [--json F]        # modes and tables
+py -3.14 libssc\research\header_model.py                # header model vs the goldens
+# diff bench: Opus (git clone xiph/opus, checkout v1.1.5) + MinGW gcc
+py -3.14 libssc\research\difftest\build_ref.py <opus-dir> --tag v1.1.5 --patch ec24
+py -3.14 libssc\research\difftest\difftest.py
+# decompilation (JDK 21 + portable Ghidra in D:\2\tools)
+pwsh libssc\research\ghidra\decompile.ps1      # -> research\decomp\*.c
+pwsh libssc\research\ghidra\decompile_bt.ps1   # the phone's BT stack -> research\decomp_bt (~15 min)
+```
+
+`libssc/` has no `.go` files; `go build` does not touch it.

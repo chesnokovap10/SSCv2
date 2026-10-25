@@ -32,6 +32,8 @@ type pipeline struct {
 	active atomic.Bool
 	// muted: send silence (headphones' volume not settled yet)
 	muted atomic.Bool
+	// userMuted: the output is muted in Windows (send silence)
+	userMuted atomic.Bool
 	// frag: split frames larger than one packet (RFC 3016)
 	frag bool
 	// perPacket: one frame per packet and the RTP timestamp counts packets,
@@ -93,7 +95,7 @@ func (p *pipeline) onCapture(s []float32, frames, ch int) {
 		return
 	}
 
-	if p.muted.Load() {
+	if p.muted.Load() || p.userMuted.Load() {
 		clear(s[:frames*ch])
 	}
 

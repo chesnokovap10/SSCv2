@@ -16,6 +16,7 @@ import (
 	"golang.org/x/sys/windows/svc/mgr"
 
 	"sscv2/internal/config"
+	"sscv2/internal/i18n"
 	"sscv2/internal/ipc"
 	"sscv2/internal/logx"
 )
@@ -23,7 +24,7 @@ import (
 const (
 	ServiceName    = "SSCv2Helper"
 	serviceDisplay = "SSCv2 Bluetooth Helper"
-	serviceDesc    = "Переключает драйвер встроенного Bluetooth (MediaTek) и переносит ключи сопряжения для SSCv2."
+	serviceDesc    = "Switches the built-in MediaTek Bluetooth driver and moves pairing keys for SSCv2."
 )
 
 // ---- running as a service ---------------------------------------------------
@@ -144,7 +145,7 @@ func InstallService(owner string) error {
 	exe := filepath.Join(dir, "ssc.exe")
 	if !sameFile(self, exe) {
 		if err := copyFile(self, exe); err != nil {
-			return fmt.Errorf("копирование в %s: %w", dir, err)
+			return fmt.Errorf(i18n.T("копирование в %s: %w", "copying to %s: %w"), dir, err)
 		}
 	}
 	s, err := m.OpenService(ServiceName)
@@ -163,13 +164,13 @@ func InstallService(owner string) error {
 			StartType:   mgr.StartAutomatic,
 		}, "service", "--owner", owner)
 		if err != nil {
-			return fmt.Errorf("создание службы: %w", err)
+			return fmt.Errorf(i18n.T("создание службы: %w", "creating the service: %w"), err)
 		}
 	}
 	defer s.Close()
 	_ = s.SetRecoveryActions([]mgr.RecoveryAction{{Type: mgr.ServiceRestart, Delay: 5 * time.Second}}, 86400)
 	if err := s.Start(); err != nil {
-		return fmt.Errorf("запуск службы: %w", err)
+		return fmt.Errorf(i18n.T("запуск службы: %w", "starting the service: %w"), err)
 	}
 	return nil
 }
@@ -202,7 +203,7 @@ func UninstallService() error {
 	defer m.Disconnect()
 	s, err := m.OpenService(ServiceName)
 	if err != nil {
-		return errors.New("служба не установлена")
+		return errors.New(i18n.T("служба не установлена", "the service is not installed"))
 	}
 	stopAndWait(s)
 	err = s.Delete()
@@ -245,7 +246,7 @@ type shellExecuteInfo struct {
 }
 
 // ErrCancelled: the user declined the UAC prompt.
-var ErrCancelled = errors.New("запрос прав администратора отклонён")
+var ErrCancelled = i18n.Error("запрос прав администратора отклонён", "the administrator prompt was declined")
 
 // RunElevated starts this executable with args via UAC and waits for it.
 func RunElevated(args string) (uint32, error) {
@@ -279,6 +280,7 @@ func RunElevated(args string) (uint32, error) {
 // otherwise in a UAC-elevated copy of ssc.exe ("helper-op").
 func Call(req ipc.Request) (ipc.Response, error) {
 	req.Debug = logx.Debug()
+	req.Lang = i18n.Lang()
 	t0 := time.Now()
 	logx.Dbgf("helper", "-> %s %s", req.Op, reqSummary(req))
 	resp, err := call(req)
@@ -321,7 +323,7 @@ func call(req ipc.Request) (ipc.Response, error) {
 	}
 	data, err := os.ReadFile(out)
 	if err != nil {
-		return ipc.Response{}, fmt.Errorf("нет ответа от помощника: %w", err)
+		return ipc.Response{}, fmt.Errorf(i18n.T("нет ответа от помощника: %w", "no answer from the helper: %w"), err)
 	}
 	if err := json.Unmarshal(data, &resp); err != nil {
 		return resp, err

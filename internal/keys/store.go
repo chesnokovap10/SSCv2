@@ -14,6 +14,7 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
+	"sscv2/internal/i18n"
 	"strings"
 	"sync"
 
@@ -226,7 +227,7 @@ func (l LE) Bond() (*bt.LEBond, error) {
 	b := &bt.LEBond{Addr: a, Random: l.Random, EDIV: l.EDIV, KeySize: l.KeySize, SecureConn: l.SC}
 	ltk, err := hex.DecodeString(l.LTK)
 	if err != nil || len(ltk) != 16 {
-		return nil, errors.New("нет LTK мыши")
+		return nil, errors.New(i18n.T("нет LTK мыши", "no LTK for the mouse"))
 	}
 	copy(b.LTK[:], ltk)
 	if irk, err := hex.DecodeString(l.IRK); err == nil && len(irk) == 16 {

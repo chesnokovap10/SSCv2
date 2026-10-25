@@ -3,9 +3,9 @@ package helper
 import (
 	"bufio"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"os"
+	"sscv2/internal/i18n"
 	"time"
 	"unsafe"
 
@@ -78,7 +78,7 @@ func serveConn(h windows.Handle) {
 }
 
 // ErrNoService means the helper service is not reachable.
-var ErrNoService = errors.New("служба не запущена")
+var ErrNoService = i18n.Error("служба не запущена", "the service is not running")
 
 // callPipe sends one request to the running service.
 func callPipe(req ipc.Request) (ipc.Response, error) {
@@ -106,7 +106,7 @@ func callPipe(req ipc.Request) (ipc.Response, error) {
 	}
 	line, err := bufio.NewReader(f).ReadBytes('\n')
 	if err != nil {
-		return ipc.Response{}, fmt.Errorf("ответ службы: %w", err)
+		return ipc.Response{}, fmt.Errorf(i18n.T("ответ службы: %w", "service reply: %w"), err)
 	}
 	var resp ipc.Response
 	err = json.Unmarshal(line, &resp)

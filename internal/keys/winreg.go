@@ -3,7 +3,9 @@ package keys
 import (
 	"encoding/binary"
 	"encoding/hex"
+	"errors"
 	"fmt"
+	"sscv2/internal/i18n"
 	"strings"
 
 	"golang.org/x/sys/windows/registry"
@@ -82,7 +84,7 @@ type AdapterBonds struct {
 func ReadWindows() ([]AdapterBonds, error) {
 	root, err := openKey(registry.LOCAL_MACHINE, bthKeysPath, registry.ENUMERATE_SUB_KEYS|registry.QUERY_VALUE)
 	if err != nil {
-		return nil, fmt.Errorf("нет доступа к ключам Bluetooth Windows (нужна служба или права администратора): %w", err)
+		return nil, fmt.Errorf(i18n.T("нет доступа к ключам Bluetooth Windows (нужна служба или права администратора): %w", "no access to the Windows Bluetooth keys (the service or admin rights are needed): %w"), err)
 	}
 	defer root.Close()
 	adapters, err := root.ReadSubKeyNames(-1)
@@ -159,11 +161,11 @@ func ReadWindows() ([]AdapterBonds, error) {
 func WriteWindowsClassic(adapter, device, keyHex string) error {
 	b, err := hex.DecodeString(keyHex)
 	if err != nil || len(b) != 16 {
-		return fmt.Errorf("неверный ключ")
+		return errors.New(i18n.T("неверный ключ", "invalid key"))
 	}
 	k, err := createKey(registry.LOCAL_MACHINE, bthKeysPath+`\`+addrToMac(adapter), registry.SET_VALUE)
 	if err != nil {
-		return fmt.Errorf("запись ключа Windows: %w", err)
+		return fmt.Errorf(i18n.T("запись ключа Windows: %w", "writing the Windows key: %w"), err)
 	}
 	defer k.Close()
 	return k.SetBinaryValue(addrToMac(device), b)

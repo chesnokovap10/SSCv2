@@ -23,10 +23,10 @@ package mtk
 import (
 	"bytes"
 	"encoding/binary"
-	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+	"sscv2/internal/i18n"
 	"time"
 )
 
@@ -72,10 +72,10 @@ const (
 )
 
 var (
-	ErrUnsupported = errors.New("неподдерживаемый чип MediaTek")
-	ErrFirmware    = errors.New("файл прошивки не найден или повреждён")
-	ErrTimeout     = errors.New("адаптер не отвечает (WMT timeout)")
-	ErrProtocol    = errors.New("неожиданный ответ адаптера")
+	ErrUnsupported = i18n.Error("неподдерживаемый чип MediaTek", "unsupported MediaTek chip")
+	ErrFirmware    = i18n.Error("файл прошивки не найден или повреждён", "firmware file not found or damaged")
+	ErrTimeout     = i18n.Error("адаптер не отвечает (WMT timeout)", "the adapter does not answer (WMT timeout)")
+	ErrProtocol    = i18n.Error("неожиданный ответ адаптера", "unexpected answer from the adapter")
 	ErrNotFound    = errNotFound
 )
 

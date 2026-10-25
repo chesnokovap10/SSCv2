@@ -18,6 +18,7 @@ import (
 
 	"sscv2/internal/audio"
 	"sscv2/internal/driver"
+	"sscv2/internal/i18n"
 	"sscv2/internal/ipc"
 	"sscv2/internal/keys"
 	"sscv2/internal/logx"
@@ -33,9 +34,12 @@ func Handle(req ipc.Request) (resp ipc.Response) {
 	}
 	defer func() {
 		if r := recover(); r != nil {
-			resp = ipc.Response{Error: fmt.Sprintf("внутренняя ошибка: %v", r)}
+			resp = ipc.Response{Error: fmt.Sprintf(i18n.T("внутренняя ошибка: %v", "internal error: %v"), r)}
 		}
 	}()
+	if req.Lang != "" {
+		i18n.Set(req.Lang)
+	}
 	logx.Printf("helper: op=%s", req.Op)
 	resp = ipc.Response{Version: ipc.Version}
 	fail := func(err error) ipc.Response {
@@ -58,7 +62,7 @@ func Handle(req ipc.Request) (resp ipc.Response) {
 			}
 		}
 		if !known {
-			return fail(fmt.Errorf("устройство %s не из списка поддерживаемых MediaTek", id))
+			return fail(fmt.Errorf(i18n.T("устройство %s не из списка поддерживаемых MediaTek", "device %s is not a supported MediaTek adapter"), id))
 		}
 		driver.Variant = req.Variant
 		r, err := driver.Switch(id, req.WinUSB)
@@ -99,7 +103,7 @@ func Handle(req ipc.Request) (resp ipc.Response) {
 		}
 		resp.OK = true
 	default:
-		return fail(fmt.Errorf("неизвестная операция %q", req.Op))
+		return fail(fmt.Errorf(i18n.T("неизвестная операция %q", "unknown operation %q"), req.Op))
 	}
 	return resp
 }
@@ -119,11 +123,11 @@ func verifySignature(path string) error {
 	p, _ := windows.UTF16PtrFromString(path)
 	fi := &windows.WinTrustFileInfo{Size: uint32(unsafe.Sizeof(windows.WinTrustFileInfo{})), FilePath: p}
 	data := &windows.WinTrustData{
-		Size:             uint32(unsafe.Sizeof(windows.WinTrustData{})),
-		UIChoice:         windows.WTD_UI_NONE,
-		RevocationChecks: windows.WTD_REVOKE_NONE,
-		UnionChoice:      windows.WTD_CHOICE_FILE,
-		StateAction:      windows.WTD_STATEACTION_VERIFY,
+		Size:                            uint32(unsafe.Sizeof(windows.WinTrustData{})),
+		UIChoice:                        windows.WTD_UI_NONE,
+		RevocationChecks:                windows.WTD_REVOKE_NONE,
+		UnionChoice:                     windows.WTD_CHOICE_FILE,
+		StateAction:                     windows.WTD_STATEACTION_VERIFY,
 		FileOrCatalogOrBlobOrSgnrOrCert: unsafe.Pointer(fi),
 	}
 	err := windows.WinVerifyTrustEx(windows.InvalidHWND, &windows.WINTRUST_ACTION_GENERIC_VERIFY_V2, data)
@@ -170,20 +174,20 @@ func cableNodes(includeAbsent bool, fn func(set windows.DevInfo, d *windows.DevI
 func installVirtual(name string) (string, error) {
 	if err := audio.InitCOM(); err == nil && audio.VirtualInstalled() {
 		if name == "" || audio.HeadphonesName() == name {
-			return "виртуальные наушники уже установлены", nil
+			return i18n.T("виртуальные наушники уже установлены", "the virtual headphones are already installed"), nil
 		}
 		if err := brandVirtual(name); err != nil {
-			return "", fmt.Errorf("переименование: %w", err)
+			return "", fmt.Errorf(i18n.T("переименование: %w", "renaming: %w"), err)
 		}
-		return "виртуальные наушники переименованы в " + name, nil
+		return i18n.T("виртуальные наушники переименованы в ", "the virtual headphones were renamed to ") + name, nil
 	}
 	dir, err := vbcable.Extract()
 	if err != nil {
-		return "", fmt.Errorf("распаковка драйвера: %w", err)
+		return "", fmt.Errorf(i18n.T("распаковка драйвера: %w", "unpacking the driver: %w"), err)
 	}
 	defer os.RemoveAll(dir)
 	if err := verifySignature(filepath.Join(dir, cableFiles[2])); err != nil {
-		return "", fmt.Errorf("подпись каталога драйвера не доверена: %v", err)
+		return "", fmt.Errorf(i18n.T("подпись каталога драйвера не доверена: %v", "the driver catalog signature is not trusted: %v"), err)
 	}
 	if cableNodes(false, func(windows.DevInfo, *windows.DevInfoData) {}) == 0 {
 		set, err := windows.SetupDiCreateDeviceInfoListEx(&guidDevClassMedia, 0, "")
@@ -201,7 +205,7 @@ func installVirtual(name string) (string, error) {
 		}
 		set.Close()
 		if err != nil {
-			return "", fmt.Errorf("создание виртуального устройства: %w", err)
+			return "", fmt.Errorf(i18n.T("создание виртуального устройства: %w", "creating the virtual device: %w"), err)
 		}
 	}
 	hw, _ := windows.UTF16PtrFromString(audio.CableHardwareID)
@@ -209,9 +213,9 @@ func installVirtual(name string) (string, error) {
 	var reboot int32
 	r, _, e := procUpdateDriver.Call(0, uintptr(unsafe.Pointer(hw)), uintptr(unsafe.Pointer(inf)), 1 /* INSTALLFLAG_FORCE */, uintptr(unsafe.Pointer(&reboot)))
 	if r == 0 {
-		return "", fmt.Errorf("установка драйвера: %v", e)
+		return "", fmt.Errorf(i18n.T("установка драйвера: %v", "installing the driver: %v"), e)
 	}
-	msg := "виртуальное устройство установлено"
+	msg := i18n.T("виртуальное устройство установлено", "virtual device installed")
 	if err := audio.InitCOM(); err == nil {
 		for i := 0; i < 40; i++ {
 			if audio.VirtualInstalled() {
@@ -221,20 +225,20 @@ func installVirtual(name string) (string, error) {
 		}
 		if name != "" {
 			if err := brandVirtual(name); err != nil {
-				msg += "; переименовать не удалось: " + err.Error()
+				msg += i18n.T("; переименовать не удалось: ", "; renaming failed: ") + err.Error()
 			}
 		}
 		_ = audio.SetVirtualVisible(false)
 	}
 	if reboot != 0 {
-		msg += " (нужна перезагрузка)"
+		msg += i18n.T(" (нужна перезагрузка)", " (restart needed)")
 	}
 	return msg, nil
 }
 
 func brandVirtual(name string) error {
 	if strings.TrimSpace(name) == "" {
-		return errors.New("пустое имя")
+		return errors.New(i18n.T("пустое имя", "empty name"))
 	}
 	_ = audio.SetVirtualVisible(true)
 	defer audio.SetVirtualVisible(false)
@@ -257,5 +261,5 @@ func uninstallVirtual() (string, error) {
 			pk++
 		}
 	}
-	return fmt.Sprintf("удалено устройств: %d, пакетов драйвера: %d", removed, pk), nil
+	return fmt.Sprintf(i18n.T("удалено устройств: %d, пакетов драйвера: %d", "removed devices: %d, driver packages: %d"), removed, pk), nil
 }

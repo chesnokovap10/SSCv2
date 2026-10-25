@@ -5,9 +5,9 @@
 package audio
 
 import (
-	"errors"
 	"fmt"
 	"runtime"
+	"sscv2/internal/i18n"
 	"sync"
 	"syscall"
 	"unsafe"
@@ -67,10 +67,10 @@ var (
 
 // PROPVARIANT (x64: 24 bytes)
 type propVariant struct {
-	vt       uint16
-	_        [3]uint16
-	val      uintptr
-	_        uintptr
+	vt  uint16
+	_   [3]uint16
+	val uintptr
+	_   uintptr
 }
 
 const vtLPWSTR = 31
@@ -151,4 +151,4 @@ func InitCOM() error {
 	return mtaErr
 }
 
-var errNoDevice = errors.New("аудиоустройство не найдено")
+var errNoDevice = i18n.Error("аудиоустройство не найдено", "audio device not found")

@@ -45,9 +45,12 @@ func tailFile(path string, n int) string {
 // Control API: the running tray accepts commands on a per-user named pipe,
 // so everything the menu does can be scripted ("ssc.exe ctl <cmd> [arg]").
 //
-//	status | info | debug on|off | restore <mode> | mode off|aac|ssc | ssc auto|<kbps> | ssccap auto|<hex> | import windows | service install|remove
-//	virtual install|remove
+//	status | info | log [debug|tray|engine|helper] [N] | debug on|off | lang ru|en
+//	mode off|aac|ssc|ssc_uhq | bitrate auto|<kbps> (current codec) | maxmtu on|off
+//	aac fit|frag|over | ssc auto|<kbps> | ssccap auto|<hex> | restore <mode> | variant <v>
+//	import windows | service install|remove | virtual install|remove
 //	scan | connect <addr> | headphones <addr> | mouse <addr|none>
+//	quit [keep] | uninstall [yes]
 
 func ctlPipeName() string { return `\\.\pipe\SSCv2Tray-` + helper.CurrentUserSID() }
 
@@ -154,8 +157,13 @@ func (a *App) ctl(args []string) string {
 		}
 		return tailFile(filepath.Join(config.LogDir(), name+".log"), n)
 	case "aac":
-		if m := arg(1); m != "fit" && m != "frag" && m != "over" {
-			return "error: aac fit|frag"
+		switch arg(1) {
+		case "over": // old name of "maxmtu on"
+			go a.setMaxMTU(true)
+			return "ok: maxmtu on"
+		case "fit", "frag":
+		default:
+			return "error: aac fit|frag|over"
 		}
 		a.mu.Lock()
 		a.s.AACMode = arg(1)
@@ -163,8 +171,42 @@ func (a *App) ctl(args []string) string {
 		a.mu.Unlock()
 		go a.restartEngine()
 		return "ok: aac " + arg(1)
+	case "maxmtu":
+		switch arg(1) {
+		case "on", "off":
+			go a.setMaxMTU(arg(1) == "on")
+			return "ok: maxmtu " + arg(1)
+		}
+		return "error: maxmtu on|off"
+	case "lang":
+		if arg(1) != "ru" && arg(1) != "en" {
+			return "error: lang ru|en"
+		}
+		a.setLang(arg(1))
+		return "ok: lang " + arg(1)
+	case "bitrate":
+		a.mu.Lock()
+		m := a.mode
+		a.mu.Unlock()
+		if !m.Streaming() {
+			return "error: codec is off"
+		}
+		kbps := 0
+		if arg(1) != "auto" {
+			n, err := strconv.Atoi(arg(1))
+			ok := false
+			for _, b := range bitrates[m] {
+				ok = ok || b == n && err == nil && n > 0
+			}
+			if !ok {
+				return fmt.Sprintf("error: bitrate auto|%v for %s", bitrates[m][1:], m)
+			}
+			kbps = n
+		}
+		go a.setBitrate(kbps)
+		return fmt.Sprintf("ok: %s bitrate %d (0 = auto)", m, kbps)
 	case "ssc":
-		// SSC bitrate: kbps or "auto" (like the phone)
+		// SSC bitrate: kbps or "auto"; a UHQ rate goes to SSC UHQ
 		kbps := 0
 		if arg(1) != "auto" {
 			n, err := strconv.Atoi(arg(1))
@@ -174,7 +216,11 @@ func (a *App) ctl(args []string) string {
 			kbps = n
 		}
 		a.mu.Lock()
-		a.s.SSCBitrate = kbps
+		if kbps > 0 && ssc.Valid(96000, kbps*1000) {
+			a.s.SSCUHQBitrate = kbps
+		} else {
+			a.s.SSCBitrate = kbps
+		}
 		_ = config.Save(a.s)
 		a.mu.Unlock()
 		go a.restartEngine()
@@ -214,10 +260,20 @@ func (a *App) ctl(args []string) string {
 			go a.enable(config.ModeAAC)
 		case "ssc":
 			go a.enable(config.ModeSSC)
+		case "ssc_uhq", "uhq":
+			go a.enable(config.ModeSSCUHQ)
 		default:
-			return "error: mode off|aac|ssc"
+			return "error: mode off|aac|ssc|ssc_uhq"
 		}
 		return "ok"
+	case "quit":
+		go a.exit(arg(1) == "keep")
+		return "ok"
+	case "uninstall":
+		go a.uninstall(arg(1) == "yes")
+		return "ok"
+	case "version":
+		return ipc.Version
 	case "import":
 		if arg(1) != "windows" {
 			return "error: import windows"
@@ -297,7 +353,7 @@ func Ctl(args []string) (string, error) {
 			break
 		}
 		if err != windows.ERROR_PIPE_BUSY {
-			return "", errors.New("трей SSCv2 не запущен")
+			return "", errors.New(T("трей SSCv2 не запущен", "the SSCv2 tray is not running"))
 		}
 		time.Sleep(100 * time.Millisecond)
 	}

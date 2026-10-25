@@ -50,10 +50,10 @@ var libs = []lib{
 			"3rd-party/rijndael/rijndael.c", "3rd-party/micro-ecc/uECC.c",
 		},
 		extra: map[string]string{
-			// AAC 256 mode: Galaxy Buds announce a 679-byte L2CAP MTU but
+			// Max MTU: Galaxy Buds announce a 679-byte L2CAP MTU but
 			// decode larger media packets fine (see engine/codecs.go).
 			"src/l2cap.c": `
-/* Override a channel's remote MTU (SSCv2 "AAC 256" mode). */
+/* Override a channel's remote MTU (SSCv2 Max MTU setting). */
 void ssc_l2cap_set_remote_mtu(uint16_t local_cid, uint16_t mtu) {
     l2cap_channel_t *c = l2cap_get_channel_for_local_cid(local_cid);
     if (c) c->remote_mtu = mtu;

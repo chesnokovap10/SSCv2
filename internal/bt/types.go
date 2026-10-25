@@ -2,6 +2,7 @@ package bt
 
 import (
 	"fmt"
+	"sscv2/internal/i18n"
 	"strings"
 )
 
@@ -18,12 +19,12 @@ func ParseAddr(s string) (Addr, error) {
 	var a Addr
 	h := strings.NewReplacer(":", "", "-", "", " ", "").Replace(strings.TrimSpace(s))
 	if len(h) != 12 {
-		return a, fmt.Errorf("неверный адрес %q", s)
+		return a, fmt.Errorf(i18n.T("неверный адрес %q", "invalid address %q"), s)
 	}
 	for i := 0; i < 6; i++ {
 		var b byte
 		if _, err := fmt.Sscanf(h[i*2:i*2+2], "%02x", &b); err != nil {
-			return a, fmt.Errorf("неверный адрес %q", s)
+			return a, fmt.Errorf(i18n.T("неверный адрес %q", "invalid address %q"), s)
 		}
 		a[i] = b
 	}
@@ -93,6 +94,15 @@ const (
 	EvVolumeApplied                   // headphones confirmed our level (again)
 	EvACLUp                           // a BR/EDR link came up (e.g. headphones reconnecting)
 	EvA2DPReady                       // A2DP signalling + codec discovery done (any direction)
+	EvMediaKey                        // a button on the headphones (Key: MediaPlayPause, MediaNext, ...)
+)
+
+// Media keys the headphones send (AVRCP PASS_THROUGH, button pressed).
+const (
+	MediaPlayPause = iota + 1 // PLAY or PAUSE (one tap)
+	MediaNext                 // FORWARD (double tap)
+	MediaPrev                 // BACKWARD (triple tap)
+	MediaStop
 )
 
 // Event is delivered on Events().
@@ -103,6 +113,7 @@ type Event struct {
 	Key     LinkKey
 	KeyType int
 	Mouse   string
+	Media   int // EvMediaKey: MediaPlayPause, MediaNext, MediaPrev, MediaStop
 }
 
 // Options for Start.
@@ -117,7 +128,7 @@ type Options struct {
 	SSCCap    uint8   // SSC configuration byte to send (0 = like the phone)
 	Debug     bool    // packet journal (logx debug mode)
 	// ForceMediaMTU: treat the headphones' media channel MTU as this many
-	// bytes instead of what they announced ("AAC 256" mode).
+	// bytes instead of what they announced (Settings > Max MTU).
 	ForceMediaMTU int
 }
 

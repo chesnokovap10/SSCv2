@@ -22,16 +22,21 @@ type EngineConfig struct {
 	MuteSpeakers bool   `json:"muteSpeakers"`
 	Verbose      bool   `json:"verbose,omitempty"`
 	Debug        bool   `json:"debug,omitempty"`
-	AACMode      string `json:"aacMode,omitempty"` // "fit" | "frag"
-	SSCBitrate   int    `json:"sscBitrate,omitempty"` // kbps, 0 = like the phone
+	Lang         string `json:"lang,omitempty"`       // "ru" | "en"
+	MaxMTU       bool   `json:"maxMTU,omitempty"`     // 1017-byte media packets (Buds2 Pro)
+	AACMode      string `json:"aacMode,omitempty"`    // "fit" | "frag"
+	AACBitrate   int    `json:"aacBitrate,omitempty"` // kbps, 0 = as high as a packet allows
+	SSCBitrate   int    `json:"sscBitrate,omitempty"` // kbps, 0 = like the phone / UHQ: highest that fits
+	SSCUHQ       bool   `json:"sscUhq,omitempty"`     // SSC UHQ (96 kHz)
 	SSCCap       int    `json:"sscCap,omitempty"`     // SSC config byte, 0 = like the phone
 }
 
 // Command from tray to engine.
 type Command struct {
-	Cmd  string `json:"cmd"` // "stop" | "scan" | "connect" | "debug"
+	Cmd  string `json:"cmd"` // "stop" | "scan" | "connect" | "debug" | "lang"
 	Addr string `json:"addr,omitempty"`
 	On   bool   `json:"on,omitempty"`
+	Lang string `json:"lang,omitempty"`
 }
 
 // Found device from a scan.
@@ -102,7 +107,8 @@ type Request struct {
 	Key     string `json:"key,omitempty"`
 	Dir     string `json:"dir,omitempty"`
 	Name    string `json:"name,omitempty"`
-	Debug   bool   `json:"debug,omitempty"` // hand the op's log lines back
+	Debug   bool   `json:"debug,omitempty"`   // hand the op's log lines back
+	Lang    string `json:"lang,omitempty"`    // language of the error messages
 	Variant string `json:"variant,omitempty"` // diagnostics: driver switch variant
 }
 
@@ -157,5 +163,6 @@ func (r *Reader) Read(v any) error {
 	return json.Unmarshal(r.s.Bytes(), v)
 }
 
-// Version of the program (set from main via -ldflags or constant).
-var Version = "2.0.0-dev"
+// Version of the program: "0.1 #<commit hash, 8 chars>", set by build.cmd
+// through -ldflags "-X 'sscv2/internal/ipc.Version=...'".
+var Version = "0.1 #dev"

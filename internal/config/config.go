@@ -22,7 +22,32 @@ const (
 	ModeOff Mode = "off" // adapter belongs to Windows Bluetooth
 	ModeAAC Mode = "aac" // adapter in WinUSB mode, AAC to the headphones
 	ModeSSC Mode = "ssc" // adapter in WinUSB mode, SSC (libssc) to the headphones
+	// ModeSSCUHQ: SSC UHQ, 96 kHz (the capture upsampled 2x)
+	ModeSSCUHQ Mode = "ssc_uhq"
 )
+
+// Streaming reports a mode that owns the adapter (not "off").
+func (m Mode) Streaming() bool { return m == ModeAAC || m == ModeSSC || m == ModeSSCUHQ }
+
+// EngineCodec is the codec the engine streams in this mode.
+func (m Mode) EngineCodec() string {
+	if m == ModeAAC {
+		return "aac"
+	}
+	return "ssc"
+}
+
+// UHQBitrates (kbps) are the SSC UHQ (96 kHz) rates; the rest are basic.
+var UHQBitrates = []int{152, 250, 291, 308, 442, 584, 886}
+
+func isUHQ(kbps int) bool {
+	for _, b := range UHQBitrates {
+		if b == kbps {
+			return true
+		}
+	}
+	return false
+}
 
 // Device is a remembered Bluetooth peer.
 type Device struct {
@@ -44,18 +69,71 @@ type Settings struct {
 	// Debug: detailed journal (logs\debug.log) of switches, device
 	// exchanges and volume.
 	Debug bool `json:"debug,omitempty"`
-	// AACMode: "" / "fit" (default: bitrate from the headphones' MTU, every
-	// frame fits one packet), "over" (256 kbps above their announced MTU,
-	// menu "AAC 256") or "frag" (diagnostics: frames split over two packets).
+	// Lang: "ru" | "en"; "" = the Windows UI language.
+	Lang string `json:"lang,omitempty"`
+	// MaxMTU: media packets of up to 1017 bytes instead of the 679 the
+	// Galaxy Buds2 Pro announce (they play them cleanly; other headphones
+	// may not): AAC 256 kbps, larger SSC frames.
+	MaxMTU bool `json:"maxMTU,omitempty"`
+	// AACMode: "" / "fit" (every frame fits one packet) or "frag"
+	// (diagnostics: frames split over two packets). The old "over" is
+	// MaxMTU now.
 	AACMode string `json:"aacMode,omitempty"`
+	// AACBitrate: AAC kbps; 0 = as high as one packet allows.
+	AACBitrate int `json:"aacBitrate,omitempty"`
 	// SSCBitrate: SSC kbps (88..328); 0 = like the phone (192, 128 when the
 	// headphones announce a limit). Frames above the headphones' packet
-	// size go in larger packets, as "AAC 256" does.
+	// size go in larger packets, as MaxMTU does.
 	SSCBitrate int `json:"sscBitrate,omitempty"`
+	// SSCUHQBitrate: SSC UHQ kbps (152..886); 0 = as high as one packet allows.
+	SSCUHQBitrate int `json:"sscUhqBitrate,omitempty"`
 	// SSCCap: SSC configuration byte sent to the headphones (experiments);
 	// 0 = like the phone (0x04 | their 0x08 bit, UHQ 0x02 | their 0x08).
-	// A UHQ bitrate in SSCBitrate (152..886) forces 96 kHz.
 	SSCCap int `json:"sscCap,omitempty"`
+}
+
+// Bitrate is the chosen kbps for a mode's codec (0 = auto).
+func (s *Settings) Bitrate(m Mode) int {
+	switch m {
+	case ModeAAC:
+		return s.AACBitrate
+	case ModeSSC:
+		return s.SSCBitrate
+	case ModeSSCUHQ:
+		return s.SSCUHQBitrate
+	}
+	return 0
+}
+
+// SetBitrate stores the kbps for a mode's codec (0 = auto).
+func (s *Settings) SetBitrate(m Mode, kbps int) {
+	switch m {
+	case ModeAAC:
+		s.AACBitrate = kbps
+	case ModeSSC:
+		s.SSCBitrate = kbps
+	case ModeSSCUHQ:
+		s.SSCUHQBitrate = kbps
+	}
+}
+
+// migrate converts settings written by older versions.
+func (s *Settings) migrate() {
+	if s.AACMode == "over" {
+		s.AACMode, s.MaxMTU = "", true
+	}
+	if isUHQ(s.SSCBitrate) {
+		// UHQ used to be "SSC with a UHQ bitrate"
+		s.SSCUHQBitrate, s.SSCBitrate = s.SSCBitrate, 0
+		if s.Mode == ModeSSC {
+			s.Mode = ModeSSCUHQ
+		}
+	}
+	switch s.Mode {
+	case ModeOff, ModeAAC, ModeSSC, ModeSSCUHQ:
+	default:
+		s.Mode = ModeOff
+	}
 }
 
 func (s *Settings) MuteSpeakersOrDefault() bool {
@@ -108,7 +186,8 @@ func (s *Settings) summary() string {
 		}
 		return d.Addr
 	}
-	return fmt.Sprintf("mode=%s headphones=%s mouse=%s debug=%v aac=%q ssc=%d/0x%02X", s.Mode, dev(s.Headphones), dev(s.Mouse), s.Debug, s.AACMode, s.SSCBitrate, s.SSCCap)
+	return fmt.Sprintf("mode=%s lang=%q headphones=%s mouse=%s debug=%v maxmtu=%v aac=%d/%q ssc=%d uhq=%d cap=0x%02X",
+		s.Mode, s.Lang, dev(s.Headphones), dev(s.Mouse), s.Debug, s.MaxMTU, s.AACBitrate, s.AACMode, s.SSCBitrate, s.SSCUHQBitrate, s.SSCCap)
 }
 
 // caller names the function that called Load/Save (who reset the choice?).
@@ -140,9 +219,7 @@ func Load() (*Settings, error) {
 	if err := json.Unmarshal(b, s); err != nil {
 		return &Settings{Mode: ModeOff}, err
 	}
-	if s.Mode == "" {
-		s.Mode = ModeOff
-	}
+	s.migrate()
 	logx.Printf("settings: loaded %s (%d bytes): %s", path, len(b), s.summary())
 	return s, nil
 }

@@ -28,6 +28,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sscv2/internal/i18n"
 	"strings"
 	"syscall"
 	"time"
@@ -180,7 +181,7 @@ func run(timeout time.Duration, exe string, args ...string) (string, error) {
 func makeCatalog(dir, infPath string) error {
 	makecat := findSDKTool("makecat.exe")
 	if makecat == "" {
-		return errors.New("makecat.exe из Windows SDK не найден (нужны инструменты Windows 10+ SDK)")
+		return errors.New(i18n.T("makecat.exe из Windows SDK не найден (нужны инструменты Windows 10+ SDK)", "makecat.exe from the Windows SDK not found (Windows 10+ SDK tools needed)"))
 	}
 	ddf := filepath.Join(dir, "sscv2_winusb.ddf")
 	body := "[CatalogHeader]\r\nName=" + catName + "\r\nResultDir=" + dir +
@@ -194,7 +195,7 @@ func makeCatalog(dir, infPath string) error {
 		return fmt.Errorf("makecat: %v %s", err, strings.TrimSpace(out))
 	}
 	if _, err := os.Stat(filepath.Join(dir, catName)); err != nil {
-		return errors.New("makecat не создал каталог")
+		return errors.New(i18n.T("makecat не создал каталог", "makecat did not create the catalog"))
 	}
 	return nil
 }
@@ -392,10 +393,10 @@ func logTail(path string, n int) string {
 func Switch(id USBID, enable bool) (Result, error) {
 	st := Detect(id)
 	if st.Mode == NotPresent {
-		return Result{}, fmt.Errorf("адаптер %s не найден", id)
+		return Result{}, fmt.Errorf(i18n.T("адаптер %s не найден", "adapter %s not found"), id)
 	}
 	if (enable && st.Mode == WinUSB) || (!enable && st.Mode == BthUSB) {
-		return Result{Message: "адаптер уже в нужном режиме"}, nil
+		return Result{Message: i18n.T("адаптер уже в нужном режиме", "the adapter is already in that mode")}, nil
 	}
 
 	dir, err := os.MkdirTemp("", "sscv2drv")
@@ -411,7 +412,7 @@ func Switch(id USBID, enable bool) (Result, error) {
 	var signtool string
 	if enable {
 		if signtool = findSDKTool("signtool.exe"); signtool == "" {
-			return Result{}, errors.New("signtool.exe из Windows SDK не найден")
+			return Result{}, errors.New(i18n.T("signtool.exe из Windows SDK не найден", "signtool.exe from the Windows SDK not found"))
 		}
 		if err := os.WriteFile(infPath, []byte(infText(id)), 0o644); err != nil {
 			return Result{}, err
@@ -431,9 +432,9 @@ func Switch(id USBID, enable bool) (Result, error) {
 		Logf("driver switch (winusb=%v) script log:%s", enable, logTail(logPath, 40))
 	}
 	if err != nil {
-		msg := "переключение драйвера не удалось: " + err.Error()
+		msg := i18n.T("переключение драйвера не удалось: ", "driver switch failed: ") + err.Error()
 		if ee, ok := err.(*exec.ExitError); ok && ee.ExitCode() == 2 {
-			msg += " (временный сертификат не удалён — удалите '" + signerSubject + "' в certlm.msc)"
+			msg += i18n.T(" (временный сертификат не удалён — удалите '", " (the temporary certificate was not removed - delete '") + signerSubject + i18n.T("' в certlm.msc)", "' in certlm.msc)")
 		}
 		return Result{}, errors.New(msg + tail)
 	}
@@ -450,10 +451,10 @@ func Switch(id USBID, enable bool) (Result, error) {
 	}
 	now := Detect(id)
 	if now.Mode != want {
-		return Result{Changed: true}, fmt.Errorf("драйвер ещё не сменился (сейчас %s)%s", now.Mode, tail)
+		return Result{Changed: true}, fmt.Errorf(i18n.T("драйвер ещё не сменился (сейчас %s)%s", "the driver has not changed yet (now %s)%s"), now.Mode, tail)
 	}
 	if enable {
-		return Result{Changed: true, Message: "WinUSB установлен, адаптер в режиме потока"}, nil
+		return Result{Changed: true, Message: i18n.T("WinUSB установлен, адаптер в режиме потока", "WinUSB installed, the adapter is in streaming mode")}, nil
 	}
-	return Result{Changed: true, Message: "адаптер возвращён Windows Bluetooth"}, nil
+	return Result{Changed: true, Message: i18n.T("адаптер возвращён Windows Bluetooth", "the adapter is back with Windows Bluetooth")}, nil
 }

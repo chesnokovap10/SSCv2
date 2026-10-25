@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"runtime"
+	"sscv2/internal/i18n"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -31,10 +32,10 @@ const (
 )
 
 var (
-	ErrNotReady  = errors.New("Bluetooth-стек не запущен")
-	ErrTimeout   = errors.New("истекло время ожидания")
-	ErrNoCodec   = errors.New("наушники не поддерживают выбранный кодек")
-	errCancelled = errors.New("отменено")
+	ErrNotReady  = i18n.Error("Bluetooth-стек не запущен", "the Bluetooth stack is not running")
+	ErrTimeout   = i18n.Error("истекло время ожидания", "timed out")
+	ErrNoCodec   = i18n.Error("наушники не поддерживают выбранный кодек", "the headphones do not support the chosen codec")
+	errCancelled = i18n.Error("отменено", "cancelled")
 )
 
 type mpkt struct {
@@ -195,7 +196,7 @@ var localName *C.char // BTstack keeps the pointer
 func Start(o Options) error {
 	s := stack
 	if s.loopRunning.Load() {
-		return errors.New("стек уже запущен")
+		return errors.New(i18n.T("стек уже запущен", "the stack is already running"))
 	}
 	if o.Logf != nil {
 		s.logf = o.Logf
@@ -217,7 +218,7 @@ func Start(o Options) error {
 		return nil
 	case <-time.After(initTimeout):
 		Shutdown()
-		return fmt.Errorf("адаптер не ответил за %s (WinUSB? прошивка?)", initTimeout)
+		return fmt.Errorf(i18n.T("адаптер не ответил за %s (WinUSB? прошивка?)", "the adapter did not answer within %s (WinUSB? firmware?)"), initTimeout)
 	}
 }
 
@@ -284,7 +285,7 @@ func (s *stackT) loop(started chan struct{}) {
 	s.initTick = time.Now()
 	if rc := C.hci_power_control(C.HCI_POWER_ON); rc != 0 {
 		s.logf("bt: hci_power_control(ON) failed: %d (adapter busy or not WinUSB?)", int(rc))
-		s.powerErr = fmt.Errorf("адаптер не открылся (код %d) - занят другим процессом или не в режиме WinUSB", int(rc))
+		s.powerErr = fmt.Errorf(i18n.T("адаптер не открылся (код %d) - занят другим процессом или не в режиме WinUSB", "could not open the adapter (code %d) - used by another process or not in WinUSB mode"), int(rc))
 	}
 
 	s.loopRunning.Store(true)
@@ -429,7 +430,7 @@ func Connect(ctx context.Context, addr Addr) (RemoteCaps, error) {
 	}
 	s.logf("bt: connecting to %s ...", addr)
 	if err := wait(ctx, ch, connectTimeout); err != nil {
-		return RemoteCaps{}, fmt.Errorf("подключение к %s: %w", addr, err)
+		return RemoteCaps{}, fmt.Errorf(i18n.T("подключение к %s: %w", "connecting to %s: %w"), addr, err)
 	}
 	var caps RemoteCaps
 	_ = s.callSync(func() { caps = s.caps })
@@ -499,7 +500,7 @@ func Configure(ctx context.Context, codec Codec, sampleRate uint32, channels uin
 		return 0, fmt.Errorf("set_config %s: 0x%02X", codec, uint8(rc))
 	}
 	if err := wait(ctx, ch, streamTimeout); err != nil {
-		return 0, fmt.Errorf("настройка потока %s: %w", codec, err)
+		return 0, fmt.Errorf(i18n.T("настройка потока %s: %w", "setting up the %s stream: %w"), codec, err)
 	}
 	return int(s.mtu.Load()), nil
 }

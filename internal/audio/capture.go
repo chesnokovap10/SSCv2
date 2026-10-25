@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"runtime"
+	"sscv2/internal/i18n"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -21,12 +22,12 @@ const (
 )
 
 var (
-	avrt                   = windows.NewLazySystemDLL("avrt.dll")
-	procAvSetMmThreadChar  = avrt.NewProc("AvSetMmThreadCharacteristicsW")
-	procAvRevertMmThread   = avrt.NewProc("AvRevertMmThreadCharacteristics")
-	winmm                  = windows.NewLazySystemDLL("winmm.dll")
-	procTimeBeginPeriod    = winmm.NewProc("timeBeginPeriod")
-	procTimeEndPeriod      = winmm.NewProc("timeEndPeriod")
+	avrt                  = windows.NewLazySystemDLL("avrt.dll")
+	procAvSetMmThreadChar = avrt.NewProc("AvSetMmThreadCharacteristicsW")
+	procAvRevertMmThread  = avrt.NewProc("AvRevertMmThreadCharacteristics")
+	winmm                 = windows.NewLazySystemDLL("winmm.dll")
+	procTimeBeginPeriod   = winmm.NewProc("timeBeginPeriod")
+	procTimeEndPeriod     = winmm.NewProc("timeEndPeriod")
 )
 
 // waveFormatEx (+ extensible tail)
@@ -66,13 +67,13 @@ type Callback func(samples []float32, frames int)
 // Capture is a WASAPI shared-mode capture: loopback on a render endpoint,
 // direct capture on a recording endpoint (e.g. the cable's "CABLE Output").
 type Capture struct {
-	client   uintptr
-	capture  uintptr
-	Format   Format
-	Device   Endpoint
-	running  atomic.Bool
-	wg       sync.WaitGroup
-	conv     []float32
+	client  uintptr
+	capture uintptr
+	Format  Format
+	Device  Endpoint
+	running atomic.Bool
+	wg      sync.WaitGroup
+	conv    []float32
 }
 
 // OpenCapture prepares capture on endpoint id ("" = default output).
@@ -89,7 +90,7 @@ func OpenCapture(id string) (*Capture, error) {
 		dev, err = deviceByID(en, id)
 	}
 	if err != nil {
-		return nil, fmt.Errorf("устройство захвата: %w", err)
+		return nil, fmt.Errorf(i18n.T("устройство захвата: %w", "capture device: %w"), err)
 	}
 	defer release(dev)
 
@@ -129,7 +130,7 @@ func OpenCapture(id string) (*Capture, error) {
 	}
 	if c.Format.Bits != 16 && c.Format.Bits != 32 {
 		c.Close()
-		return nil, fmt.Errorf("формат %s не поддерживается", c.Format)
+		return nil, fmt.Errorf(i18n.T("формат %s не поддерживается", "format %s is not supported"), c.Format)
 	}
 	return c, nil
 }

@@ -22,6 +22,7 @@ import (
 	"sscv2/internal/bt"
 	"sscv2/internal/config"
 	"sscv2/internal/driver"
+	"sscv2/internal/i18n"
 	"sscv2/internal/ipc"
 	"sscv2/internal/keys"
 	"sscv2/internal/logx"
@@ -82,12 +83,16 @@ func Run(in io.Reader, stdout *os.File) int {
 		return 2
 	}
 	logx.SetDebug(e.cfg.Debug)
+	i18n.Set(e.cfg.Lang)
 	if e.cfg.AACMode != "" {
 		aacMode = e.cfg.AACMode
 	}
+	aacForced = e.cfg.AACBitrate * 1000
 	sscForced = e.cfg.SSCBitrate * 1000
-	logf("engine start: codec=%s headphones=%q mouse=%q adapter=%04X:%04X debug=%v",
-		e.cfg.Codec, e.cfg.Headphones, e.cfg.Mouse, e.cfg.VID, e.cfg.PID, e.cfg.Debug)
+	sscUHQMode = e.cfg.SSCUHQ
+	logf("engine start %s: codec=%s uhq=%v bitrate aac=%d ssc=%d maxmtu=%v headphones=%q mouse=%q adapter=%04X:%04X debug=%v lang=%s",
+		ipc.Version, e.cfg.Codec, e.cfg.SSCUHQ, e.cfg.AACBitrate, e.cfg.SSCBitrate, e.cfg.MaxMTU, e.cfg.Headphones, e.cfg.Mouse,
+		e.cfg.VID, e.cfg.PID, e.cfg.Debug, i18n.Lang())
 	e.target = e.cfg.Headphones
 	e.ctx, e.cancel = context.WithCancel(context.Background())
 	go e.commands(r)
@@ -116,6 +121,8 @@ func (e *engine) commands(r *ipc.Reader) {
 		case "debug":
 			logx.SetDebug(c.On)
 			bt.SetDebug(c.On)
+		case "lang":
+			i18n.Set(c.Lang)
 		case "stop":
 			e.cancel()
 		case "scan":
@@ -147,17 +154,17 @@ func (e *engine) run() error {
 	// 1. MediaTek RAM firmware (chip boots from ROM after every power-up).
 	id := driver.USBID{VID: e.cfg.VID, PID: e.cfg.PID}
 	if st := driver.Detect(id); st.Mode != driver.WinUSB {
-		return fmt.Errorf("адаптер %s не в режиме WinUSB (сейчас: %s)", id, st.Mode)
+		return fmt.Errorf(i18n.T("адаптер %s не в режиме WinUSB (сейчас: %s)", "adapter %s is not in WinUSB mode (now: %s)"), id, st.Mode)
 	}
 	e.update(func(s *ipc.EngineStatus) {
-		s.Phase, s.Message = "firmware", "загрузка прошивки адаптера"
+		s.Phase, s.Message = "firmware", i18n.T("загрузка прошивки адаптера", "loading the adapter firmware")
 	})
 	info, err := mtk.Setup(e.cfg.VID, e.cfg.PID, "", logf)
 	if err != nil {
 		if errors.Is(err, mtk.ErrNotFound) {
-			return fmt.Errorf("адаптер %04X:%04X не в режиме WinUSB", e.cfg.VID, e.cfg.PID)
+			return fmt.Errorf(i18n.T("адаптер %04X:%04X не в режиме WinUSB", "adapter %04X:%04X is not in WinUSB mode"), e.cfg.VID, e.cfg.PID)
 		}
-		return fmt.Errorf("прошивка MediaTek: %w", err)
+		return fmt.Errorf(i18n.T("прошивка MediaTek: %w", "MediaTek firmware: %w"), err)
 	}
 	e.update(func(s *ipc.EngineStatus) {
 		s.Chip = info.String()
@@ -170,21 +177,21 @@ func (e *engine) run() error {
 		logf("keys.json: %v", err)
 	}
 	opts := bt.Options{
-		EnableSSC:     e.cfg.Codec == "ssc",
-		SSCCap:        uint8(e.cfg.SSCCap),
-		Keys:          e.store,
-		Logf:          logf,
-		Verbose:       e.cfg.Verbose,
-		Debug:         e.cfg.Debug,
-		ForceMediaMTU: map[bool]int{true: overMTU}[e.cfg.Codec != "ssc" && e.cfg.AACMode == "over" ||
+		EnableSSC: e.cfg.Codec == "ssc",
+		SSCCap:    uint8(e.cfg.SSCCap),
+		Keys:      e.store,
+		Logf:      logf,
+		Verbose:   e.cfg.Verbose,
+		Debug:     e.cfg.Debug,
+		ForceMediaMTU: map[bool]int{true: overMTU}[e.cfg.MaxMTU || e.cfg.AACMode == "over" ||
 			e.cfg.Codec == "ssc" && sscNeedsOver(e.cfg.SSCBitrate)],
-		USBIDs:        [][2]uint16{{e.cfg.VID, e.cfg.PID}},
+		USBIDs: [][2]uint16{{e.cfg.VID, e.cfg.PID}},
 	}
 	if e.cfg.Mouse != "" {
 		if l, ok := e.store.FindLE(e.cfg.Mouse); ok {
 			if b, err := l.Bond(); err == nil {
 				opts.Mouse = b
-				e.update(func(s *ipc.EngineStatus) { s.Mouse = l.Addr; s.MouseState = "запуск" })
+				e.update(func(s *ipc.EngineStatus) { s.Mouse = l.Addr; s.MouseState = i18n.T("запуск", "starting") })
 			} else {
 				logf("mouse bond: %v", err)
 			}
@@ -192,7 +199,9 @@ func (e *engine) run() error {
 			logf("mouse %s: no keys", e.cfg.Mouse)
 		}
 	}
-	e.update(func(s *ipc.EngineStatus) { s.Phase, s.Message = "starting", "запуск Bluetooth-стека" })
+	e.update(func(s *ipc.EngineStatus) {
+		s.Phase, s.Message = "starting", i18n.T("запуск Bluetooth-стека", "starting the Bluetooth stack")
+	})
 	if err := bt.Start(opts); err != nil {
 		return err
 	}
@@ -213,7 +222,7 @@ func (e *engine) run() error {
 	for {
 		if e.target == "" {
 			e.update(func(s *ipc.EngineStatus) {
-				s.Phase, s.Message = "idle", "наушники не выбраны - «Сопрячь устройство»"
+				s.Phase, s.Message = "idle", i18n.T("наушники не выбраны - «Сопрячь устройство»", "no headphones chosen - see Pair a device")
 			})
 			select {
 			case <-e.ctx.Done():
@@ -228,7 +237,7 @@ func (e *engine) run() error {
 		if time.Now().After(activeUntil) {
 			// passive: wait until the headphones connect to us
 			e.update(func(s *ipc.EngineStatus) {
-				s.Phase, s.Message = "waiting", "ожидание наушников (подключатся, когда их достанут из кейса)"
+				s.Phase, s.Message = "waiting", i18n.T("ожидание наушников (подключатся, когда их достанут из кейса)", "waiting for the headphones (they connect when taken out of the case)")
 				s.Connected, s.Streaming = false, false
 			})
 			logf("waiting for %s to connect by itself", e.target)
@@ -254,7 +263,7 @@ func (e *engine) run() error {
 		if e.ctx.Err() != nil {
 			return e.ctx.Err()
 		}
-		msg := "ожидание наушников"
+		msg := i18n.T("ожидание наушников", "waiting for the headphones")
 		switch {
 		case errors.Is(err, errLinkLost):
 			// Put in the case / out of range: pause what was playing, fall
@@ -266,7 +275,7 @@ func (e *engine) run() error {
 		case errors.Is(err, errReconnect):
 			activeUntil = time.Now().Add(20 * time.Second)
 			backoff = time.Second
-			msg = "переподключение на " + strings.ToUpper(e.cfg.Codec)
+			msg = i18n.T("переподключение на ", "reconnecting for ") + strings.ToUpper(e.cfg.Codec)
 		case err != nil:
 			logf("session: %v", err)
 			msg = err.Error()
@@ -347,7 +356,7 @@ func (e *engine) session(addrStr string) error {
 		name = c.Name
 	}
 	e.update(func(s *ipc.EngineStatus) {
-		s.Phase, s.Message = "connecting", "подключение к "+name
+		s.Phase, s.Message = "connecting", i18n.T("подключение к ", "connecting to ")+name
 		s.Headphones, s.HeadphonesName = addr.String(), name
 	})
 	for len(e.disc) > 0 {
@@ -375,11 +384,11 @@ func (e *engine) session(addrStr string) error {
 	switch e.cfg.Codec {
 	case "ssc":
 		if !caps.SSC && !remoteCfg {
-			return errors.New("наушники не поддерживают SSC")
+			return errors.New(i18n.T("наушники не поддерживают SSC", "the headphones do not support SSC"))
 		}
 		if caps.SSC && caps.SSCCap&0x04 == 0 {
 			// the phone would go 16-bit 44.1 kHz here; we only do 24-bit 48 kHz
-			return fmt.Errorf("наушники не поддерживают 24-битный SSC (cap 0x%02X) - выберите AAC", caps.SSCCap)
+			return fmt.Errorf(i18n.T("наушники не поддерживают 24-битный SSC (cap 0x%02X) - выберите AAC", "the headphones do not support 24-bit SSC (cap 0x%02X) - choose AAC"), caps.SSCCap)
 		}
 		codec, mk = bt.CodecSSC, newSSC
 		if err := sscRateOK(e.srate); err != nil {
@@ -387,7 +396,7 @@ func (e *engine) session(addrStr string) error {
 		}
 	default:
 		if !caps.AAC && !remoteCfg {
-			return errors.New("наушники не поддерживают AAC")
+			return errors.New(i18n.T("наушники не поддерживают AAC", "the headphones do not support AAC"))
 		}
 		codec, mk = bt.CodecAAC, newAAC
 	}
@@ -439,13 +448,17 @@ func (e *engine) session(addrStr string) error {
 		bw = fmt.Sprintf(", band %d Hz", b.Bandwidth())
 	}
 	e.pipe.frag = aacMode == "frag" && codec == bt.CodecAAC
-	logf("streaming %s %d Hz, %d kbps%s, payload %d, packing %s", codec, e.srate, enc.BitrateKbps(), bw, mtu, map[bool]string{true: "frag", false: "fit"}[e.pipe.frag])
+	label, rate := codec.String(), e.srate
+	if si, ok := enc.(interface{ streamInfo() (string, int) }); ok {
+		label, rate = si.streamInfo()
+	}
+	logf("streaming %s %d Hz, %d kbps%s, payload %d, packing %s", label, rate, enc.BitrateKbps(), bw, mtu, map[bool]string{true: "frag", false: "fit"}[e.pipe.frag])
 	e.update(func(s *ipc.EngineStatus) {
 		s.Phase, s.Message = "streaming", ""
 		s.Streaming = true
-		s.Codec = codec.String()
+		s.Codec = label
 		s.BitrateKbps = enc.BitrateKbps()
-		s.SampleRate = e.srate
+		s.SampleRate = rate
 	})
 	e.startVolumeSync()
 
@@ -511,11 +524,11 @@ func (e *engine) setupAudio() error {
 		cp, err = audio.OpenCapture("")
 	}
 	if err != nil {
-		return fmt.Errorf("захват звука: %w", err)
+		return fmt.Errorf(i18n.T("захват звука: %w", "audio capture: %w"), err)
 	}
 	if cp.Format.SampleRate != 44100 && cp.Format.SampleRate != 48000 {
 		cp.Close()
-		return fmt.Errorf("частота вывода %d Гц не поддерживается, выберите 48000 Гц в настройках звука", cp.Format.SampleRate)
+		return fmt.Errorf(i18n.T("частота вывода %d Гц не поддерживается, выберите 48000 Гц в настройках звука", "an output rate of %d Hz is not supported, choose 48000 Hz in the Sound settings"), cp.Format.SampleRate)
 	}
 	e.cap = cp
 	e.srate = cp.Format.SampleRate
@@ -547,7 +560,19 @@ func (e *engine) startVolumeSync() {
 	if r, ok := audio.VirtualRender(); ok && virtual {
 		id = r.ID
 	}
-	vs, err := audio.StartVolumeSync(id, bt.SetVolume)
+	vs, err := audio.StartVolumeSync(id, bt.SetVolume, func(m bool) {
+		// Mute in Windows (key, mixer): the capture is taken before mute is
+		// applied, so silence the stream. Our own speaker mute (loopback
+		// without the virtual device) is not the user's choice: ignore it.
+		e.mu.Lock()
+		ours := e.st.Muted && id == ""
+		e.mu.Unlock()
+		if ours {
+			return
+		}
+		e.pipe.userMuted.Store(m)
+		logf("volume: Windows mute %v -> headphones %s", m, map[bool]string{true: "silent", false: "on"}[m])
+	})
 	if err != nil {
 		logf("volume sync: %v", err)
 		return
@@ -558,7 +583,7 @@ func (e *engine) startVolumeSync() {
 
 var evNames = map[bt.EventKind]string{bt.EvDisconnected: "disconnected", bt.EvVolume: "volume", bt.EvLinkKey: "link key",
 	bt.EvMouse: "mouse", bt.EvAVRCPConnected: "AVRCP connected", bt.EvVolumeApplied: "volume applied",
-	bt.EvACLUp: "ACL up", bt.EvA2DPReady: "A2DP ready"}
+	bt.EvACLUp: "ACL up", bt.EvA2DPReady: "A2DP ready", bt.EvMediaKey: "media key"}
 
 func (e *engine) btEvents() {
 	for ev := range bt.Events() {
@@ -589,6 +614,13 @@ func (e *engine) btEvents() {
 				Key: fmt.Sprintf("%x", ev.Key[:]), KeyType: ev.KeyType})
 		case bt.EvMouse:
 			e.update(func(s *ipc.EngineStatus) { s.MouseState = ev.Mouse })
+		case bt.EvMediaKey:
+			// taps on the headphones -> Windows media keys
+			vk := map[int]uint16{bt.MediaPlayPause: vkMediaPlayPause, bt.MediaNext: vkMediaNext,
+				bt.MediaPrev: vkMediaPrev, bt.MediaStop: vkMediaStop}[ev.Media]
+			if vk != 0 {
+				pressKey(vk)
+			}
 		}
 	}
 }
@@ -614,6 +646,7 @@ func (e *engine) ticker() {
 				(fr-lastFrames)/2, (eb-lastBytes)*8/2000, e.pipe.takePeak(), q, fails, sent, maxF, over)
 		}
 		lastBytes, lastFrames = eb, fr
+		bt.SetPlaying(bt.Streaming() && e.pipe.loudWithin(3*time.Second))
 		e.update(func(s *ipc.EngineStatus) {
 			s.Queue, s.Fails, s.Sent = q, fails, sent
 			s.Volume = int(bt.Volume())
@@ -631,7 +664,7 @@ func (e *engine) scan() {
 	logf("scan requested")
 	found, err := bt.Scan(e.ctx, 10*time.Second)
 	if err != nil {
-		_ = e.out.Write(ipc.Event{Ev: "log", Msg: "поиск: " + err.Error()})
+		_ = e.out.Write(ipc.Event{Ev: "log", Msg: i18n.T("поиск: ", "search: ") + err.Error()})
 	}
 	var list []ipc.Found
 	for _, f := range found {
@@ -646,8 +679,8 @@ func (e *engine) scan() {
 
 // teardown restores the audio setup and releases the adapter.
 var (
-	errLinkLost  = errors.New("связь с наушниками потеряна")
-	errReconnect = errors.New("переподключение для выбора кодека")
+	errLinkLost  = i18n.Error("связь с наушниками потеряна", "the link to the headphones was lost")
+	errReconnect = i18n.Error("переподключение для выбора кодека", "reconnecting to choose the codec")
 )
 
 // onLinkLost pauses playback (when something was playing) and gives the
@@ -669,6 +702,7 @@ func (e *engine) onLinkLost() {
 // redoes them on the next connection.
 func (e *engine) releaseAudio() {
 	e.pipe.set(nil, 0)
+	e.pipe.userMuted.Store(false)
 	if v := e.vs(); v != nil {
 		v.Stop()
 		e.vsp.Store(nil)

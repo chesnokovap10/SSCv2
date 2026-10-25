@@ -1,160 +1,192 @@
 # SSCv2
 
-Программа в трее: передаёт звук Windows на Samsung Galaxy Buds через **встроенный
-Bluetooth MediaTek MT79xx** (MT7921/MT7922/MT7902) в обход стека Windows и при этом
-сохраняет работу **BLE-мыши**. Главного окна нет — только значок и меню по ПКМ.
+**English** · [Русский](README.ru.md)
 
-Написана заново на Go по наработкам из `D:\2\SSC` (коммиты от 23.10: MT7922, AAC на
-Buds, мост мыши, виртуальные наушники, громкость, переключение драйвера).
+A Windows tray program that streams audio to Samsung Galaxy Buds over the laptop's
+**built-in MediaTek MT79xx Bluetooth** (MT7921/MT7922/MT7902), bypassing the Windows stack,
+with **AAC**, **SSC** (Samsung Scalable Codec, 24 bit / 48 kHz) or **SSC UHQ** (96 kHz) —
+while a **BLE mouse** keeps working. There is no main window: just an icon and a right-click
+menu.
 
-## Меню
+Version: `0.1 #<commit hash>` (e.g. `0.1 #67cd8794`), shown in the menu and in "Device info".
 
-| Пункт | Что делает |
+## Install and update
+
+Run `ssc.exe` from any folder. On the first run it (after a UAC prompt) copies itself to
+`C:\Program Files\SSCv2`, puts an **SSCv2** shortcut on the desktop and starts from there.
+If the program is already installed and a different file is started, the installed copy is
+**updated**: the running tray gives Bluetooth back to Windows and quits, the file is replaced
+and the new tray resumes the same codec. Nothing is added to "Apps & features".
+
+`SSCV2_PORTABLE=1` runs without installing (for debugging).
+
+**Uninstall:** "Settings → Uninstall…". Bluetooth goes back to Windows; the service, the
+virtual headphones, `Program Files\SSCv2`, `%ProgramData%\SSCv2`, settings, pairing keys, logs
+and the shortcut are removed. The file the program was installed from stays.
+
+## Menu
+
+| Item | What it does |
 |---|---|
-| Выкл (Bluetooth Windows) | Останавливает поток и возвращает адаптер драйверу Windows (BTHUSB). Наушники и мышь работают как обычно. |
-| Режим AAC | Переводит адаптер в WinUSB, грузит прошивку MT79xx, поднимает BTstack, подключает наушники по AAC, включает мост мыши. |
-| AAC 256 кбит/с (выше лимита наушников) | Целые кадры 256 кбит/с сверх размера пакета, который объявили наушники (см. «Битрейт AAC»). Выключено — битрейт считается по размеру пакета наушников. |
-| Режим SSC | Как AAC, но кодек Samsung Scalable Codec — наш `libssc` (бит-точная копия энкодера из прошивки телефона). Как телефон: 24 бит / 48 кГц, 192 кбит/с (128 — если наушники объявили ограничение), кадр 18 мс в пакете. Битрейт меняет `ssc.exe ctl ssc auto|88|96|128|192|229|256|328` (на Buds2 Pro 256 и 328 звучат плохо — это «широкие» режимы Samsung, которые телефон на 48 кГц не использует; практический максимум 229). Нужен вывод Windows на 48000 Гц. |
-| Сопрячь устройство ▸ | Импорт ключей из Windows, поиск рядом (в режиме AAC), выбор наушников и мыши. |
-| Инфо об устройствах… | Адаптер, чип/прошивка, наушники (кодек, битрейт, громкость), мышь, служба. Тот же текст — по левому клику на значке. |
-| Запустить / Удалить службу | Служба-помощник (LocalSystem). С ней переключения и импорт ключей идут без запросов UAC. |
-| Открыть папку журналов | Журналы трея, движка и помощника. |
-| Отладочный журнал (debug.log) | Подробный общий журнал всех процессов (см. ниже). Галочка сохраняется. |
+| **Codec ▸** Off / AAC / SSC / SSC UHQ | "Off": the adapter belongs to the Windows driver (BTHUSB), headphones and mouse work as usual. Otherwise: adapter in WinUSB, MT79xx firmware, BTstack, the headphones on the chosen codec, mouse bridge. |
+| **Bitrate ▸** | The list for the current codec; "Auto" — see below. |
+| Pair a device ▸ | Import keys from Windows, search nearby (codec on), choose headphones and mouse. |
+| Device info… | Adapter, chip/firmware, headphones (codec, bitrate, volume), mouse, service. Same text on a left click on the icon. |
+| **Settings ▸** Language | Русский / English (default: the Windows language). |
+| Settings ▸ Max MTU for Galaxy Buds2 Pro | Packets of up to 1017 bytes instead of the 679 the headphones announce: AAC 256 kbps in whole frames. Buds2 Pro play them cleanly; other headphones may drop them — hence an option. |
+| Settings ▸ Debug journal | Detailed shared journal of all processes (`debug.log`, see below). |
+| Settings ▸ Open the log folder | `%LOCALAPPDATA%\SSCv2\logs`. |
+| Settings ▸ Start / Remove the service | Helper service (LocalSystem): with it, switching and key import need no UAC prompts. |
+| Settings ▸ Uninstall… | Full removal (see above). |
 
-Цвет значка: серый — выкл, жёлтый — переключение/подключение, синий — ждём наушники,
-зелёный — идёт поток, красный — ошибка.
+Icon colour: grey — off, amber — switching/connecting, blue — waiting for the headphones,
+green — streaming, red — error.
 
-## Как это устроено
+### Codecs and bitrates
 
-Один файл `ssc.exe`, три роли:
+| Codec | Bitrates, kbps | "Auto" |
+|---|---|---|
+| AAC | 128, 160, 192, 224, 256 | as much as the headphones' packet holds: `(MTU − 12) × 8 × rate / 1024`, at most 256 (Buds2 Pro: 250 at 48 kHz; 256 with "Max MTU") |
+| SSC | 88, 96, 128, 192, 229, 256, 328 | like the phone: 192 (128 if the headphones announce a limit) |
+| SSC UHQ | 152, 250, 291, 308, 442, 584, 886 | the highest one packet holds (584; 886 with "Max MTU") |
+
+* SSC is our `libssc`, a bit-exact twin of the encoder in the phone firmware. Windows output
+  must run at 48000 Hz. On Buds2 Pro 256 and 328 sound bad (the "wide" modes the phone never
+  uses at 48 kHz) — 229 is the practical maximum.
+* SSC UHQ: the 48 kHz capture is upsampled 2× to 96 kHz, 9 ms frames. Buds2 Pro accept it
+  although they do not announce it.
+* Frames larger than the announced packet go in packets of up to 1017 bytes automatically.
+
+### Buttons and volume
+
+* Taps on the headphones → Windows media keys: single — play/pause, double — next track,
+  triple — restart / previous track (the player decides). The headphones are told whether
+  something plays, so a tap sends the right command.
+* Windows volume ⇄ headphone volume (AVRCP), both ways.
+* **Mute** in Windows (key, mixer) silences the stream to the headphones.
+* When the link is lost (headphones in the case) playback is paused and the sound goes back
+  to the speakers until the headphones return.
+
+## How it works
+
+One `ssc.exe`, several roles:
 
 ```
-ssc.exe            трей (пользователь)  ── stdin/stdout JSON ──►  ssc.exe engine (пользователь)
-   │                                                               MT79xx прошивка (WinUSB)
-   │ \\.\pipe\SSCv2Helper (доступ: SYSTEM, админы, владелец)       BTstack: A2DP/AVDTP/AVRCP, LE HID
-   ▼                                                               WASAPI → AAC (FDK) → RTP
-ssc.exe service (LocalSystem)                                      громкость ⇄ AVRCP, SendInput мыши
-   переключение драйвера, ключи из реестра, VB-CABLE
+ssc.exe            tray (user)  ── stdin/stdout JSON ──►  ssc.exe engine (user)
+   │                                                       MT79xx firmware (WinUSB)
+   │ \\.\pipe\SSCv2Helper (SYSTEM, admins, owner)          BTstack: A2DP/AVDTP/AVRCP, LE HID
+   ▼                                                       WASAPI → AAC (FDK) / SSC (libssc) → RTP
+ssc.exe service (LocalSystem)                              volume ⇄ AVRCP, buttons, mouse
+   driver switch, registry keys, VB-CABLE
 ```
 
-* **Движок — отдельный процесс** на каждый сеанс режима: свежее состояние BTstack, падение
-  C-кода не роняет трей; трей перезапускает движок и откатывает изменения звука.
-* **Служба** нужна только для привилегированного: смена драйвера (ephemeral-сертификат,
-  как в проверенной версии), чтение `BTHPORT\Parameters\Keys` (доступно только SYSTEM),
-  запись нового ключа обратно в Windows, установка VB-CABLE. Без службы те же операции
-  выполняются копией `ssc.exe` с запросом UAC. При установке exe копируется в
-  `Program Files\SSCv2` (служба SYSTEM не должна запускаться из папки пользователя).
-* **Ключи.** Наушники и мышь сопрягаются в Windows, затем «Импорт сопряжённых в Windows»
-  переносит ключи — тот же адрес контроллера, повторное сопряжение не нужно и связь с
-  Windows не ломается. Если наушники сопрячь в режиме AAC, новый ключ при запущенной
-  службе записывается и в реестр Windows.
-* **Виртуальные наушники.** Драйвер VB-CABLE (VB-Audio, подписан Microsoft) встроен в
-  `ssc.exe` (`internal/vbcable/files`). При включении режима AAC программа сама ставит
-  устройство и называет его по выбранным наушникам; при «Удалить службу» — удаляет.
-  В режиме AAC оно становится выводом по умолчанию, его ползунок управляет наушниками.
+* **The engine is a separate process** per session: fresh BTstack state, a crash in C code
+  does not take the tray down; the tray restarts the engine and undoes its audio changes.
+* **The service** is only for privileged work: the driver switch (a temporary certificate per
+  switch), reading `BTHPORT\Parameters\Keys` (SYSTEM only), writing a new key back to
+  Windows, installing VB-CABLE. Without the service a UAC-elevated copy of `ssc.exe` does the
+  same. The service runs from `Program Files\SSCv2`.
+* **Keys.** Pair headphones and mouse in Windows, then "Import devices paired in Windows"
+  copies the keys — same controller address, no re-pairing, Windows keeps working with them.
+  Headphones paired while a codec is on get their new key written to the Windows registry
+  too (with the service running).
+* **Virtual headphones.** The VB-CABLE driver (VB-Audio, Microsoft-signed) is embedded in
+  `ssc.exe` (`internal/vbcable/files`). When a codec is switched on the program installs the
+  device, names it after the chosen headphones and makes it the default output — its slider
+  controls the headphones. It is removed with the service or the program.
 
-### Go и C
+### Why the driver is switched "in place"
 
-Всё своё — на Go: драйвер (SetupAPI), загрузчик прошивки MT79xx (WinUSB), WASAPI/громкость/
-IPolicyConfig (COM напрямую), логика BT (события, A2DP, AVRCP-насос громкости, мост мыши),
-служба, трей. Сторонние библиотеки остаются на C/C++ и собираются через cgo прямо `go build`
-(без CMake): **BTstack** (`third_party/btstack`) и **FDK-AAC** (`third_party/fdk-aac`).
-`tools/genwrap` генерирует по одному файлу-обёртке на исходник библиотеки
-(`internal/bt/zbt_*.c`, `internal/codec/aac/zfdk_*.cpp`). C-прослойка — только `internal/bt/shim.c`.
+The adapter is switched by disabling the device → adding/removing the WinUSB package →
+enabling it (`pnputil /disable-device`, `/add-driver /install` or `/delete-driver
+/uninstall`, `/enable-device`). Removing the node (`/remove-device /subtree`) is not an option:
+it deletes the Bluetooth registry entries, and after every switch back Windows saw the
+headphones as a *new* device (100 % volume, audio jumping, ghost devices). The old way remains
+as a fallback, used automatically when Windows refuses to stop the adapter.
 
-| Пакет | Назначение |
+### Go and C
+
+Everything of our own is Go: the driver switch (SetupAPI), the MT79xx firmware loader
+(WinUSB), WASAPI/volume/IPolicyConfig (raw COM), the BT logic (events, A2DP, AVRCP, mouse
+bridge), the service, the tray, installation. The C/C++ libraries build through cgo with
+plain `go build` (no CMake): **BTstack** (`third_party/btstack`), **FDK-AAC**
+(`third_party/fdk-aac`) and our **libssc** (`libssc/src`). `tools/genwrap` writes one wrapper
+per source (`internal/bt/zbt_*.c`, `internal/codec/aac/zfdk_*.cpp`,
+`internal/codec/ssc/zssc_*.c`).
+
+| Package | Purpose |
 |---|---|
-| `internal/driver` | режим адаптера, переключение WinUSB ↔ BTHUSB |
-| `internal/mtk` | загрузка RAM-прошивки MT79xx (из DriverStore `mtkbt*`) |
-| `internal/bt` | BTstack: запуск, A2DP-источник, AVRCP, поиск, мост BLE-мыши |
-| `internal/codec/aac` | AAC-LC, LATM как у Android (иначе Buds молчат) |
-| `internal/audio` | WASAPI-захват, громкость, виртуальные наушники |
-| `internal/engine` | процесс потока: захват → AAC → BT, переподключение |
-| `internal/keys` | keys.json, импорт из реестра Windows |
-| `internal/vbcable` | встроенный драйвер виртуальных наушников |
-| `internal/helper` | служба, канал, привилегированные операции, UAC |
-| `internal/tray`, `internal/app` | значок, меню, режимы |
+| `cmd/ssc` | entry point, process roles, icon |
+| `internal/app` | tray: menu, codecs, install/uninstall, `ctl` commands |
+| `internal/engine` | streaming process: capture → codec → BT, reconnects, buttons, mute |
+| `internal/bt` | BTstack: bring-up, A2DP source (AAC/SSC), AVRCP, inquiry, BLE mouse bridge |
+| `internal/codec/aac`, `internal/codec/ssc` | AAC-LC (LATM like Android), SSC through libssc |
+| `internal/audio` | WASAPI capture, volume and mute, virtual headphones |
+| `internal/driver`, `internal/mtk` | WinUSB ↔ BTHUSB, MT79xx RAM firmware (from DriverStore `mtkbt*`) |
+| `internal/helper` | service, pipe, privileged operations, UAC |
+| `internal/install` | Program Files, shortcut, uninstall |
+| `internal/keys`, `internal/vbcable` | keys (keys.json, Windows registry), embedded VB-CABLE driver |
+| `internal/i18n`, `internal/config`, `internal/logx`, `internal/tray` | languages, settings, logs, icon |
+| `libssc/` | our SSC implementation: [README](libssc/README.md), [plan](libssc/PLAN.md) |
 
-## Сборка
+## Build
 
-Нужны Go 1.24+ и MinGW-w64 (gcc/g++) в `PATH`.
+Needs Go 1.24+ and MinGW-w64 (gcc/g++) in `PATH`.
 
 ```bat
 build.cmd
 ```
 
-Результат — `bin\ssc.exe`. Первая сборка компилирует BTstack, FDK-AAC и libssc (~1–2 мин), дальше кеш.
-Обёртки `z*.c` в пакетах cgo генерирует `go run ./tools/genwrap` (после добавления файлов в `libssc/src`).
+The result is `bin\ssc.exe` with version `0.1 #<hash>` from git. The first build compiles
+BTstack, FDK-AAC and libssc (~1–2 min), later builds are cached. Switching to WinUSB needs the
+Windows 10+ SDK (`makecat.exe`, `signtool.exe`).
 
-Для переключения в WinUSB нужен Windows 10+ SDK (`makecat.exe`, `signtool.exe`) — как и в
-прошлой версии.
+```bat
+go test ./...
+```
 
-## Файлы
+## Files
 
-* `%APPDATA%\SSCv2\settings.json` — режим, выбранные наушники/мышь, debug, режим AAC.
-  Каждое чтение и сохранение пишется в `tray.log` (кто сохранил).
-* `%APPDATA%\SSCv2\keys.json` — ключи сопряжения (секреты, только для этого пользователя).
-* `%LOCALAPPDATA%\SSCv2\logs\` — `tray.log`, `engine.log`, `engine-c.log`, `helper.log`;
-  журнал службы — `%ProgramData%\SSCv2\service.log`; `debug.log` — в режиме отладки.
+* `%APPDATA%\SSCv2\settings.json` — codec, bitrates, language, "Max MTU", headphones/mouse,
+  debug. Every load and save is logged in `tray.log` (with the caller).
+* `%APPDATA%\SSCv2\keys.json` — pairing keys (secrets, this user only).
+* `%LOCALAPPDATA%\SSCv2\logs\` — `tray.log`, `engine.log`, `engine-c.log`, `helper.log`,
+  `debug.log`; the service log is `%ProgramData%\SSCv2\service.log`.
 
-## Командная строка (отладка)
+## Command line
 
 ```bat
 ssc.exe status
-ssc.exe ctl status | info | mode off|aac|ssc | debug on|off | log [debug|tray|engine|helper] [N]
+ssc.exe ctl status | info | version | log [debug|tray|engine|helper] [N]
+ssc.exe ctl mode off|aac|ssc|ssc_uhq | bitrate auto|<kbps> | maxmtu on|off | lang ru|en
+ssc.exe ctl debug on|off | import windows | service install|remove | scan | connect <addr>
+ssc.exe ctl quit | uninstall
 ```
 
-### Отладочный журнал
+Diagnostics: `ctl aac frag` (AAC 256 frames split over two RFC 3016 packets — Buds2 Pro do not
+reassemble them), `ctl ssccap auto|<hex>` (SSC configuration byte), `SSCV2_SSC_SHIFT=1..8`
+(feed the SSC encoder extra headroom bits).
 
-Включается пунктом меню «Отладочный журнал», командой `ssc.exe ctl debug on` или
-переменной `SSCV2_DEBUG=1`. Трей, движок и служба пишут в один файл
-`%LOCALAPPDATA%\SSCv2\logs\debug.log` по времени; у строки есть категория, по ней
-удобно фильтровать (`findstr " vol:" debug.log`):
+### Debug journal
 
-| Категория | Что пишется |
+Switched on in "Settings", with `ssc.exe ctl debug on` or `SSCV2_DEBUG=1`. The tray, engine
+and service write to one time-ordered file, `%LOCALAPPDATA%\SSCv2\logs\debug.log`; each line
+has a category (`findstr " vol:" debug.log`):
+
+| Category | Content |
 |---|---|
-| `mode`, `ui`, `helper` | шаги переключения режимов, пункты меню, запросы к службе и журнал скрипта смены драйвера |
-| `dev`, `vol` | события аудиоустройств Windows (появилось/пропало/устройство по умолчанию) и каждое изменение громкости любого вывода — с источником: Windows/драйвер, трей SSCv2, движок SSCv2 |
-| `hci`, `l2cap`, `sdp` | обмен с контроллером и устройствами: HCI-команды и события, L2CAP-каналы |
-| `avdtp`, `avrcp` | A2DP-сигнализация (настройка кодека, START/SUSPEND, задержка) и AVRCP (громкость, уведомления, кнопки) |
-| `att`, `smp` | BLE-мышь: GATT и сопряжение |
-| `media` | раз в 5 с — сводка аудиопакетов, уведомлений мыши и рекламных пакетов (поштучно их не пишем) |
-| `vol` (движок) | синхронизация громкости Windows ⇄ наушники |
+| `mode`, `ui`, `helper` | switches, menu items, service requests and the driver switch script log |
+| `dev`, `vol` | audio device events and every volume/mute change — with its origin |
+| `hci`, `l2cap`, `sdp` | HCI commands and events, L2CAP channels |
+| `avdtp`, `avrcp` | A2DP signalling, AVRCP (volume, headphone buttons) |
+| `att`, `smp` | BLE mouse: GATT and pairing |
+| `media` | every 5 s — summary of audio packets, mouse reports and advertising |
 
-Ключи сопряжения (link key, LTK) в журнале маскируются. Файл ротируется при 64 МБ.
+Pairing keys (link key, LTK) are masked. The file rotates at 64 MB.
 
-### Битрейт AAC
+## Licences
 
-По умолчанию (универсально) битрейт считается при каждом подключении из размера
-пакета, который объявили сами наушники: `(MTU − 12) × 8 × частота / 1024`, но не
-больше 256 кбит/с. Каждый кадр AAC (1024 сэмпла) ложится в один пакет AVDTP, как у
-Android. Galaxy Buds2 Pro объявляют MTU 679 → **250 кбит/с** при 48 кГц (230 при 44,1).
-
-Пункт меню «AAC 256 кбит/с» (`ssc.exe ctl aac over`) считает канал звука в 1017 байт
-вместо объявленных 679 и шлёт целые кадры 256 кбит/с (до ~960 байт). Buds2 Pro их
-играют чисто (проверено на слух), но это выше их собственного лимита: другие наушники
-или будущая прошивка могут такие пакеты отбрасывать — поэтому опция, а не умолчание.
-`ssc.exe ctl aac fit` — обратно к расчёту.
-
-`ssc.exe ctl aac frag` (диагностика) — 256 кбит/с с разбиением кадра на два пакета по
-RFC 3016: пакеты доходят, но Buds2 Pro такие кадры не собирают, звук заикается.
-
-В журнале движка раз в 2 с: `maxframe` (самый большой кадр) и `split` (кадров больше
-одного пакета).
-
-### Почему драйвер меняется «на месте»
-
-Адаптер переключается так: отключить устройство → поставить/удалить пакет WinUSB →
-включить (`pnputil /disable-device`, `/add-driver /install` или `/delete-driver
-/uninstall`, `/enable-device`). Удалять узел (`/remove-device /subtree`) нельзя:
-вместе с ним удаляются записи реестра Bluetooth-ветки, и после каждого возврата Windows
-видела наушники как *новое* устройство — новые аудиоустройства без сохранённой громкости
-(100 %), перезапуск сразу после первой установки (звук прыгал наушники → динамики →
-наушники) и накопление «призраков» в диспетчере устройств. Старый способ остался
-запасным: он включается сам, если Windows не дала остановить адаптер.
-
-## Лицензии
-
-BTstack — лицензия BlueKitchen (только некоммерческое использование), FDK-AAC — лицензия
-Fraunhofer; тексты в `third_party/*`. VB-CABLE — donationware от VB-Audio: для личного
-использования бесплатно, распространение в составе другой программы — только с их разрешения.
+BTstack — BlueKitchen licence (non-commercial use only), FDK-AAC — Fraunhofer licence, Opus
+(in libssc) — BSD; texts in `third_party/*` and `libssc/src/opus/COPYING`. VB-CABLE is
+donationware by VB-Audio: free for personal use, redistribution inside another program only
+with their permission. libssc and SSC — personal use only.

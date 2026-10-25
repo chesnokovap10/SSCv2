@@ -4,6 +4,7 @@ package driver
 
 import (
 	"fmt"
+	"sscv2/internal/i18n"
 	"strings"
 
 	"golang.org/x/sys/windows"
@@ -38,13 +39,13 @@ const (
 func (m Mode) String() string {
 	switch m {
 	case WinUSB:
-		return "WinUSB (поток)"
+		return i18n.T("WinUSB (поток)", "WinUSB (streaming)")
 	case BthUSB:
 		return "Windows Bluetooth"
 	case Other:
-		return "другой драйвер"
+		return i18n.T("другой драйвер", "another driver")
 	}
-	return "не найден"
+	return i18n.T("не найден", "not found")
 }
 
 // Status describes the adapter devnode.

@@ -6,6 +6,7 @@ package bt
 import "C"
 
 import (
+	"sscv2/internal/i18n"
 	"sync/atomic"
 	"unsafe"
 
@@ -32,15 +33,15 @@ const (
 func (m mouseState) String() string {
 	switch m {
 	case mouseConnecting:
-		return "ожидание мыши"
+		return i18n.T("ожидание мыши", "waiting for the mouse")
 	case mouseEncrypting:
-		return "шифрование"
+		return i18n.T("шифрование", "encrypting")
 	case mouseDiscovering:
-		return "поиск HID"
+		return i18n.T("поиск HID", "looking for HID")
 	case mouseReady:
-		return "работает"
+		return i18n.T("работает", "working")
 	}
-	return "выкл"
+	return i18n.T("выкл", "off")
 }
 
 type mouseBridge struct {

@@ -55,18 +55,19 @@ import "C"
 
 import (
 	"fmt"
+	"sscv2/internal/i18n"
 	"unsafe"
 )
 
 // Encoder is one AAC-LC encoder instance.
 type Encoder struct {
-	h          C.HANDLE_AACENCODER
-	FrameLen   int // PCM frames per AAC frame (1024)
-	Channels   int
-	SampleRate int
-	Bitrate    int
+	h           C.HANDLE_AACENCODER
+	FrameLen    int // PCM frames per AAC frame (1024)
+	Channels    int
+	SampleRate  int
+	Bitrate     int
 	PeakBitrate int
-	out        []byte
+	out         []byte
 }
 
 // New creates an encoder. frameBudget is the largest LATM frame allowed
@@ -74,10 +75,10 @@ type Encoder struct {
 // packet: Galaxy Buds offer 667 bytes, i.e. 250 kbps at 48 kHz); 0 = no cap.
 func New(sampleRate, channels, bitrate, frameBudget int) (*Encoder, error) {
 	if channels != 1 && channels != 2 {
-		return nil, fmt.Errorf("aac: %d каналов не поддерживается", channels)
+		return nil, fmt.Errorf(i18n.T("aac: %d каналов не поддерживается", "aac: %d channels not supported"), channels)
 	}
 	if sampleRate != 44100 && sampleRate != 48000 {
-		return nil, fmt.Errorf("aac: частота %d не поддерживается", sampleRate)
+		return nil, fmt.Errorf(i18n.T("aac: частота %d не поддерживается", "aac: rate %d not supported"), sampleRate)
 	}
 	var h C.HANDLE_AACENCODER
 	if e := C.aacEncOpen(&h, 0, C.UINT(channels)); e != C.AACENC_OK {
@@ -140,7 +141,7 @@ func New(sampleRate, channels, bitrate, frameBudget int) (*Encoder, error) {
 func (e *Encoder) Encode(pcm []int16) ([]byte, error) {
 	need := e.FrameLen * e.Channels
 	if len(pcm) < need {
-		return nil, fmt.Errorf("aac: мало сэмплов (%d < %d)", len(pcm), need)
+		return nil, fmt.Errorf(i18n.T("aac: мало сэмплов (%d < %d)", "aac: too few samples (%d < %d)"), len(pcm), need)
 	}
 	n := C.aac_encode(e.h, (*C.short)(unsafe.Pointer(&pcm[0])), C.int(need),
 		(*C.uchar)(unsafe.Pointer(&e.out[0])), C.int(len(e.out)))

@@ -21,14 +21,25 @@ type keyInput struct {
 	_     [8]byte
 }
 
-// mediaPlayPause presses the system Play/Pause media key (browsers and
-// players pause on it, like when Bluetooth headphones go into their case).
-func mediaPlayPause() {
-	const vkMediaPlayPause = 0xB3
+// Windows media keys (VK_MEDIA_*).
+const (
+	vkMediaNext      = 0xB0
+	vkMediaPrev      = 0xB1
+	vkMediaStop      = 0xB2
+	vkMediaPlayPause = 0xB3
+)
+
+// pressKey presses and releases a virtual key (media keys go to the player
+// that owns the Windows media session: browsers, Spotify, players).
+func pressKey(vk uint16) {
 	const keyUp = 0x0002
 	in := [2]keyInput{
-		{typ: 1, vk: vkMediaPlayPause},
-		{typ: 1, vk: vkMediaPlayPause, flags: keyUp},
+		{typ: 1, vk: vk},
+		{typ: 1, vk: vk, flags: keyUp},
 	}
 	procSendInput.Call(2, uintptr(unsafe.Pointer(&in[0])), unsafe.Sizeof(in[0]))
 }
+
+// mediaPlayPause presses the system Play/Pause media key (browsers and
+// players pause on it, like when Bluetooth headphones go into their case).
+func mediaPlayPause() { pressKey(vkMediaPlayPause) }

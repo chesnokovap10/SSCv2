@@ -2,6 +2,9 @@ package engine
 
 import (
 	"fmt"
+	"os"
+	"sscv2/internal/i18n"
+	"strconv"
 
 	"sscv2/internal/bt"
 	"sscv2/internal/codec/aac"
@@ -29,7 +32,7 @@ func (a *aacEnc) Bandwidth() int   { return a.e.Bandwidth() }
 //   - "fit" (default): every LATM frame fits one AVDTP packet, the bitrate is
 //     capped by the headphones' MTU (Galaxy Buds: 250 kbps at 48 kHz) - what
 //     Android does;
-//   - "over" ("AAC 256" in the menu): 256 kbps in whole frames; the media
+//   - "over" (Settings > Max MTU): 256 kbps in whole frames; the media
 //     channel is treated as overMTU bytes instead of the MTU the headphones
 //     announce. Galaxy Buds2 Pro announce 679 bytes (250 kbps) but play
 //     frames of up to ~960 bytes cleanly (verified by ear). Not universal:
@@ -39,6 +42,9 @@ func (a *aacEnc) Bandwidth() int   { return a.e.Bandwidth() }
 //     Galaxy Buds2 Pro receive every packet (all acknowledged) but cannot
 //     decode split frames - the sound stutters badly.
 var aacMode = "fit"
+
+// aacForced: AAC bitrate from the settings (bps, 0 = as high as a packet allows).
+var aacForced int
 
 // overMTU: our own AVDTP media MTU; 256 kbps CBR frames peak at ~960 bytes.
 const overMTU = 1017
@@ -50,7 +56,11 @@ func newAAC(sampleRate, mtu int) (Encoder, error) {
 	if aacMode == "frag" {
 		budget = 0
 	}
-	e, err := aac.New(sampleRate, 2, 256000, budget)
+	br := 256000
+	if aacForced > 0 && aacForced < br {
+		br = aacForced
+	}
+	e, err := aac.New(sampleRate, 2, br, budget)
 	if err != nil {
 		return nil, err
 	}
@@ -68,6 +78,14 @@ type sscEnc struct {
 // one frame per packet, RTP timestamp = packet counter.
 func (s *sscEnc) framePerPacket() {}
 
+// streamInfo: what the status shows (codec label, encoder rate).
+func (s *sscEnc) streamInfo() (string, int) {
+	if s.up != nil {
+		return "SSC UHQ", s.e.SampleRate
+	}
+	return "SSC", s.e.SampleRate
+}
+
 func (s *sscEnc) FrameLen() int {
 	if s.up != nil {
 		return ssc.FrameLen / 2
@@ -81,8 +99,8 @@ func (s *sscEnc) Encode(pcm []float32) ([]byte, error) {
 	}
 	return s.e.Encode(pcm)
 }
-func (s *sscEnc) BitrateKbps() int                     { return s.e.Bitrate / 1000 }
-func (s *sscEnc) Close()                               { s.e.Close() }
+func (s *sscEnc) BitrateKbps() int { return s.e.Bitrate / 1000 }
+func (s *sscEnc) Close()           { s.e.Close() }
 
 // SSC bitrate like the phone (SscBitrateByBusyLevel, 24-bit 48 kHz): 192k,
 // 128k when the headphones lack the "no bitrate limit" bit (0x08). The phone
@@ -98,7 +116,7 @@ const (
 // only, and we capture float).
 func sscRateOK(sampleRate int) error {
 	if sampleRate != 48000 {
-		return fmt.Errorf("SSC: частота вывода %d Гц, нужна 48000 Гц - выберите её в настройках звука", sampleRate)
+		return fmt.Errorf(i18n.T("SSC: частота вывода %d Гц, нужна 48000 Гц - выберите её в настройках звука", "SSC: the output runs at %d Hz, 48000 Hz is needed - choose it in the Sound settings"), sampleRate)
 	}
 	return nil
 }
@@ -109,8 +127,11 @@ var sscForced int
 // budsMTU: the media payload Galaxy Buds announce.
 const budsMTU = 667
 
-// sscUHQ: the forced bitrate is a UHQ (96 kHz) one.
-func sscUHQ() bool { return sscForced > 0 && ssc.Valid(96000, sscForced) }
+// sscUHQMode: the SSC UHQ codec was chosen (96 kHz).
+var sscUHQMode bool
+
+// sscUHQ: stream SSC UHQ (96 kHz): chosen, or a UHQ bitrate forced.
+func sscUHQ() bool { return sscUHQMode || sscForced > 0 && ssc.Valid(96000, sscForced) }
 
 // sscEncodeRate: the SSC encoder's rate for this capture rate.
 func sscEncodeRate(captureRate int) int {
@@ -121,7 +142,7 @@ func sscEncodeRate(captureRate int) int {
 }
 
 // sscNeedsOver: a forced bitrate whose frames exceed the Buds' packet goes
-// with our own larger media MTU (as "AAC 256").
+// with our own larger media MTU (as Max MTU).
 func sscNeedsOver(kbps int) bool {
 	if kbps <= 0 {
 		return false
@@ -155,7 +176,7 @@ func sscBitrate(sampleRate, mtu int, cfg uint8) (int, error) {
 		}
 	}
 	if best == 0 {
-		return 0, fmt.Errorf("SSC: канал %d байт меньше самого малого кадра", mtu)
+		return 0, fmt.Errorf(i18n.T("SSC: канал %d байт меньше самого малого кадра", "SSC: a %d-byte channel is smaller than the smallest frame"), mtu)
 	}
 	return best, nil
 }
@@ -176,6 +197,11 @@ func newSSC(sampleRate, mtu int) (Encoder, error) {
 	s := &sscEnc{e: e}
 	if rate != sampleRate {
 		s.up = newUpsampler2x()
+	}
+	// experiments: SSCV2_SSC_SHIFT=8 feeds full scale 2^31 instead of 2^23
+	if v, err := strconv.Atoi(os.Getenv("SSCV2_SSC_SHIFT")); err == nil && v > 0 && v <= 8 {
+		e.Shift = uint(v)
+		logf("ssc: input shifted by %d bits (full scale 2^%d)", v, 23+v)
 	}
 	logf("ssc: %d Hz %d bps (config 0x%02X), frame %d bytes / %.1f ms, payload %d", rate, br, bt.SSCConfig(),
 		ssc.FrameBytes(rate, br), float64(ssc.FrameLen)*1000/float64(rate), mtu)

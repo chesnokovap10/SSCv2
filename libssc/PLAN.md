@@ -1,827 +1,131 @@
-# libssc — план: своя библиотека SSC (энкодер + декодер)
+# libssc — plan
 
-Статус: **в работе**, начато 2026-10-24. Фазы 3 (бит-точный энкодер), 4 (полная проверка) и
-5 (интеграция в SSCv2) готовы; в фазе 5 осталась проверка на слух на наушниках.
+**English** · [Русский](PLAN.ru.md)
 
-## Решения
+Our own Samsung Scalable Codec library for SSCv2: the encoder (done, bit-exact) and a decoder
+(ahead). Started 2026-10-24. The detailed step-by-step journal is in git history
+(`libssc/PLAN.md` before 2026-10-25).
 
-| Вопрос | Решение |
-|--------|---------|
-| Цель | **Бит-точное** совпадение с `libScalable_Encoder.so` **из текущей прошивки телефона** (на нём сейчас работают телефон и Buds3 FE) на всех профилях. Старая сборка блоба (clang 8, из чужой программы) больше не эталон и удалена (3g) |
-| Распространение | Только приватно, под наше железо (Buds3 FE + наши донглы). Публичного релиза нет |
-| Где живёт | `libssc/` в SSCv2 (Go-трей). Подключение — cgo-пакет `internal/codec/ssc`, точка входа `internal/engine/codecs.go` → `newSSC` |
-| Декодер | Нужен (фаза 6) |
-| Темп | По одной фазе. После каждой — разбор результатов, потом следующая |
+## Status
 
-## Исходная находка
-
-SSC — это доработанный **CELT из libopus** (fixed-point):
-
-- Экспорты блоба совпадают по именам с CELT: `quant_all_bands`, `alg_quant`,
-  `compute_allocation`, `quant_coarse_energy`, `quant_fine_energy`, `ec_enc_*`,
-  `spreading_decision`, `pitch_search`, `remove_doubling`, `comb_filter`,
-  `stereo_itheta`, `haar1`, `renormalise_vector`, `ec_laplace_encode`.
-- `eMeans` (25 байт) байт в байт равна fixed-point таблице libopus.
-- `tf_select_table` (8 байт) = строка LM=3 из libopus.
-- Кадр 864 = 8 × 108 → кастомный режим CELT (8 коротких MDCT по 108).
-- Добавки Samsung: `normal_headroom` / `uhq_headroom`, SoundBooster DRC,
-  `tone_detect`, `patch_transient_decision(_temporal)`, `hysteresis_decision`,
-  обрезка полосы (`cutoff_start_index`, `last_band_info_calc`), UHQ 96 кГц.
-- `ssc_encode` — монолит 18 КБ, основная логика Samsung заинлайнена туда.
-
-Заголовок кадра (по голденам): `FF EE` (48 кГц) / `FF E0` (96 кГц), затем
-байт со счётчиком кадров в старшем полубайте, затем байт режима/битрейта,
-дальше полезная нагрузка range coder'а.
-
-Размер кадра: 96 кГц — битрейт × 9 мс (+3 байта); 48 кГц — битрейт × **20** мс
-(+4), хотя кадр длится 18 мс. → Разобрано в фазе 1: режим 48k считает бюджет
-от Fs=44100 (см. журнал).
-
-## Фазы
-
-### Фаза 0 — Эталон под рукой
-
-Свой запуск блоба на Unicorn (aarch64), без WSL2/qemu и Qiling. Блобу нужны
-только 8 импортов libc (`malloc`, `free`, `memcpy`, `memset`,
-`__stack_chk_fail`, `__cxa_finalize`, `__cxa_atexit`, `__register_atfork`).
-
-Результат:
-- `libssc/oracle/` — Python-обвязка: загрузка ELF, релокации, заглушки libc,
-  вызов `ssc_encoder_*` / `ssc_encode` напрямую.
-- Совпадение со всеми 6 голденами байт в байт.
-- Трассировка: хуки на входы/выходы экспортируемых функций, снятие аргументов
-  и буферов — основа для пошаговой сверки в фазе 3.
-
-### Фаза 1 — Карта отличий от CELT
-
-Каждой функции блоба — пара в libopus и пометка: совпадает / изменена / новая.
-Восстановить параметры режима (полосы, overlap, окно `win_square`, LM),
-формат заголовка, формулу «битрейт → байты». Расширить корпус сигналов
-(музыка, тишина, транзиенты, свипы).
-
-### Фаза 2 — Каркас `libssc`
-
-C99, fixed-point, на основе CELT-энкодера libopus (BSD-3). API как у блоба.
-Сборка MinGW gcc (как весь SSCv2 через cgo), без внешних зависимостей.
-Тестовый стенд: сравнение с оракулом.
-
-### Фаза 3 — Бит-точность по этапам
-
-Переносим по порядку цепочки `ssc_encode`; добавки Samsung — там, где они стоят
-в цепочке (отдельной фазы для них нет). Каждая функция проверяется
-`test/replay.py` (реальные вызовы из блоба), каждая стадия — `test/stages.py`
-(контрольные точки после каждого кадра). Подэтапы, после каждого — пауза:
-
-- **3a** ✅ вход: Biquad, powercalc, CalculateLimitGain, DRC (SoundBooster).
-- **3b** ✅ pitch: `pitch_downsample`, `_ssc_autocorr`, `_ssc_lpc`, xcorr,
-  `find_best_pitch`, `pitch_search`, `remove_doubling`; префильтр `comb_filter`
-  и память префильтра в состоянии.
-- **3c** ✅ MDCT/FFT (32-бит), `normal_headroom` / `uhq_headroom`.
-- **3d** ✅ энергии и решения: `compute_band_energies`, `amp2Log2`,
-  `patch_transient_decision(_temporal)`, `compute_band_energies_for_lastband`,
-  `tone_detect`, `normalise_bands`, `last_band_info_calc`.
-- **3e** ✅ coarse/fine энергия, `spreading_decision`, tf, `compute_allocation`.
-- **3f** ✅ `quant_all_bands` (PVQ, стерео, cwrs), `quant_energy_finalise`,
-  флаги заголовка. Критерий фазы: голдены и корпус `test/signals.py` совпадают
-  байт в байт.
-- **3g** ✅ переход на энкодер из прошивки телефона (другая сборка Samsung):
-  раскладки, имена, сигнатуры и отличия в арифметике; голдены переснят с него.
-
-Подэтапы 3a–3f сделаны против старой сборки блоба; их итоги ниже — история,
-текущие отличия описаны в итогах 3g.
-
-### Фаза 4 — Полная проверка
-
-Все 14 битрейтов, длинные прогоны (счётчик кадров переходит через 256),
-неизвестные битрейты, крайние сигналы (клиппинг, INT_MIN, DC).
-
-### Фаза 5 — Интеграция ✅ (код; проверка на наушниках — за пользователем)
-
-cgo-пакет `internal/codec/ssc` (как `internal/codec/aac`), `newSSC` в
-`internal/engine/codecs.go` вместо `ErrSSCNotReady`. SSC в A2DP: vendor
-Samsung `0x00000075`, codec `0x0103` + байт capability — перенести из старого
-`D:\2\SSC` (`btstack_transport.cpp`, `codec_policy.h`). Демона и WSL в SSCv2 нет и не будет.
-
-### Фаза 6 — Декодер
-
-На основе CELT-декодера libopus. Проверка: decode(libssc) ≈ исходный PCM,
-сравнение с decode(blob-кадров). Позволяет оценивать качество без наушников.
-
-## Журнал
-
-- 2026-10-24 — план записан, начата фаза 0 (в `D:\2\SSC`, затем перенесено в SSCv2/libssc; блоб и голдены скопированы в `ref/` и `testdata/`).
-- 2026-10-24 — **фаза 0 готова.** `libssc/oracle/ssc_oracle.py`: свой ELF-загрузчик
-  на Unicorn 2.1.4 (129 релокаций трёх типов, 8 заглушек libc, stack guard через
-  `tpidr_el0+0x28`). Все 6 голденов совпадают байт в байт, 96 кадров < 1 с.
-  Трассировка: ~5400 вызовов экспортов на кадр, дерево вызовов + пробы на
-  вход/выход. Отрицательный тест (испорченный байт в голдене) ловится.
-
-### Наблюдения из первой трассировки (вход для фазы 1)
-
-- **До CELT стоит препроцессинг Samsung:** `Biquad_Narrow_int2int_stereo`
-  (коэффициенты `coeffs` для 48k / `coeffs96andbelow` для 96k) → `powercalc` ×2 →
-  `CalculateLimitGain` → `SoundBooster_DRC_Exe` ×8 блоками по 108 сэмплов.
-  Для бит-точности это нужно повторить в точности.
-- Бюджет range coder'а на 48 кГц: `ec_enc_init(out+4, 572)` = 229000 × 20 мс / 8.
-  Заголовок 4 байта, полезная нагрузка считается от 20 мс, а не от 18 мс.
-- Цепочка внутри `ssc_encode` в целом как у `celt_encode_with_ec`: pitch
-  (`pitch_downsample`/`pitch_search`/`remove_doubling`) → `comb_filter` ×2 →
-  `ssc_mdct_forward` ×2 → `normal_headroom`/`uhq_headroom` →
-  `compute_band_energies` → `amp2Log2` → `patch_transient_decision(_temporal)` →
-  `compute_band_energies_for_lastband` → `tone_detect` → `normalise_bands` →
-  `quant_coarse_energy` → `spreading_decision` → `compute_allocation` →
-  `quant_fine_energy` → `quant_all_bands` → `quant_energy_finalise` → `ec_enc_done`.
-- Структура режима (mode) — статические данные блоба (`0x28aa0` в
-  `.data.rel.ro`), её можно прочитать напрямую. В 96k-трассе
-  `compute_band_energies(..., 0x16)` → 22 полосы (в Opus 21).
-
-- 2026-10-24 — **фаза 1 готова.** Всё в `libssc/research/`:
-  карта 75 функций (FUNCTIONS.md, удалена в 3g вместе со старым блобом),
-  `dump_mode.py` → `tables.json`, `header_model.py`, `disasm.py`, `difftest/`.
-
-### Итоги фазы 1
-
-**Блоб.** Android NDK r20, clang 8.0.7, API 28 → ~2019–2020. База — libopus CELT
-fixed-point. `tone_detect` у Samsung своя (в Opus она появилась только в 1.6).
-Листовые функции одинаковы в Opus 1.1.5/1.2.1/1.3.1; `spreading_decision` без
-`spread_weight` → база скорее ≤1.2, но эта функция всё равно переписана.
-
-**Режимы.** Два статических режима по 136 байт: `0x28a18` (Fs=**44100**,
-используется для 44,1 и 48 кГц) и `0x28aa0` (96000). Раскладка своя: нет
-`preemph[]` и `maxLM`, вторая таблица распределения 11×22, окно int32 Q31,
-два FFT-состояния (144 и 18), caps int32 на полосу. 22 полосы, effEBands 21,
-overlap 108, LM=3 (8×108), N=1728. Все таблицы — в `tables.json`.
-
-**Заголовок и бюджет** (`header_model.py`, совпадает на всех 96 кадрах голденов):
-- `FF`, затем `EE` (обычный) или `E0 | counter>>4` (UHQ), затем
-  `counter<<4 | флаги`, затем `верх3<<5 | индекс битрейта`.
-- 14 допустимых битрейтов: 48k — 88/96/128/192/229/256/328k (`F0..F6`),
-  UHQ — 291/308/442/584/886/250/152k (`E0..E6`).
-- `n = bitrate·864 / (Fs_mode·8)`; для «узких» (≤229k) `n += 3n>>7`;
-  `n |= 1`; бюджет range coder'а `n−1`, кадр `4 + n−1`.
-- Открыто: флаги в битах 2–3 байта 2 (в 192k/229k = `0b11`) и верхние 3 бита
-  байта 3 — ставятся по ходу кодирования (около `0xe914` и `0xeb44`).
-
-**Дифф-стенд** (`difftest/`): libopus собирается MinGW gcc в DLL с именованными
-патчами, блоб вызывается через оракул, входы случайные.
-- ✅ Совпадает с Opus: `ec_ilog`, `celt_rcp`, `celt_sqrt`, `celt_rsqrt_norm`,
-  `celt_cos_norm`, `frac_div32`, `celt_lcg_rand`, `ec_enc_bits`.
-- 🔶 Совпадает после патча **ec24** (`EC_CODE_BITS 32→24`): весь range coder —
-  `ec_encode*`, `ec_enc_bit_logp`, `ec_enc_icdf`, `ec_enc_uint`,
-  `ec_laplace_encode`, `ec_tell_frac`, `ec_enc_done`.
-- ❌ `haar1`: Samsung усекает каждое слагаемое, Opus округляет сумму.
-
-**Оракул:** `call(..., max_insns=N)` — защита от зацикливания (тайм-аут Unicorn
-на Windows стоит ~15 мс на вызов, лимит инструкций — нет).
-
-**Вывод для фазы 2:** основа libssc = Opus CELT fixed-point + патчи
-(ec24, haar1, …) + таблицы Samsung + свой `ssc_encode`. Функции среднего
-уровня проверяются тем же стендом по мере переноса — для этого стенду нужен
-режим Samsung в формате Opus (собрать `OpusCustomMode` из `tables.json`).
-
-- 2026-10-24 — **фаза 2 готова.** Каркас `libssc/src`, стенд-двойник
-  `libssc/test/twin.py`: **18/18 PASS**.
-
-### Итоги фазы 2
-
-**Инструменты.** JDK 21.0.12.1 (Microsoft) + Ghidra 12.1.4 портативно в
-`D:\2\tools` (SHA-256 сверены). `research/ghidra/decompile.ps1` → 86 функций в
-`research/decomp/*.c` (`ssc_encode` — 3800 строк псевдо-C). Опознаны 11
-внутренних функций без имён (`quant_partition`, `compute_theta`,
-`intensity_stereo`, `quant_coarse_energy_impl`, `find_best_pitch`, бабочки FFT).
-
-**База — Opus 1.1.5**, а не 1.3.1: у Samsung в состоянии энкодера три массива
-энергий на канал (в 1.2 добавлен `energyError`), а `spreading_decision` без
-`spread_weight` (добавлен в 1.3).
-
-**libssc = ABI-двойник блоба.** Те же имена функций, сигнатуры и раскладки
-структур (режим 136 байт, `ec_ctx`, состояние энкодера: заголовок 300 байт +
-массивы на канал), смещения закреплены `_Static_assert`. Поэтому стенд даёт
-обеим сторонам одинаковую память и сравнивает результат побайтно.
-- `src/opus/` — файлы Opus 1.1.5 (range coder, Laplace, математика, cwrs) без
-  изменений, кроме патча ec24 в `mfrngcod.h`. Лицензия Opus — `src/opus/COPYING`.
-- `src/ssc_mode.h`, `src/ssc_tables.c` — оба режима и все таблицы
-  (генерируется `tools/gen_tables.py` из `research/tables.json`).
-- `src/ssc_encoder.{h,c}` — `ssc_custom_mode_create`, `ssc_encoder_get_size/
-  init/create/destroy`, `ssc_encode`: заголовок, бюджет, счётчик кадров —
-  бит-точно; полезной нагрузки пока нет (range coder завершается пустым).
-- `src/ssc_twin.c` — функции под именами блоба (`ssc_rcp`, `ec_ilog`, …) и
-  `haar1` в варианте Samsung.
-- `build.py` → `build/libssc.dll` (gcc `-Wall` без предупреждений).
-
-**Стенд-двойник** (`test/twin.py`): режимы со всеми таблицами; 7 функций
-математики; `haar1`; range coder на случайных сценариях; состояние после
-`ssc_encoder_init` (48k/96k) байт в байт; `ssc_encode` — заголовок и длина на
-всех 96 кадрах голденов. Полезная нагрузка совпадает на ~0,4 % байт (случайно).
-
-**Исправлено попутно:** в тесте `haar1` аргумент `N0` передавался как общая
-длина (это длина на один stride) — функции писали за буфер. Вывод «Samsung
-округляет иначе» после исправления подтвердился.
-
-**Открыто для фазы 3:** MDCT и FFT у Samsung 32-битные (окно, trig и данные
-int32, умножения Q31) — переносить с декомпиляции, а не из Opus. Порядок
-переноса — по цепочке `ssc_encode`, каждая функция сразу проверяется двойником.
-
-- 2026-10-24 — **фаза 3, подэтап 3a готов** (вход до CELT).
-
-### Итоги 3a
-
-**Что делает вход у Samsung** (`ssc_encode` @0xd504..0xd688):
-1. `Biquad_Narrow_int2int_stereo` фильтрует копию входа в глобальный
-   `_pcmpower` (коэффициенты Q28: `coeffs96andbelow` для битрейтов ≤96k и всех
-   «широких»/UHQ, иначе `coeffs`). 64-битный аккумулятор, остаток переносится
-   между сэмплами (внутри блока без знака, в состоянии — со знаком), обратная
-   связь хранится как `y<<3`, выход `y>>4`. Состояние — 10×int64 в `st+0xd8`.
-2. `powercalc` — Σ((x²>>16)>>1) по обоим каналам, `>>9`, для фильтрованного и
-   исходного сигнала; `CalculateLimitGain(p_filt, p_rest, bitrate, fs)` —
-   порог лимитера по доле мощности (для «узких» битрейтов `p_rest = p_in−p_filt`),
-   `<<8` для 24-битного входа.
-3. `SoundBooster_DRC_Exe` — пиковый лимитер «SoundBooster_DRC_classic v1.0,
-   2019.12.05» **на месте во входном PCM**, 8 блоков по 108 кадров: если больше
-   24 сэмплов выше порога, цель = порог·2³¹/пик; сглаживание Q22 (атака 0,
-   отпускание 0x3ca4a1 / 0x3e6f79 для 96k); линейная рампа усиления по кадрам.
-   Состояние — глобальная структура `drc_struct` (24 байта).
-
-**Код:** `src/ssc_drc.{h,c}` (те же имена и глобалы, что в блобе),
-`ssc_encoder.c`: `preprocess()`, DRC init в `ssc_encoder_init`, таблица усилений
-для 16/24 бит. `ssc_encode` теперь принимает изменяемый PCM (как блоб).
-
-**Новые стенды:**
-- `test/signals.py` — 7 детерминированных сигналов (golden, тишина, шум,
-  громкий/клиппинг, свип, разные каналы, щелчки) × 6 профилей.
-- `test/replay.py` — записывает реальные вызовы функции в блобе (вход, выход,
-  глобалы) и повторяет их на libssc. 5/5 функций, 3528 вызовов совпали;
-  DRC реально меняет сигнал в 1440 из 2016 вызовов, `CalculateLimitGain`
-  прошёл 7 разных веток.
-- `test/stages.py` — оба энкодера покадрово, контрольные точки: PCM после DRC,
-  `_pcmpower`, `drc_struct`, состояние biquad, заголовок (кроме флагов CELT),
-  длина — **совпадают на 504/504 кадрах**. Флаги заголовка и полезная
-  нагрузка — `PEND` до 3f.
-
-**Заметка на фазу 5:** состояние DRC и `_pcmpower` — глобалы процесса, как у
-блоба; для нескольких потоков в одном процессе их надо перенести в `SscEncoder`.
-
-- 2026-10-24 — **подэтап 3b готов** (pitch-анализ и префильтр).
-
-### ⚠ Находка: масштаб входа (важно для фазы 5)
-
-Энкодер рассчитан на **24-битный вход: полная шкала 2^23** (сдвиг `<<4` даёт
-ровно шкалу CELT 2^27; порог лимитера ~0,958·2^23). Старая программа
-`D:\2\SSC` подаёт PCM в масштабе **2^29**, то есть на 36 дБ горячее, и
-встроенный DRC-лимитер Samsung сжимает всё громче примерно −36 dBFS к одному
-уровню. Замер на оракуле (синус 1 кГц, 229k):
-
-| вход | −20 dBFS | −6 dBFS |
+| Phase | What | Status |
 |---|---|---|
-| 2^29 (старая программа) | DRC −16,5 дБ → 0,958 FS | DRC −30,5 дБ → 0,958 FS |
-| 2^23 (24 бит) | DRC 0 дБ, без изменений | DRC 0 дБ, без изменений |
+| 0 | Reference: the blob under Unicorn | ✅ |
+| 1 | Map of differences from CELT, modes, header | ✅ |
+| 2 | libssc skeleton — an ABI twin of the blob | ✅ |
+| 3 | Bit-exactness stage by stage (3a–3g) | ✅ |
+| 4 | Full verification: long runs, extreme signals | ✅ |
+| 5 | Integration into SSCv2 (cgo), tested on Buds2 Pro | ✅ |
+| 6 | Decoder | ⏳ next |
 
-То есть в старой программе динамика музыки фактически сплющена лимитером.
-В SSCv2 подавать 2^23 (float × 8388608) и проверить на слух.
+## Decisions
 
-### Итоги 3b
+| Question | Decision |
+|---|---|
+| Goal | Bit-exact output with `libScalable_Encoder.so` from the **current phone firmware** (clang 14, NDK r25) on all 14 bitrates. The older build (clang 8, from a third-party program) is no longer the reference and was removed in 3g |
+| Distribution | Private only, for our own hardware (Galaxy Buds2 Pro / Buds3 FE). No public release |
+| Location | `libssc/` in SSCv2; in the app — cgo package `internal/codec/ssc`, entry `internal/engine/codecs.go` → `newSSC` |
+| Pace | One phase at a time; review after each, then the next |
 
-**Как устроен участок `ssc_encode` @0xd690..0xdfdc** (Opus 1.1 + правки Samsung):
-- бюджет `min(budget, 1275)`, VBR не используется (`st+0x18 = −1`);
-- тишина: `sample_max = max(overlap_max, maxabs(pcm[0..C(N−ov)]))`,
-  `overlap_max = maxabs(хвост)`; при `tell == 1` бит тишины (logp 15), при
-  тишине `nbits_total` подгоняется под весь бюджет;
-- вход CELT `in_shared[c][ov+i] = pcm << 4` (`<< 12` для 16 бит на узких
-  битрейтах). **Предыскажение не применяется**, но память `memE = −0.85·x`
-  считается и сохраняется (`st+0x44`);
-- префильтр как `run_prefilter` Opus 1.1: включён, если ≥25 байт и не тишина;
-  пороги усиления те же; `qg`, `gain = 0.09375·(qg+1)`; без tapset;
-  буфер pitch переиспользует глобальный `in_shared`;
-- биты: `1 | octave (uint 6) | период | qg (3 бита)` или `0` при выключенном
-  префильтре и `tell+16 ≤ total_bits`;
-- конец кадра: `prefilter_period/gain`, `st+0x1c = rng` (затравка следующего
-  кадра).
+## What SSC is
 
-**Раскладка состояния** уточнена: `in_mem` с `+0x128` (`sizeof = 0x130`), поля
-`0x1c..0x4c` идут в порядке `CELTEncoder` Opus 1.1 (rng, spread_decision,
-delayedIntra, tonal_average, lastCodedBands, hf_average, tapset_decision,
-prefilter_period, prefilter_gain, consec_transient, preemph_memE, overlap_max).
+SSC is a modified **CELT from libopus 1.1.5** (fixed-point). A frame is 864 = 8 × 108 (custom
+mode: 8 short MDCTs of 108), 22 bands, overlap 108, LM = 3. Samsung's additions:
+preprocessing (biquad + SoundBooster DRC limiter), `normal_headroom` / `uhq_headroom`,
+`tone_detect`, its own transient decision, cutting of the top bands, UHQ 96 kHz, 32-bit
+MDCT/FFT, a second bit allocation table for bitrates above 192k.
 
-**Функции:**
-- `_ssc_autocorr`, `_ssc_lpc`, xcorr-ядра, `pitch_downsample`, `pitch_search` —
-  Opus 1.1.5 без изменений (специализированы под N=864; asm-ядра считают те же
-  суммы по модулю 2^32).
-- `remove_doubling` — правки Samsung в усилении и суммах (см. `src/opus/PATCHES.md`).
-- `comb_filter` — своя реализация (`src/ssc_prefilter.c`): 8 аргументов (8-й —
-  overlap), окно `win_square` Q31, коэффициенты `MULT16_32_Q15(g, w)`, сумма в
-  64 бита с округлением `>>31`; постоянная часть `(g·x + 0x4000) >> 15`.
-  Все 5 веток покрыты (оба нуля / вход / выход / тот же период / смена периода).
-- `SSC_COPY32/16/8` копируют **с конца**; `SSC_CLEAR` = memset.
+**Frame header** (4 bytes): `FF`, `EE` (48k) or `E0 | counter>>4` (UHQ),
+`counter<<4 | band flags`, `flags<<5 | bitrate index` (48k `F0..F6`, UHQ `E0..E6`).
 
-**Стенды:**
-- replay: 14/14 функций (добавлены 9), поддержка смещения буфера (`@N`) и
-  массива указателей на каналы;
-- stages: точка «pre-MDCT» (хук `ssc_stage_hook` в libssc ↔ вход в первый
-  `ssc_mdct_forward` блоба): `in_shared`, `_pre_shared`, состояние (без полей
-  будущих стадий), `ec_ctx`, записанные байты — **совпадают на 672/672 кадрах**.
+**Frame size (CBR):** `n = bitrate·864 / (Fs_mode·8)` with `Fs_mode = 44100` for 44.1/48 kHz;
+for "narrow" bitrates (not UHQ, not 256/328k) `n += 3n>>7`; `n |= 1`; the frame is `4 + n − 1`,
+at most 1275 + 4.
 
-**Структура кода:** `src/opus/` — Opus 1.1.5 + патчи (`PATCHES.md`),
-`ssc_pitch.c` (обёртка с сигнатурами Samsung), `ssc_prefilter.c`,
-`ssc_internal.h`, стадии в `ssc_encoder.c` (`silence_and_input`, `prefilter`).
+## Phases
 
-- 2026-10-24 — **подэтап 3c готов** (MDCT, FFT, headroom).
+### 0 — Reference
 
-### Итоги 3c
+`oracle/ssc_oracle.py`: own ELF loader on Unicorn 2.1.4 (relocations, 8 libc stubs, stack guard
+through `tpidr_el0`), tracing of exported functions. Goldens: 6 profiles × 16 frames.
 
-**MDCT** (`ssc_mdct_forward`) — структура `clt_mdct_forward` Opus 1.1
-(окно и свёртка, поворот до FFT, FFT, поворот после FFT), но всё 32-битное:
-окно Q31, `trig` Q31 (433 значения, индекс `i << shift`), произведения 64-бит
-с одним округлением на комплексный член (`(Σ·2 + 2³¹) >> 32` в поворотах,
-`(Σ + 2³⁰) >> 31` в окне). Приближение Opus `sin(x) ≈ x` заменено точным
-поворотом на фиксированные (cos, sin): `0x7fffff22/0xee4bb` для N=1728 и
-`0x7fffc88c/0x7725c6` для N=216. Поддерживаются только shift 0 и 3
-(`kfft[shift >> 1]`).
+### 1 — Map of differences
 
-**FFT** (`ssc_fft` + три безымянные функции блоба) — kiss FFT, полностью
-развёрнутый под два размера: 432 = 3·3·3·4·4 (длинный MDCT) и 54 = 3·3·3·2
-(короткий). Таблица twiddles одна (432 точки), у 54-точечного шаг ×8.
-Каждая стадия делит на своё основание: radix-3 — `x·(1/3)` Q31 до бабочки
-(k = 0 без умножения на twiddle), radix-4 — `(x+2)>>2` и произведения Q33,
-radix-2 — бабочка, потом `(a ± b + 1) >> 1`. Битреверс хранит смещения в int
-и совмещён с первой стадией radix-3.
+All mode tables are in `research/tables.json` (`dump_mode.py`); the header model
+(`header_model.py`) matches every golden frame. Diff bench against Opus (`difftest/`): the math
+matches; the range coder matches after patch **ec24** (`EC_CODE_BITS 32 → 24`); Samsung's
+`haar1` truncates each term.
 
-⚠ **Ошибка в блобе, повторена:** стадия radix-3 с m = 3 (`FUN_00106180`)
-крутит цикл `count + 1` раз (`mvn` + `adds #1`), то есть обрабатывает на один
-блок из 9 комплексных значений больше. Для 432 точек это пишет за конец
-выхода FFT, но буфер лежит внутри `_pre_shared` (FFT-вход `+0`, выход `+864`,
-спектр `+1944`), и портится только промежуток 1728..1745, который никто не
-читает. На результат не влияет, но `_pre_shared` совпадает побайтно только
-вместе с этим лишним проходом.
+### 2 — Skeleton
 
-**Спектр после MDCT** (`ssc_encode` @0xe01c..0xe1a0): два длинных MDCT
-(shift 0, stride 1) в `_pre_shared + 1944`; для «узких» битрейтов ниже 192k
-всё выше `eBands[end−1]·8` обнуляется (на 48k — бины 672..863 у 88/96/128k);
-затем headroom с аргументами `(freq, bitrate, 8, eBands)`:
-- `normal_headroom` (узкие битрейты): ≥96k — усиления `headroom_gain[]` на
-  полосах 20–21; <96k (только 88k) — две линейные рампы Q15 (−3 на бин от
-  полосы 17 до `eBands[20]·8 − 15`, затем −5 на бин до конца полосы 21);
-- `uhq_headroom` — по флагу «широкий битрейт» (**все UHQ и 256k/328k на 48k**,
-  а не только 96 кГц): фиксированные усиления 0x78c8 / 0x7864 / 0x7800 /
-  0x779c (≥270k) или 0x78c8 / 0x781e / 0x779c (<270k) по диапазонам бинов
-  от `eBands[18]·8`. На 48k-режиме диапазоны перекрываются (384..409 и
-  354..399) — часть бинов умножается дважды, повторено как есть.
-- `headroom_process` (в цепочке не вызывается) — для полноты ABI.
+libssc is an ABI twin: the same names, signatures and layouts (offsets pinned with
+`_Static_assert`), so the benches give both sides the same memory. The Opus sources in
+`src/opus/` are untouched except for the patches in `PATCHES.md`.
 
-Короткие MDCT (shift 3, stride 8) зависят от решения о транзиенте и
-подключаются в цепочку в 3d; сама функция для них уже проверена replay.
+### 3 — Bit-exactness along `ssc_encode`
 
-**Код:** `src/ssc_mdct.c`, `src/ssc_headroom.c`, `long_mdct()` в
-`ssc_encoder.c`.
+Order as in Opus 1.1 `celt_encode_with_ec`; every function is checked by `replay.py`, every
+stage by `stages.py`.
 
-**Стенды:**
-- replay: 18/18 функций; новый вид аргумента `ptr` — указатель блоба в
-  `in_shared`/`_pre_shared` или в таблицы режима переводится в такой же объект
-  libssc. На всех 14 битрейтах: MDCT 1008 вызовов (672 коротких, 336 длинных),
-  `normal_headroom` на 88/96/128/192/229k, `uhq_headroom` на всех широких.
-- stages: точка «post-MDCT» (вход в первый `compute_band_energies`):
-  `in_shared`, весь `_pre_shared` (с рабочей памятью FFT), состояние,
-  range coder — **совпадают на 980/980 кадрах** (`--rates all`, 14 битрейтов
-  × 7 сигналов × 10 кадров).
-- `--rates all` в `stages.py` и `replay.py` — все 14 битрейтов вместо 6
-  профилей голденов.
-- `signals.py`: затравка шума была `hash(name)`, а он в Python солится заново
-  в каждом процессе — сигналы `noise`/`loud`/`clicks` отличались от запуска к
-  запуску. Теперь `crc32(name)`, сигналы воспроизводимы.
+- **3a — input.** Biquad (Q28, 64-bit accumulator), `powercalc`, `CalculateLimitGain`, the
+  SoundBooster DRC in place on the input PCM, 8 blocks of 108.
+- **3b — pitch and prefilter.** Opus 1.1.5 nearly unchanged, Samsung changes in
+  `remove_doubling`, its own `comb_filter` (Q31 window, 64-bit sums). No pre-emphasis.
+- **3c — MDCT/FFT/headroom.** All 32-bit (Q31 window and trig), kiss FFT unrolled for 432 and
+  54 points. A blob bug: one radix-3 stage runs an extra pass and writes into an unused part
+  of the buffer — repeated, otherwise the buffers differ.
+- **3d — energies and decisions.** Transient detection from band 13, top-band flags in the
+  header, `tone_detect` inside `pitch_search`; work arrays live in the shared `in_shared`, as
+  in the blob.
+- **3e — energy quantisation and bit allocation.** Own signatures of `quant_coarse_energy` and
+  `compute_allocation`, a rewritten `spreading_decision`, Samsung boosts in dynalloc.
+- **3f — PVQ and frame end.** Own `quant_all_bands` without folding, arithmetic differences
+  (`stereo_itheta`, `exp_rotation`, PVQ search metric). Goldens and corpus match in full.
+- **3g — switch to the phone firmware blob.** A different build: names prefixed `ssc_`, a
+  128-byte mode, a shorter state, one `SscAlloc` struct, the float transient detector removed,
+  small rounding differences (biquad, `powercalc`, DRC, headroom, dynalloc). Goldens re-taken;
+  1680/1680 corpus frames match.
 
-- 2026-10-24 — **подэтап 3d готов** (энергии полос, решение о транзиенте,
-  флаги заголовка, нормализация).
+### 4 — Full verification
 
-### Итоги 3d
+`test/edge.py`: 216 scenarios, 5525 frames; after each — the frame, PCM after DRC, state and
+globals. 215/216; the exception is 32 kHz, where the blob itself crashes. Found and fixed:
+frames cut at 1275 + 4, an own `_ssc_autocorr`, the blob reading past `headroom_gain` at
+96 kHz with a narrow bitrate (repeated), the boost budget is always stereo. Not supported: mono
+(the blob corrupts its own memory) and rates other than 44.1/48/96 kHz.
 
-**Цепочка** (`ssc_encode` @0xe184..0xebcc, порядок `celt_encode_with_ec`
-Opus 1.1): `compute_band_energies` → `amp2Log2` → копия `bandLogE2` →
-если `tell + 3 ≤ total_bits`: `patch_transient_decision` **и**
-`patch_transient_decision_temporal` (вызываются обе, вторая хранит
-состояние); если хоть одна сработала — 8 коротких MDCT на канал (shift 3,
-stride 8), обнуление и headroom заново, энергии заново, `bandLogE2 += 0x600`,
-`shortBlocks = 8`, `tf_estimate = 0xccd`. Затем флаги полосы в заголовке,
-бит транзиента (logp 3) и `normalise_bands(…, end − drop)`.
+### 5 — Integration into SSCv2
 
-**Функции:**
-- `compute_band_energies`, `amp2Log2`, `normalise_bands` — Opus 1.1 с
-  зашитыми C = 2, M = 8. Нормированный спектр (int16) пишется **поверх**
-  `freq` (int32) в том же буфере `_pre_shared + 1944`: элемент j затирает
-  `freq[j/2]`, который уже прочитан.
-- `patch_transient_decision` — Opus 1.1, но только с полосы 13: разброс
-  старых энергий от полосы 13, средний рост по полосам 13..end−2 (два
-  одинаковых прохода, деление на 2·(end−14)), порог 1 дБ. `end` =
-  `st->end − previous_uhq_index`.
-- `patch_transient_decision_temporal` — своя Samsung, **во float**: на канал
-  ФВЧ `y = 0.7548·x − 0.7548·x' + 0.5095·y'` по 8 подблокам `in_shared`,
-  энергия каждого; подблок «громкий», если энергия больше
-  `r_k = 3·e_{k−1} + 7·(r_{k−1}/10)` (затравка — последний подблок и среднее
-  прошлого кадра). Транзиент — если есть громкий подблок и максимум энергии
-  ≥ 1e6, или если в прошлом кадре был транзиент в подблоке 7. В блобе обычные
-  `fmul/fsub/fadd/fdiv` без FMA, поэтому повторяется на x86 бит в бит;
-  сборка с `-ffp-contract=off` (нужно и в cgo, фаза 5). Состояние
-  `st+0x70..0xd4` (`tr_flag`, `tr_pos[2]`, `tr_energy[2][8]`, `tr_avg[2]`,
-  `tr_hp[2][2]`) — теперь названо в `SscEncoder`.
-  ⚠ Позиция громкого подблока — локальный массив **без инициализации**: если
-  громких нет, в `tr_pos` пишется мусор со стека. Под оракулом это всегда 0
-  (проверено на 144 вызовах, включая кадры после полного кодирования), libssc
-  пишет 0. На реальном телефоне там может быть другое значение; влияет только
-  если оно случайно равно 7.
-- `compute_band_energies_for_lastband` — энергии узких подполос над
-  последней полосой. Таблицы `cutoff_start_index` / `cutoff_start_uhq_index`
-  на самом деле **int16** (в `tables.json` они int32): обычный режим — 4
-  подполосы по 36 бинов (708/744/780/816) от `eBands[21]·8`; UHQ — строка
-  `row` из 8 подполос по 18 бинов от `eBands[21 − row]·8`. Второй канал всегда
-  начинает с `eBands[21]·8`, независимо от `row` (ошибка блоба, повторена).
-- `tone_detect` — вызывается **изнутри `pitch_search`** после грубого
-  `find_best_pitch` (дыра в 3b: на прежних сигналах ни разу не срабатывала).
-  Если оба кандидата ≥ 0,93·maxcorr и корреляция — гребёнка пиков с шагом
-  5 ≤ d ≤ n/2 через весь диапазон, кандидаты заменяются последним пиком и
-  пиком на d раньше. Срабатывает на чистых тонах (1 кГц, 440 Гц, аккорд), не
-  срабатывает на 100/220 Гц и выше 3 кГц.
-  Блоб держит рабочие массивы `pitch_search` **внутри `in_shared`**
-  (`x_lp4` +0x774, `y_lp4` +0x924, `xcorr` +0xcec), а `tone_detect` читает
-  `xcorr[−1]` и `xcorr[n]` — то, что там оставили другие стадии. Поэтому
-  `pitch_search` в libssc переведён на ту же раскладку (`opus/PATCHES.md`).
-- `last_band_info_calc` — экспортирована, но блоб её не вызывает; перенесена
-  для ABI, проверяется в `twin.py` случайными вызовами.
+The phone's behaviour, taken from `ref/libbluetooth_jni.so` (Ghidra, `research/decomp_bt`):
 
-**Флаги заголовка** (теперь совпадают, больше не PEND):
-- узкие битрейты: байт 2 += 4k, k — старшая из подполос 1..3, где сумма
-  энергий двух каналов ≥ 30002 (иначе 0); полосы не отбрасываются;
-- UHQ кроме 152k: строки row = 0..3 по очереди, в каждой подполосы 7..0;
-  первая с суммой > 12001 даёт `drop = row`, байт 2 += 4·row, байт 3 биты 5..7 =
-  номер подполосы; не нашлось — row 3, подполоса 0;
-- 152k: `drop = 4`, флаги не трогаются; 256k/328k (широкие на 48k): ничего.
-- `previous_uhq_index = drop` в конце кадра.
+- capability byte: `0xF0` rates, `0x08` no bitrate limit, `0x04` 24 bit 48 kHz, `0x02` UHQ;
+  the phone configures `(peer & 0x08) | 0x04` (UHQ: `0x02 | 0x08`);
+- PCM: 24 bit 48 kHz at **2^23 full scale**; 16 bit only at 44.1 kHz; UHQ at 96 kHz;
+- bitrate by link busy level: 48 kHz 192/192/128/88k (limited: 128/128/128/88k),
+  UHQ 584/584/291/152k; the phone never uses 229/256/328k at 48 kHz;
+- packet: the frame right after the RTP header, **the RTP timestamp counts packets**.
 
-**Стенды:**
-- stages: новая точка «post-normalise» (выход `normalise_bands`), стадии теперь
-  бывают на входе или на выходе функции. Поля `st+0x70..0xd4` сняты с маски,
-  добавлены проверки `previous_uhq_index` и флагов заголовка. Перед каждым
-  кадром стенд копирует из блоба в libssc ещё не портированную часть состояния
-  (`STATE_PENDING`: `oldBandE` и др.) — иначе `patch_transient_decision`
-  сравнивает с нулями (`oldBandE` пишет квантование энергий, 3e).
-  `--no-inject` отключает перенос.
-- replay: +8 функций (26 всего), вид аргумента `alias:N` (тот же буфер, что у
-  аргумента N — для `normalise_bands`, работающей на месте); `pitch_search`
-  теперь сравнивает весь `in_shared`.
-- twin: + `last_band_info_calc` (19 проверок).
-- `signals.py`: сигналы `tone` (1 кГц) и `chord` (440+880+1320 Гц) в шкале
-  2^23 — на них срабатывает `tone_detect`; `hfsweep` — тихий свип по верхней
-  полосе (17–23,5 кГц / 15–47 кГц за 10 кадров). Без него флаги полосы
-  покрывались только крайними случаями (k = 0/3, row 0/«не нашлось»), с ним —
-  все k = 0..3 и все строки UHQ 0..3 с разными подполосами.
+In SSCv2: cgo package `internal/codec/ssc` (float → 24 bit, `FrameBytes`, one encoder per
+process); `go test` checks the frames' sha256 against the blob on all 14 bitrates. The tray
+offers the SSC and SSC UHQ codecs and a bitrate choice.
 
-**Результат:** stages — все контрольные точки (pre-MDCT, post-MDCT,
-post-normalise, флаги заголовка, `previous_uhq_index`) совпадают на
-**1400/1400 кадрах** (`--rates all`: 14 битрейтов × 9 сигналов × 10 кадров +
-`hfsweep`); replay 25/25 функций на всех битрейтах; twin 19/19.
-Полезная нагрузка CELT — ещё PEND (3e–3f).
+**On Buds2 Pro (cap 0x3C, configuration 0x0C):** 192k and 229k sound fine, 256k and 328k bad:
+these are the "wide" bitrates the phone never sends at 48 kHz, and our frames are bit-exact, so
+the headphones' decoder handles them poorly. The practical maximum is 229k.
+**Forced UHQ:** the 48 kHz capture upsampled 2× (half-band FIR, `engine/upsample.go`), the
+encoder at 96 kHz; Buds2 Pro accept configuration 0x0A, 584k runs without errors.
 
-- 2026-10-24 — **подэтап 3e готов** (tf, энергии coarse/fine, spread, dynalloc,
-  trim, распределение бит).
+### 6 — Decoder (next)
 
-### Итоги 3e
+Based on the Opus 1.1.5 CELT decoder with Samsung's differences from phases 3–4. Check:
+decode(libssc) ≈ the source PCM, and decoding the blob's frames. Needed to judge quality without
+headphones — first of all, to find out what is wrong with 256k/328k.
 
-**Цепочка** (`ssc_encode` @0xebcc..0x11068) — порядок Opus 1.1:
-tf_analysis → `quant_coarse_energy` → tf_encode → spread → dynalloc (анализ +
-кодирование бустов) → stereo_analysis → intensity → alloc_trim →
-`compute_allocation` → `quant_fine_energy`. Встроенные в `ssc_encode` части
-перенесены как static-функции `ssc_encoder.c`, экспортируемые — в
-`src/ssc_quant.c`. Что отличается от Opus:
+## Open
 
-- **tf**: анализ и `tf_encode` только на узких битрейтах и при
-  `effectiveBytes ≥ 30`; у широких `tf_res` обнуляется и не кодируется.
-  После обратного прохода Витерби `tf_res[0] = tf_res[1] = isTransient`.
-  Рабочая память tf_analysis — снова в `in_shared` (`metric` +0, `path0` +22,
-  `path1` +44 int32, `tmp` с байта 0x108, `tmp_1` с 0x348). `tf_encode` идёт до
-  `st->end`, а не до `end − drop`.
-- **`quant_coarse_energy`** — своя сигнатура (11 аргументов): всегда два
-  прохода (intra и inter), без `intra_bias`; `intra` форсируется только полем
-  `st->force_intra` (0x10), которое блоб не выставляет. Если выиграл intra, в
-  `error[]` копируются все 44 значения из локального массива — хвост за `end`
-  там неинициализирован (стековый мусор, дальше не читается; стенды его не
-  сравнивают). Таблицы Лапласа — Opus LM=3.
-- **spread**: `spreading_decision` переписана — только полосы 8..end−1, счётчики
-  удвоены (поэтому `hf_sum` вдвое больше, чем в Opus), нет выхода SPREAD_NONE
-  для узкой последней полосы, гистерезис в масштабе ×4 (результат тот же).
-  Вызывается, если `nbAvailableBytes ≥ 20` и нет коротких блоков.
-- **dynalloc**: Opus с `lsb_depth = 16`, CBR. Добавки Samsung:
-  1) буст полос 0 и 1 по форме `bandLogE2` (сильный низкий пик: до 10 квантов;
-     не делается, если сработал кап dynalloc);
-  2) после кодирования бустов — первая из полос 18..20 с бустом > 1000, у
-     которой следующая полоса без буста, переносит буст на неё, если
-     `oldBandE` следующей (уже после coarse) > 7000 или > половины текущей.
-  Капы — прямо `mode->cache.caps` (`init_caps` блоб не вызывает).
-- **intensity**: `hysteresis_decision(510, …)` по своим таблицам Samsung на 23
-  значения → фактически всегда `end − drop`.
-- **alloc_trim**: без `stereo_saving` (блоб считает `logXC2`, но не
-  использует), без анализа тональности и surround; наклон спектра по
-  `end − drop`.
-- **`compute_allocation`** — своя сигнатура (без start/C/LM/encode) и флаг
-  `bitrate > 192000`, который выбирает **вторую таблицу распределения**
-  (`mode->allocVectors2`). Внутри — Opus 1.1 rate.c без изменений.
-- `quant_fine_energy`, `hysteresis_decision` — Opus 1.1 (без start).
-- Поля состояния названы: `rng` 0x1c, `spread_decision` 0x20, `delayedIntra`
-  0x24, `tonal_average` 0x28, `lastCodedBands` 0x2c, `hf_average` 0x30,
-  `tapset_decision` 0x34, `intensity` 0x50, `force_intra` 0x10.
-
-**Стенды:**
-- stages: новая точка «pre-PVQ» (вход `quant_all_bands`): кроме памяти,
-  состояния и range coder сравниваются все аргументы `quant_all_bands`
-  (регистры + стек: end, shortBlocks, spread, dual_stereo, intensity,
-  total_bits, balance, codedBands; массивы `tf_res`, `pulses`, `bandE`) и
-  `fine_quant`, `fine_priority`, `error` (по указателям, снятым на входе
-  `quant_fine_energy` / `compute_allocation`). Массивы сравниваются до `end`:
-  за ним у блоба остатки переиспользованных локальных массивов.
-  **Совпадает на 1400/1400 кадрах** (`--rates all`).
-- replay: +5 функций (30 всего). Новое: аргументы после x7 читаются со стека
-  (AAPCS64), вид `ec` (копия `ec_ctx` и его буфера с подменой указателя),
-  `valid` — сравнение только значимых байт выходного массива.
-- twin: + `init_caps` на обоих режимах (20 проверок).
-- Покрытие веток 3e на тестовых сигналах (отдельная сборка со счётчиками):
-  всё, кроме `force_intra`; intra-проход выигрывал в 227 кадрах, кап dynalloc —
-  41, каскад буста — 62, буст полос 0/1 — 147/49, пропуск полос — 395.
-
-**Попутно:** `ssc_encoder.c` (с 3d) и сгенерированный `ssc_tables.c` были не
-в UTF-8 (Python на Windows пишет в cp1252 по умолчанию). Переведены в UTF-8,
-`tools/gen_tables.py` теперь пишет UTF-8 явно.
-
-Полезная нагрузка CELT до PVQ совпадает; совпадающих байт кадра стало
-167 тыс. из 653 тыс. (было 109 тыс.). Перенос состояния из блоба в стенде
-пока нужен: `oldBandE` дописывает `quant_energy_finalise` (3f).
-
-- 2026-10-24 — **подэтап 3f готов, фаза 3 закрыта: энкодер libssc бит-точен.**
-
-### Итоги 3f
-
-**Критерий фазы выполнен:** все 6 голденов (96 кадров) и корпус `--rates all`
-(14 битрейтов × 10 сигналов × 12 кадров = **1680 кадров**) совпадают с блобом
-**байт в байт целиком**, без переноса состояния из блоба. После каждого кадра совпадают
-и полное состояние энкодера, и общие буферы `in_shared` / `_pre_shared`.
-
-**PVQ** (`src/ssc_pvq.c`) — Opus 1.1.5 bands.c/vq.c без фолдинга и ресинтеза
-(кодеру они не нужны), LM = 3, C = 2:
-- `quant_all_bands` у Samsung своя: логика `quant_band_stereo` (N > 2) встроена
-  в цикл по полосам, `lowband`/`norm`/`collapse`-фолдинга нет, `fill` всегда
-  `(1<<B)−1`. Контекст — `band_ctx` Opus 1.1.5 (те же смещения). Seed (`st->rng`)
-  проходит насквозь неизменным.
-- `quant_band` → `quant_partition` → `compute_theta` (моно) → `alg_quant` —
-  Opus; `haar1` в перестановках tf — вариант Samsung с усечением.
-- Отличия Samsung в арифметике:
-  - `stereo_split` и `intensity_stereo` усекают каждое произведение отдельно
-    (Opus — сумму);
-  - `stereo_itheta`: деление `y<<15 / x` — точное 64-битное произведение на
-    `ssc_rcp` (Opus — приближённое `MULT32_32_Q31`), первый шаг полинома
-    `atan01` с `>>16`;
-  - `exp_rotation`: усиление тоже через точное 64-битное деление, поворот
-    без округления (`>>15` вместо `PSHR32`);
-  - поиск PVQ: метрика `Rxy²>>7` (в Opus `>>15`), сравнение 64-битное; `rcp`
-    предпоиска 32-битный без усечения до int16.
-- Рабочие массивы `alg_quant` снова в `in_shared` (`iy` +0xd80, `y` +0xfc0,
-  `signx` +0x1200).
-- `encode_pulses` — Opus (`cwrs.c` 1.1.5, табличный `CELT_PVQ_U`) без изменений.
-
-**Конец кадра** (`finish_frame()` в `ssc_encoder.c`): бит anti-collapse
-(`consec_transient < 2`), `quant_energy_finalise` (Opus), при тишине
-`oldBandE = −28` дБ, у отброшенных верхних полос тоже; `oldLogE` = копия
-`oldBandE` или минимум при транзиенте; **`oldLogE2` Samsung не обновляет**;
-`consec_transient` растёт при транзиенте или когда бит транзиента не влез.
-Названо поле `consec_transient` (0x40).
-
-**Ошибка, найденная по ходу:** сначала `bits2pulses`/`pulses2bits` брали строку
-кэша по постоянному LM = 3, а не по текущему после разбиений. Нашлось
-сравнением последовательности внутренних вызовов (`alg_quant` N/K/B, коды
-углов) блоба и отладочной сборки, плюс хук оракула на внутреннюю
-`quant_partition` блоба (0x4740).
-
-**Стенды:**
-- twin: проверка кадров голденов теперь требует совпадения **кадра целиком**
-  (было: заголовок и длина) — 20/20, 96/96 кадров.
-- stages: маска «не портированного» состояния и перенос состояния из блоба
-  удалены; добавлены проверки полного состояния, `in_shared` и `_pre_shared`
-  после каждого кадра. CELT payload больше не PEND.
-- replay: +5 функций (`encode_pulses`, `stereo_itheta`, `alg_quant`,
-  `quant_energy_finalise`, `quant_all_bands`) — 35 всего.
-- Покрытие веток PVQ на корпусе: всё, кроме «осталось больше N+3 импульсов
-  после предпоиска» (в Opus помечено как невозможное).
-
-**Дальше — фаза 4** (полная проверка: длинные прогоны со счётчиком кадров за
-256, неизвестные битрейты, крайние сигналы), затем фаза 5 (интеграция в
-SSCv2). Для фазы 5 уже известно: `-ffp-contract=off` в cgo, вход в шкале
-2^23, глобалы (`in_shared`, `_pre_shared`, DRC) — по одному энкодеру на
-процесс, если не перенести их в `SscEncoder`.
-
-- 2026-10-24 — **разбор свежей прошивки** (`ref/firm/unpacked`, в `.gitignore`)
-  и **подэтап 3g готов: libssc — двойник энкодера из прошивки телефона.**
-
-### Что в прошивке
-
-- `/system/lib64/libScalable_Encoder.so` — **другая сборка** энкодера: clang 14.0.7
-  (NDK r25), а libssc до этого сверялся со сборкой clang 8 из чужой программы.
-  Выход у них разный (одинаковых кадров ~30 %). Телефон и наушники пользователя
-  работают на новой, поэтому эталоном стала она: `ref/libScalable_Encoder.so`
-  заменён, старый блоб, его голдены и декомпиляция удалены (есть в истории git).
-- Вызывающий код — `libbluetooth_jni.so` из `system/apex/com.android.bt.apex`
-  (ext4 внутри APEX, скопирован в `ref/`, 16 МБ, в `.gitignore`): `packages/modules/Bluetooth/system/
-  stack/a2dp/a2dp_vendor_ssc{,_encoder}.cc` — `dlopen("libScalable_Encoder.so")`,
-  `a2dp_vendor_ssc_encoder_init/update`, `a2dp_ssc_encode_frames`,
-  `SscBitrateByBusyLevel`, «dual play» со вторым экземпляром энкодера, путь
-  offload (`ssc_offloading_capability_match`). Отсюда снимать формат и шкалу PCM,
-  выбор битрейта и упаковку в пакеты (фазы 4–5).
-- `vendor/lib64/lib_bt_bundle.so` — плагин Qualcomm PAL, только конфигурация
-  offload-энкодера (`ssc_pack_enc_config`). Кодека нет. Декодера SSC в прошивке
-  телефона нет (он в наушниках).
-
-### Итоги 3g
-
-**Результат:** голдены нового блоба (переснятые `oracle make-golden`, 6 × 16
-кадров) и корпус `test/corpus.py` (14 битрейтов × 10 сигналов × 12 кадров =
-**1680 кадров**) совпадают байт в байт; twin 17/17; stages `--rates all` — все
-контрольные точки на 1680 кадрах, включая новые (до coarse, до/после
-`compute_allocation`); replay — 33/33 функции на всех битрейтах.
-
-**ABI нового блоба** (libssc повторяет его):
-- имена: почти всё CELT с префиксом `ssc_` (`ssc_quant_all_bands`,
-  `ssc_ec_encode`, …), `SoundBooster_DRC_*` → `SSC_DRC_*`. В libssc исходники Opus
-  не тронуты: `src/ssc_names.h` подключается ко всем файлам (`-include`, нужно и
-  в cgo) и переименовывает символы;
-- режим 128 байт (было 136): нет указателя на окно, окно MDCT — константа
-  (`ssc_window`, va 0x3d80), `ssc_mdct_forward` без аргумента окна; режимы
-  va 0x1b9c0 / 0x1ba40; все таблицы те же;
-- состояние: заголовок 0xe0 (был 0x128) — состояние float-детектора транзиентов
-  удалено, счётчик кадров `+0x8c`, biquad `+0x90`, массивы с `+0xe0`;
-  `get_size` = … + 0xdc, то есть **на 4 байта меньше**, чем нужно до конца
-  `oldLogE2` (блоб их не трогает; `ssc_encoder_create` в libssc выделяет +4);
-- распределение бит — одна структура `SscAlloc` (0x184 байта: бюджет,
-  `fine_quant`, `pulses`, `caps`, `offsets`, `fine_priority`, trim, dual_stereo,
-  balance, флаг второй таблицы): `ssc_compute_allocation(st, A, ec, end, bw)`,
-  `ssc_quant_fine_energy`/`_finalise` без `C`, `ssc_spreading_decision(st, X,
-  update_hf, end)`, `ssc_amp2Log2(m, end, bandE, bandLogE)`,
-  `ssc_pitch_downsample(x0, x1, x_lp, len)`, `ssc_stereo_itheta(X, Y, N)`,
-  `normal_headroom(…, N)`, у `ssc_quant_all_bands` 17-й аргумент (1);
-- нет больше экспортов `ec_ilog`, `init_caps`, `dual_inner_prod`,
-  `ssc_lcg_rand`, `patch_transient_decision_temporal`, таблиц `cutoff_start_*`.
-
-**Отличия в арифметике:**
-- Biquad: выход округляется `(y + 8) >> 4` (было `y >> 4`), состояние каналов
-  переставлено (R в `[0..4]`, L в `[5..9]`), считает по 2 кадра;
-- `powercalc`: каждый 32-й кадр × 32, квадрат без обрезки до 32 бит;
-- DRC: отпускание `0x3ca4a1` для всех частот (было `0x3e6f79` на 96 кГц); при
-  пике 0 цель `0x2000`; `CalculateLimitGain` тот же;
-- предыскажение: память `memE` больше не считается (остаётся 0);
-- **float-детектор транзиентов `patch_transient_decision_temporal` удалён**, решение
-  только по энергиям полос;
-- `normal_headroom` ≥96k: ослабление с `(M/4)·34` бинов полосы 20, а не с её начала;
-- обнуление спектра выше последней полосы (<192k) в длинном MDCT — и для широких
-  битрейтов (152k UHQ), в коротких — как раньше, только для узких;
-- `compute_band_energies_for_lastband`: второй канал с той же полосы, что первый
-  (ошибка старой сборки исправлена);
-- `amp2Log2` — asm-ядро на чётные полосы; `log2` от `bandE << 2`, которое для
-  энергий ≥ 2^29 (короткие блоки громкого входа) уходит в минус. В C это
-  переполнение со знаком — gcc его «оптимизировал», libssc считало иначе.
-  Теперь `log2_band` повторяет ядро шаг в шаг на беззнаковых операциях;
-- `quant_coarse_energy`: искажение для `delayedIntra` по первым `2·end`
-  элементам подряд (ошибка Samsung, повторена), intra-проход принимается,
-  только если его байты < 150, `max_decay = min(16384, nbAvailableBytes·128)`;
-- `spreading_decision`: `hf_sum >> 3` (было деление на `2·(end + 4 − nb)`);
-- dynalloc: при упоре в предел `offsets[i] = effectiveBytes·16 − tot_boost`
-  (Opus и старая сборка: `(effectiveBytes/4)·64`).
-Не изменились: pitch/префильтр, MDCT/FFT, `uhq_headroom`, грубое квантование
-(ядро), tf, stereo/intensity/trim, `compute_allocation`, PVQ, range coder.
-
-**Стенды:**
-- оракул: заглушка `printf`, `make-golden`, адреса режимов (`MODE_VA`);
-- `test/corpus.py` — новый: кадры целиком по всем битрейтам и сигналам;
-- replay: аргументы-структуры с указателем внутри (`state`, `alloc`),
-  `alias:N+EXPR`; ошибки записи помечаются `SIG`, а не роняют прогон;
-- stages: точки «pre-coarse» (аргументы и `bandLogE`), «pre-alloc» / «pre-fine»
-  (`SscAlloc` на входе и выходе, `codedBands`), пробы блоба цепочкой;
-- `research/decomp/` — декомпиляция нового блоба, `dump_mode.py` и `tables.json`
-  под новую раскладку.
-
-**Дальше — фаза 4** на этом энкодере.
-
-- 2026-10-24 — **фаза 4 готова** (полная проверка на энкодере из прошивки).
-
-### Итоги фазы 4
-
-**Стенд `test/edge.py`** — 216 сценариев, 5525 кадров. После каждого кадра
-сравниваются код возврата, кадр, PCM после DRC, всё состояние энкодера и глобалы
-блоба (`drc_struct`, `previous_uhq_index`, `in_shared`, `_pre_shared`,
-`_pcmpower`); блоб идёт под лимитом инструкций. Результат: **215/216**, одно
-исключение — 32 кГц, на которых падает сам блоб (см. ниже).
-- длинные прогоны по 600 кадров (счётчик кадров дважды проходит через 256) на
-  229/128/328k и 584/152/250k — совпадают;
-- неизвестные битрейты (0, 1, −1, 64k, 100k, 229001, 300k, 600k, 1M, 4M,
-  INT_MAX, −229k на 48 кГц; 0, 200k, 500k, 1M и «узкие» 229k/128k на 96 кГц);
-- смена битрейта на каждом кадре и раз в 5 кадров внутри семейства, а также
-  вперемешку 48k- и UHQ-битрейтов на одном энкодере;
-- крайние сигналы на всех 14 битрейтах: INT32_MAX/MIN, чередование ±max,
-  шум на весь int32, меандр и синус полной шкалы 24 бит, DC (половина, полная
-  шкала, int32), одиночный INT_MIN, шум ±1 LSB, пачки тишина/шум;
-- 44,1 кГц, 16-битный вход (48 и 96 кГц), `frame_size = 0`, 3 канала.
-
-**Найдено и исправлено:**
-- **размер кадра**: при бюджете больше 1275 байт блоб возвращает 1275 + 4
-  (кадр обрезается), а `ec_enc_done` всё равно пишет хвост в конец полного
-  бюджета; libssc возвращал полный бюджет;
-- **`_ssc_autocorr`** (внутри `pitch_downsample`): ac0 без `1 + (n << 7)`, а
-  масштабированная копия пишется в `in_shared`, то есть поверх самого `x_lp`.
-  На корпусе не проявлялось, проявилось на DC и меандре полной шкалы. Теперь
-  своя функция в `ssc_pitch.c`, `pitch.c` вызывает её (`opus/PATCHES.md`);
-- **`normal_headroom` на 96 кГц с «узким» битрейтом** (≥ 96k, не UHQ; телефон
-  так не делает): цикл идёт до бина 864, а таблица `headroom_gain` — на 240
-  значений, и блоб читает дальше по `.data`: `drc_struct`, `DRC_ChNum`,
-  `DRC_ModeFlag`, `Soundbooster_DRC_Fs`, `count_for_debug`, `previous_uhq_index`,
-  начало `_pre_shared`. libssc повторяет это чтение (`gain_at()`);
-- ширина полосы для бустов dynalloc у блоба всегда стерео (`·16`), libssc
-  умножал на `channels`;
-- `ssc_encoder_create` выделяет память как минимум под стерео (`ssc_encode`
-  всегда работает с двумя каналами) и под `state_size(channels)` для каналов > 2
-  (`init` очищает столько до проверки).
-
-**Ограничения (не бит-точно / не сравнивалось):**
-- **моно** (`channels = 1`): `ssc_encode` всё равно обрабатывает два канала, и
-  блоб пишет за пределы своего состояния, выделенного под моно (на телефоне это
-  порча кучи). Кадры libssc и блоба в моно расходятся после первого; телефон и
-  Buds работают в стерео, поэтому моно не поддерживается;
-- **частоты кроме 44,1/48/96 кГц**: блоб падает в `ssc_encoder_get_size`
-  (разыменование NULL-режима), libssc возвращает 0 / ошибку.
-
-**Стенды:** `edge.py` обнуляет глобалы libssc перед каждым сценарием (у оракула
-каждый раз свежий «процесс»); буфер вывода 64 КБ (хвост range coder при больших
-бюджетах). Replay: `_ssc_autocorr` и `pitch_downsample` теперь работают на
-`in_shared`/`_pre_shared` через `ptr`.
-
-**Дальше — фаза 5** (интеграция в SSCv2): шкалу и формат PCM, выбор битрейта и
-упаковку кадров снять с `ref/libbluetooth_jni.so`.
-
-- 2026-10-25 — **фаза 5 готова** (код): SSC в SSCv2 через cgo; поведение снято с BT-стека телефона.
-
-### Итоги фазы 5
-
-**Что делает телефон** (`ref/libbluetooth_jni.so`, Ghidra: `research/ghidra/decompile_bt.ps1` →
-`research/decomp_bt/_roots.c`; адреса Ghidra = VA + 0x100000):
-- **байт capability/конфигурации** (байт 9 codec info, `A2DP_ParseInfoSsc`): `0xF0` — частоты
-  (0x10 48k, 0x20 44,1k, 0x40 32k, 0x80 96k), `0x08` — без ограничения битрейта, `0x04` —
-  24 бит 48 кГц («HiFi»), `0x02` — UHQ v2 (96 кГц, 32 бит). Свой SEP телефона: `0x2C`
-  (0x28 | 0x04, если HiFi не выключен iop-исключением `SSC_HIFI_DISABLED_1`);
-- **конфигурация** (`setCodecConfig`): `(peer & 0x08) | 0x04` для 24 бит 48 кГц, иначе частота
-  16-битного режима или `0x02` для UHQ. Для Buds3 FE (cap `0x3C`) — `0x0C`, ровно наш
-  `SSC_CAP_BASIC`;
-- **PCM**: 24 бит → 48 кГц, 16 бит → только 44,1 кГц (`a2dp_ssc_encode_frames`), UHQ — 32 бит
-  96 кГц. 24-битный PCM читается упакованным (5184 байта на кадр) и знаково расширяется в
-  int32: **шкала 2^23**, как мы и подаём;
-- **битрейт** — таблицы `SscBitrateByBusyLevel` по уровню загрузки канала 0/1/2/3 (от
-  контроллера): 48 кГц без ограничения **192k / 192k / 128k / 88k**, с ограничением
-  128k / 128k / 128k / 88k; UHQ v2 584k / 584k / 291k / 152k; тип 0x200 (96 кГц без UHQ v2)
-  328k. 229/256/328k на 48 кГц телефон не использует (в энкодере они есть);
-- **пакет**: на 48 кГц один кадр (UHQ — до двух) прямо после RTP-заголовка, без своего
-  заголовка (`A2DP_VendorUsesRtpHeaderSsc` = true); **RTP timestamp — счётчик пакетов**
-  (+1 на пакет, `A2DP_VendorGetPacketTimestampSsc`), а не число сэмплов;
-- «dual play» (второй энкодер, Audio Share) и offload через AIDL HAL нам не нужны.
-
-**Интеграция в SSCv2:**
-- `internal/codec/ssc` — cgo-обёртка libssc: `New(rate, bitrate)`, `Encode([]float32)` (float →
-  24 бит, шкала 2^23, с ограничением), `FrameBytes` (CBR-размер кадра), один энкодер на процесс
-  (`ErrBusy`: DRC и буферы — глобалы, как у блоба). Исходники компилируются обёртками
-  `zssc_*.c` из `tools/genwrap` (с `#include "ssc_names.h"` вместо `-include`);
-- **проверка**: `go test ./internal/codec/ssc` — целочисленный сигнал (тон + шум, кадры на
-  полной шкале и тишина), 40 кадров на каждом из 14 битрейтов, sha256 против блоба под
-  оракулом (`test/cgo_ref.py` → `testdata/oracle.txt`) — **совпадает**, в том числе при
-  нескольких энкодерах подряд в одном процессе; `FrameBytes` = длине каждого кадра;
-- конвейер движка перешёл с int16 на float32 (AAC конвертирует сам), для SSC — один кадр на
-  пакет и timestamp-счётчик, как у телефона;
-- `newSSC`: 48 кГц, 192k (128k без бита 0x08), ниже — только если кадр не влезает в пакет
-  (у Buds 667 байт, кадр 192k — 484); конфигурация `0x04 | peer&0x08`; без бита 0x04 у
-  наушников SSC не включается (16-битный режим 44,1 кГц не делаем); если наушники сами
-  выбрали UHQ — переподключаемся со своей конфигурацией;
-- трей: пункт «Режим SSC» активен, `ssc.exe ctl mode ssc`; «AAC 256» больше не поднимает MTU
-  в режиме SSC.
-
-**На наушниках (2026-10-25, Buds2 Pro, cap 0x3C, конфигурация 0x0C):** звук нормальный
-(на слух — пользователь). Битрейт можно задать (`settings.json` → `sscBitrate`,
-`ssc.exe ctl ssc auto|<кбит/с>`): 192/229/256/328k — все по 55,5 пакета/с (кадр в 18 мс),
-0 ошибок, очередь 0. 328k (806 байт) больше объявленного пакета 667 — идёт, как «AAC 256»,
-со своим MTU 1017. Выше 328k в базовом режиме ничего нет; UHQ эти наушники не объявляют.
-**На слух: 192k и 229k — нормально, 256k и 328k — плохо («задыхается»).** Это ровно два «широких»
-битрейта базового режима (`wide`: без +3/128 к бюджету, другой путь DRC, обрезка спектра как
-у UHQ), которые телефон на 48 кГц не отправляет никогда. Транспорт не виноват (кадр 256k —
-630 байт, влезает в обычный пакет), DRC тоже (на 24-битном входе не срабатывает ни на одном
-битрейте, замер до −1 dBFS), а кадры совпадают с блобом (корпус фазы 3g/4). Значит, такие
-кадры плохо переваривает декодер Buds. Практический максимум — **229k**. Проверить точнее —
-своим декодером в фазе 6.
-
-**UHQ силой** (`ssc.exe ctl ssc 152|250|291|308|442|584|886`, байт конфигурации — `ctl ssccap
-auto|<hex>`): захват 48 кГц × 2 (полуполосный FIR, 64 отвода на фазу, SNR > 80 дБ до 20 кГц,
-`engine/upsample.go`), энкодер 96 кГц, вход в той же шкале 2^23 (телефон на 96 кГц отдаёт в
-`ssc_encode` 32-битный PCM HAL без преобразования — шкала по коду не видна), кадр 9 мс в
-пакете. Buds2 Pro (cap 0x3C — бита UHQ нет) **принимают** конфигурацию 0x0A (как телефон:
-0x02 | 0x08); 584k идёт 111 пакетов/с без ошибок. Звук — на слух у пользователя.
-
-**Не сделано / дальше:**
-- снижение битрейта по загрузке канала (у телефона — по busy level от контроллера);
-- UHQ 96 кГц (нужен захват 96 кГц; Buds3 FE его не объявляют).
-
-**Дальше — фаза 6** (декодер).
+- Lowering the bitrate by link load (the phone uses the controller's busy level).
+- A real 96 kHz capture for UHQ instead of upsampling.
+- Input scale at 96 kHz: the phone passes the HAL's 32-bit PCM unchanged; we feed 2^23
+  (experiment: `SSCV2_SSC_SHIFT`).
+- Several encoders per process: move the globals (DRC, `in_shared`, `_pre_shared`) into
+  `SscEncoder`.

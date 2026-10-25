@@ -169,8 +169,10 @@ type VolumeSync struct {
 	cb       *volCallback
 	id       string
 	send     func(uint8) bool
+	onMute   func(bool)
 	lastSent atomic.Int32
 	pending  atomic.Bool
+	muted    atomic.Int32 // -1 unknown, 0, 1
 }
 
 // FallbackLevel is used when a device has no stored volume.
@@ -178,14 +180,19 @@ const FallbackLevel = 0.15
 
 // StartVolumeSync attaches to endpoint id ("" = default output). send pushes
 // a 0..127 volume to the headphones; the current level is sent at once.
-func StartVolumeSync(id string, send func(uint8) bool) (*VolumeSync, error) {
+// onMute (may be nil) gets the endpoint's mute state now and on every change:
+// the captured audio is taken before mute is applied, so the engine has to
+// silence the stream itself.
+func StartVolumeSync(id string, send func(uint8) bool, onMute func(bool)) (*VolumeSync, error) {
 	vol, err := endpointVolume(id)
 	if err != nil {
 		return nil, err
 	}
-	vs := &VolumeSync{vol: vol, send: send, id: id}
+	vs := &VolumeSync{vol: vol, send: send, id: id, onMute: onMute}
 	vs.lastSent.Store(-1)
+	vs.muted.Store(-1)
 	vs.cb = newVolCallback(func(ctx windows.GUID, muted bool, level float32) {
+		vs.setMuted(muted)
 		if ctx == selfContext {
 			return // our own echo
 		}
@@ -201,12 +208,29 @@ func StartVolumeSync(id string, send func(uint8) bool) (*VolumeSync, error) {
 		s = FallbackLevel
 		_ = setScalar(vol, s, &selfContext)
 	}
+	var m int32
+	if hr(vcall(vol, 15, uintptr(unsafe.Pointer(&m)))) == nil {
+		vs.setMuted(m != 0)
+	}
 	v := ScalarTo127(s)
 	vs.lastSent.Store(int32(v))
 	ok := send(v)
 	vs.pending.Store(!ok)
 	logx.Dbgf("vol", "sync start: endpoint %s level %.1f%% -> headphones %d/127 (AVRCP up: %v)", nzs(id, "default"), s*100, v, ok)
 	return vs, nil
+}
+
+// setMuted reports a mute change (only changes) to onMute.
+func (vs *VolumeSync) setMuted(m bool) {
+	n := int32(0)
+	if m {
+		n = 1
+	}
+	if vs.muted.Swap(n) == n || vs.onMute == nil {
+		return
+	}
+	logx.Dbgf("vol", "endpoint %s mute %v", nzs(vs.id, "default"), m)
+	vs.onMute(m)
 }
 
 func (vs *VolumeSync) onLocal(level float32) {

@@ -256,7 +256,7 @@ func (s *stackT) onA2DP(cp *C.uint8_t, p []byte) {
 		s.remoteSeid = uint8(C.a2dp_subevent_stream_established_get_remote_seid(cp))
 		if s.opts.ForceMediaMTU > 0 {
 			old := int(C.ssc_media_force_mtu(C.uint8_t(s.localSeid), C.uint16_t(s.opts.ForceMediaMTU)))
-			s.logf("bt: media MTU %d -> %d (above the headphones' announced limit: AAC 256 / SSC above 256k)", old, s.opts.ForceMediaMTU)
+			s.logf("bt: media MTU %d -> %d (above the headphones' announced limit: max MTU / large SSC frames)", old, s.opts.ForceMediaMTU)
 		}
 		m := int(C.a2dp_max_media_payload_size(C.uint16_t(s.a2dpCid), C.uint8_t(s.localSeid)))
 		if m <= 0 {
@@ -378,6 +378,22 @@ func (s *stackT) onAVRCP(cp *C.uint8_t, p []byte) {
 			s.emit(Event{Kind: EvVolume, Addr: s.remote, Volume: v})
 		}
 		C.avrcp_controller_enable_notification(C.uint16_t(s.avrcpCid), C.AVRCP_NOTIFICATION_EVENT_VOLUME_CHANGED)
+
+	case C.AVRCP_SUBEVENT_OPERATION:
+		// Taps on the headphones: AVRCP PASS_THROUGH (press + release).
+		if C.avrcp_subevent_operation_get_button_pressed(cp) == 0 {
+			return
+		}
+		op := uint8(C.avrcp_subevent_operation_get_operation_id(cp))
+		key := map[uint8]int{C.AVRCP_OPERATION_ID_PLAY: MediaPlayPause, C.AVRCP_OPERATION_ID_PAUSE: MediaPlayPause,
+			C.AVRCP_OPERATION_ID_FORWARD: MediaNext, C.AVRCP_OPERATION_ID_BACKWARD: MediaPrev,
+			C.AVRCP_OPERATION_ID_STOP: MediaStop}[op]
+		if key == 0 {
+			s.logf("bt: headphones button 0x%02X ignored", op)
+			return
+		}
+		s.logf("bt: headphones button 0x%02X -> media key %d", op, key)
+		s.emit(Event{Kind: EvMediaKey, Addr: s.remote, Media: key})
 
 	case C.AVRCP_SUBEVENT_SET_ABSOLUTE_VOLUME_RESPONSE:
 		v := uint8(C.avrcp_subevent_set_absolute_volume_response_get_absolute_volume(cp))

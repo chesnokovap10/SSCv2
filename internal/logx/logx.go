@@ -1,6 +1,6 @@
 // Package logx is a tiny file logger shared by the tray, engine and service.
 //
-// Debug mode (menu "Отладка", "ssc.exe ctl debug on", or SSCV2_DEBUG=1):
+// Debug mode (Settings > Debug journal, "ssc.exe ctl debug on", or SSCV2_DEBUG=1):
 // Dbgf lines are written too, and every line of every process (tray, engine,
 // helper) is also appended to logs\debug.log - one time-ordered journal of
 // mode switches, device exchanges and volume changes.
@@ -138,4 +138,19 @@ func Writer() io.Writer {
 	mu.Lock()
 	defer mu.Unlock()
 	return out
+}
+
+// Close closes the log files (uninstall deletes the folder); later lines go
+// to stderr.
+func Close() {
+	mu.Lock()
+	defer mu.Unlock()
+	if f, ok := out.(*os.File); ok && f != os.Stderr {
+		f.Close()
+	}
+	out = os.Stderr
+	if dbgFile != nil {
+		dbgFile.Close()
+		dbgFile = nil
+	}
 }

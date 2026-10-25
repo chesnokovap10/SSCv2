@@ -2,7 +2,10 @@
 // the laptop's built-in MediaTek MT79xx Bluetooth (BTstack in WinUSB mode)
 // and keeps a BLE mouse working meanwhile.
 //
-//	ssc.exe                         tray (default)
+//	ssc.exe                         tray (default; a copy outside Program Files installs/updates itself first)
+//	ssc.exe install                 copy to Program Files (elevated, from the first run)
+//	ssc.exe uninstall [--yes]       uninstall (through the running tray)
+//	ssc.exe uninstall-system --pid N   machine-wide part of uninstall (elevated)
 //	ssc.exe engine                  streaming process (started by the tray)
 //	ssc.exe service --owner <SID>   helper service (started by the SCM)
 //	ssc.exe service-install|service-uninstall   (elevated, from the tray)
@@ -14,6 +17,7 @@ package main
 import (
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
 
 	"golang.org/x/sys/windows"
@@ -23,6 +27,8 @@ import (
 	"sscv2/internal/driver"
 	"sscv2/internal/engine"
 	"sscv2/internal/helper"
+	"sscv2/internal/install"
+	"sscv2/internal/ipc"
 	"sscv2/internal/logx"
 )
 
@@ -40,6 +46,31 @@ func main() {
 		return ""
 	}
 	switch args[0] {
+	case "install":
+		logx.Open(config.LogDir(), "helper.log", "helper")
+		if err := install.Install(); err != nil {
+			logx.Printf("install: %v", err)
+			os.Exit(1)
+		}
+	case "uninstall-system":
+		pid := 0
+		for i := 1; i+1 < len(args); i++ {
+			if args[i] == "--pid" {
+				pid, _ = strconv.Atoi(args[i+1])
+			}
+		}
+		os.Exit(app.UninstallSystem(pid))
+	case "uninstall":
+		a := []string{"uninstall"}
+		if len(args) > 1 && args[1] == "--yes" {
+			a = append(a, "yes")
+		}
+		out, err := app.Ctl(a)
+		if err != nil {
+			fmt.Fprintln(console(), "error:", err, "- start ssc.exe and use Settings > Uninstall")
+			os.Exit(1)
+		}
+		fmt.Fprintln(console(), out)
 	case "engine":
 		os.Exit(engine.Run(os.Stdin, os.Stdout))
 	case "service":
@@ -85,7 +116,8 @@ func main() {
 			fmt.Fprintf(out, "MediaTek adapter %s: %s [service %s] %s\n", st.ID, st.Mode, st.Service, st.InstanceID)
 		}
 		inst, run := helper.ServiceState()
-		fmt.Fprintf(out, "helper service: installed=%v running=%v\n", inst, run)
+		fmt.Fprintf(out, "version %s\nhelper service: installed=%v running=%v\n", ipc.Version, inst, run)
+		fmt.Fprintf(out, "installed copy: %s (present %v, this is it %v)\n", install.Exe(), install.Installed(), install.RunningInstalled())
 		fmt.Fprintf(out, "settings: %s\nlogs: %s\n", config.SettingsPath(), config.LogDir())
 	default:
 		fmt.Fprintf(console(), "unknown command %q\n", args[0])

@@ -6,18 +6,18 @@ package bt
 import "C"
 
 import (
-	"errors"
+	"sscv2/internal/i18n"
 
-	"sscv2/internal/logx"
 	"fmt"
+	"sscv2/internal/logx"
 	"sync/atomic"
 	"time"
 )
 
-var errRejected = errors.New("команда отклонена наушниками")
+var errRejected = i18n.Error("команда отклонена наушниками", "the headphones rejected the command")
 
 func errFromStatus(st uint8) error {
-	return fmt.Errorf("статус 0x%02X (%s)", st, hciErr(st))
+	return fmt.Errorf(i18n.T("статус 0x%02X (%s)", "status 0x%02X (%s)"), st, hciErr(st))
 }
 
 // volPump coalesces AVRCP absolute volume commands: a dragged slider makes
@@ -31,10 +31,10 @@ type volPump struct {
 	// ready: our level (from Windows) was confirmed by the headphones. Until
 	// then their own reports (e.g. the interim answer to the notification
 	// subscription, often 100 % after reconnect) are not mirrored to Windows.
-	ready    bool
-	readyAt  time.Time
-	sent     int
-	sentAt   time.Time
+	ready   bool
+	readyAt time.Time
+	sent    int
+	sentAt  time.Time
 }
 
 func (v *volPump) reset() {
@@ -104,3 +104,32 @@ func Volume() uint8 { return uint8(stack.vol.remote.Load()) }
 
 // AVRCPConnected reports whether volume control is available.
 func AVRCPConnected() bool { return stack.avrcpUp.Load() }
+
+var lastPlayStatus atomic.Int32 // 0 unknown, 1 playing, 2 paused
+
+// SetPlaying tells the headphones whether something is playing (AVRCP play
+// status), so a tap sends PAUSE while playing and PLAY while paused.
+func SetPlaying(playing bool) {
+	s := stack
+	if !s.loopRunning.Load() || !s.avrcpUp.Load() {
+		lastPlayStatus.Store(0)
+		return
+	}
+	want := int32(2)
+	if playing {
+		want = 1
+	}
+	if lastPlayStatus.Swap(want) == want {
+		return
+	}
+	s.call(func() {
+		if s.avrcpCid == 0 {
+			return
+		}
+		st := C.avrcp_playback_status_t(C.AVRCP_PLAYBACK_STATUS_PAUSED)
+		if playing {
+			st = C.AVRCP_PLAYBACK_STATUS_PLAYING
+		}
+		C.avrcp_target_set_playback_status(C.uint16_t(s.avrcpCid), st)
+	})
+}

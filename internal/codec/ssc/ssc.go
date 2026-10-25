@@ -22,6 +22,8 @@ import "C"
 import (
 	"errors"
 	"fmt"
+	"math"
+	"sscv2/internal/i18n"
 	"sync"
 	"unsafe"
 )
@@ -37,7 +39,7 @@ var (
 )
 
 // ErrBusy: another encoder is open (libssc state is process-global).
-var ErrBusy = errors.New("ssc: энкодер уже открыт")
+var ErrBusy = i18n.Error("ssc: энкодер уже открыт", "ssc: an encoder is already open")
 
 var (
 	mu   sync.Mutex
@@ -52,6 +54,9 @@ type Encoder struct {
 	pcm        *C.int32_t // FrameLen*2 samples, C memory (the DRC rewrites it)
 	out        *C.uint8_t
 	outCap     int
+	// Shift: extra input headroom bits for experiments (0 = 24 bit, full
+	// scale 2^23; 8 = full scale 2^31)
+	Shift uint
 }
 
 // Valid reports whether bitrate is one the encoder knows for sampleRate.
@@ -87,10 +92,10 @@ func FrameBytes(sampleRate, bitrate int) int {
 // New opens an encoder. sampleRate is 44100, 48000 or 96000 (UHQ).
 func New(sampleRate, bitrate int) (*Encoder, error) {
 	if sampleRate != 44100 && sampleRate != 48000 && sampleRate != 96000 {
-		return nil, fmt.Errorf("ssc: частота %d не поддерживается", sampleRate)
+		return nil, fmt.Errorf(i18n.T("ssc: частота %d не поддерживается", "ssc: rate %d not supported"), sampleRate)
 	}
 	if !Valid(sampleRate, bitrate) {
-		return nil, fmt.Errorf("ssc: битрейт %d не поддерживается на %d Гц", bitrate, sampleRate)
+		return nil, fmt.Errorf(i18n.T("ssc: битрейт %d не поддерживается на %d Гц", "ssc: bitrate %d not supported at %d Hz"), bitrate, sampleRate)
 	}
 	mu.Lock()
 	defer mu.Unlock()
@@ -125,14 +130,21 @@ const fullScale = 8388608
 // returns one SSC frame. The slice is reused by the next call.
 func (e *Encoder) Encode(pcm []float32) ([]byte, error) {
 	if e.st == nil {
-		return nil, errors.New("ssc: энкодер закрыт")
+		return nil, errors.New(i18n.T("ssc: энкодер закрыт", "ssc: encoder closed"))
 	}
 	if len(pcm) < FrameLen*2 {
-		return nil, fmt.Errorf("ssc: мало сэмплов (%d < %d)", len(pcm), FrameLen*2)
+		return nil, fmt.Errorf(i18n.T("ssc: мало сэмплов (%d < %d)", "ssc: too few samples (%d < %d)"), len(pcm), FrameLen*2)
 	}
 	in := unsafe.Slice((*int32)(unsafe.Pointer(e.pcm)), FrameLen*2)
-	for i, v := range pcm[:FrameLen*2] {
-		in[i] = To24(v)
+	if e.Shift == 0 {
+		for i, v := range pcm[:FrameLen*2] {
+			in[i] = To24(v)
+		}
+	} else {
+		fs := float64(int64(fullScale) << e.Shift)
+		for i, v := range pcm[:FrameLen*2] {
+			in[i] = int32(max(-fs, min(fs-1, math.Round(float64(v)*fs))))
+		}
 	}
 	n := C.ssc_encode(e.st, e.pcm, FrameLen, e.out, C.int(e.Bitrate))
 	if n < 0 {
@@ -145,7 +157,7 @@ func (e *Encoder) Encode(pcm []float32) ([]byte, error) {
 // encoder's scale (24 bit, full scale 2^23). For tests against the blob.
 func (e *Encoder) EncodeInt32(pcm []int32) ([]byte, error) {
 	if len(pcm) < FrameLen*2 {
-		return nil, fmt.Errorf("ssc: мало сэмплов (%d < %d)", len(pcm), FrameLen*2)
+		return nil, fmt.Errorf(i18n.T("ssc: мало сэмплов (%d < %d)", "ssc: too few samples (%d < %d)"), len(pcm), FrameLen*2)
 	}
 	copy(unsafe.Slice((*int32)(unsafe.Pointer(e.pcm)), FrameLen*2), pcm)
 	n := C.ssc_encode(e.st, e.pcm, FrameLen, e.out, C.int(e.Bitrate))

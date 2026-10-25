@@ -2,6 +2,7 @@ package mtk
 
 import (
 	"fmt"
+	"sscv2/internal/i18n"
 	"strings"
 	"syscall"
 	"unsafe"
@@ -10,25 +11,25 @@ import (
 )
 
 var (
-	modWinUSB                   = windows.NewLazySystemDLL("winusb.dll")
-	procWinUsbInitialize        = modWinUSB.NewProc("WinUsb_Initialize")
-	procWinUsbFree              = modWinUSB.NewProc("WinUsb_Free")
-	procWinUsbControlTransfer   = modWinUSB.NewProc("WinUsb_ControlTransfer")
-	procWinUsbReadPipe          = modWinUSB.NewProc("WinUsb_ReadPipe")
-	procWinUsbQueryIfSettings   = modWinUSB.NewProc("WinUsb_QueryInterfaceSettings")
-	procWinUsbQueryPipe         = modWinUSB.NewProc("WinUsb_QueryPipe")
-	procWinUsbSetPipePolicy     = modWinUSB.NewProc("WinUsb_SetPipePolicy")
-	guidDevInterfaceUSBDevice   = windows.GUID{Data1: 0xA5DCBF10, Data2: 0x6530, Data3: 0x11D2, Data4: [8]byte{0x90, 0x1F, 0x00, 0xC0, 0x4F, 0xB9, 0x51, 0xED}}
-	errNotFound                 = fmt.Errorf("адаптер не найден в режиме WinUSB")
+	modWinUSB                 = windows.NewLazySystemDLL("winusb.dll")
+	procWinUsbInitialize      = modWinUSB.NewProc("WinUsb_Initialize")
+	procWinUsbFree            = modWinUSB.NewProc("WinUsb_Free")
+	procWinUsbControlTransfer = modWinUSB.NewProc("WinUsb_ControlTransfer")
+	procWinUsbReadPipe        = modWinUSB.NewProc("WinUsb_ReadPipe")
+	procWinUsbQueryIfSettings = modWinUSB.NewProc("WinUsb_QueryInterfaceSettings")
+	procWinUsbQueryPipe       = modWinUSB.NewProc("WinUsb_QueryPipe")
+	procWinUsbSetPipePolicy   = modWinUSB.NewProc("WinUsb_SetPipePolicy")
+	guidDevInterfaceUSBDevice = windows.GUID{Data1: 0xA5DCBF10, Data2: 0x6530, Data3: 0x11D2, Data4: [8]byte{0x90, 0x1F, 0x00, 0xC0, 0x4F, 0xB9, 0x51, 0xED}}
+	errNotFound               = i18n.Error("адаптер не найден в режиме WinUSB", "adapter not found in WinUSB mode")
 )
 
 const pipeTransferTimeout = 0x03
 
 type usbDev struct {
-	file   windows.Handle
-	usb    uintptr
-	evtEP  uint8
-	logf   func(string, ...any)
+	file  windows.Handle
+	usb   uintptr
+	evtEP uint8
+	logf  func(string, ...any)
 }
 
 // devicePath returns the whole-device interface path for vid:pid (never an
@@ -66,13 +67,13 @@ func openDev(vid, pid uint16, logf func(string, ...any)) (*usbDev, error) {
 		windows.FILE_SHARE_READ|windows.FILE_SHARE_WRITE, nil, windows.OPEN_EXISTING,
 		windows.FILE_ATTRIBUTE_NORMAL|windows.FILE_FLAG_OVERLAPPED, 0)
 	if err != nil {
-		return nil, fmt.Errorf("не удалось открыть адаптер (занят или не WinUSB): %w", err)
+		return nil, fmt.Errorf(i18n.T("не удалось открыть адаптер (занят или не WinUSB): %w", "could not open the adapter (busy or not WinUSB): %w"), err)
 	}
 	d.file = h
 	r, _, e := procWinUsbInitialize.Call(uintptr(h), uintptr(unsafe.Pointer(&d.usb)))
 	if r == 0 {
 		windows.CloseHandle(h)
-		return nil, fmt.Errorf("WinUsb_Initialize: %v (драйвер WinUSB установлен?)", e)
+		return nil, fmt.Errorf(i18n.T("WinUsb_Initialize: %v (драйвер WinUSB установлен?)", "WinUsb_Initialize: %v (is the WinUSB driver installed?)"), e)
 	}
 
 	// Locate the HCI event (interrupt IN) endpoint on interface 0.
@@ -80,12 +81,12 @@ func openDev(vid, pid uint16, logf func(string, ...any)) (*usbDev, error) {
 	if r, _, _ := procWinUsbQueryIfSettings.Call(d.usb, 0, uintptr(unsafe.Pointer(&ifd[0]))); r != 0 {
 		for i := 0; i < int(ifd[4]); i++ {
 			var pi struct {
-				PipeType   int32
-				PipeID     uint8
-				_          uint8
-				MaxPacket  uint16
-				Interval   uint8
-				_          [3]byte
+				PipeType  int32
+				PipeID    uint8
+				_         uint8
+				MaxPacket uint16
+				Interval  uint8
+				_         [3]byte
 			}
 			if r, _, _ := procWinUsbQueryPipe.Call(d.usb, 0, uintptr(i), uintptr(unsafe.Pointer(&pi))); r != 0 {
 				if pi.PipeType == 3 /* interrupt */ && pi.PipeID&0x80 != 0 {
