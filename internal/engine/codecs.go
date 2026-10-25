@@ -102,13 +102,12 @@ func (s *sscEnc) Encode(pcm []float32) ([]byte, error) {
 func (s *sscEnc) BitrateKbps() int { return s.e.Bitrate / 1000 }
 func (s *sscEnc) Close()           { s.e.Close() }
 
-// SSC bitrate like the phone (SscBitrateByBusyLevel, 24-bit 48 kHz): 192k,
-// 128k when the headphones lack the "no bitrate limit" bit (0x08). The phone
-// steps down to 128k/88k when the controller reports a busy link; we stay
-// at the top. 229/256/328k exist in the encoder but the phone does not use
-// them at 48 kHz.
+// SSC "Auto" (24-bit 48 kHz): the highest rate whose frame fits one packet
+// - 256k in the Buds' 667-byte payload, 328k with Max MTU (1005). Headphones
+// without the "no bitrate limit" bit (0x08) get 128k, as from the phone.
+// (The phone itself sends 192k at most: SscBitrateByBusyLevel.)
 const (
-	sscBitrateFull    = 192000
+	sscBitrateFull    = 328000
 	sscBitrateLimited = 128000
 )
 
@@ -143,11 +142,6 @@ func sscEncodeRate(captureRate int) int {
 
 // sscMaxMTU: Settings > Max MTU is on (1005-byte payload).
 var sscMaxMTU bool
-
-// sscBestBasic: "Auto" for 48 kHz SSC with Max MTU - the best-sounding
-// rate on Galaxy Buds2 Pro (256k/328k are the "wide" modes the phone never
-// sends at 48 kHz; they sound choked).
-const sscBestBasic = 229000
 
 // maxPayload: the media payload with Max MTU on / off (Galaxy Buds).
 func maxPayload(maxMTU bool) int {
@@ -196,9 +190,6 @@ func sscBitrate(sampleRate, mtu int, cfg uint8) (int, error) {
 	list := ssc.BasicBitrates
 	if sampleRate == 96000 {
 		list, top = ssc.UHQBitrates, ssc.UHQBitrates[len(ssc.UHQBitrates)-1]
-	}
-	if sscMaxMTU && sampleRate != 96000 && top == sscBitrateFull {
-		top = sscBestBasic
 	}
 	if sscForced > 0 {
 		top = sscForced

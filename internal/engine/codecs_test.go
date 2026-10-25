@@ -8,10 +8,10 @@ func TestSSCBitrate(t *testing.T) {
 		cfg  uint8
 		want int
 	}{
-		{667, 0x0C, 192000}, // Galaxy Buds: 484-byte frames
-		{1017, 0x0C, 192000},
+		{667, 0x0C, 256000}, // Galaxy Buds: 630-byte frames
+		{1005, 0x0C, 328000}, // Max MTU: 806-byte frames
 		{667, 0x04, 128000}, // sink without the "no bitrate limit" bit
-		{667, 0, 192000},
+		{667, 0, 256000},
 		{484, 0x0C, 192000},
 		{483, 0x0C, 128000},
 	} {
@@ -76,8 +76,8 @@ func TestSSCUHQ(t *testing.T) {
 func TestMaxMTUAuto(t *testing.T) {
 	defer func() { sscMaxMTU = false }()
 	sscMaxMTU = true
-	if got, _ := sscBitrate(48000, 1005, 0x0C); got != 229000 {
-		t.Errorf("max MTU auto: %d, want 229000", got)
+	if got, _ := sscBitrate(48000, 1005, 0x0C); got != 328000 {
+		t.Errorf("max MTU auto: %d, want 328000", got)
 	}
 	if got, _ := sscBitrate(48000, 1005, 0x04); got != 128000 {
 		t.Errorf("max MTU auto, limited sink: %d, want 128000", got)

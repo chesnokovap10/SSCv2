@@ -799,9 +799,9 @@ func autoHint(m config.Mode, maxMTU bool) string {
 		return T("250 кбит/с - сколько вмещает пакет", "250 kbps - as much as a packet holds")
 	case config.ModeSSC:
 		if maxMTU {
-			return T("229 кбит/с - лучший на Buds2 Pro", "229 kbps - the best on Buds2 Pro")
+			return T("328 кбит/с", "328 kbps")
 		}
-		return T("как телефон: 192 кбит/с", "like the phone: 192 kbps")
+		return T("256 кбит/с - сколько вмещает пакет", "256 kbps - as much as a packet holds")
 	case config.ModeSSCUHQ:
 		if maxMTU {
 			return T("886 кбит/с", "886 kbps")
