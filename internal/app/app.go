@@ -84,6 +84,9 @@ type App struct {
 	// (ctl "restore <mode>", for diagnostics; not persisted).
 	restoreMode   string
 	driverVariant string
+	// volSettled: closed when the level carried to the headphones in
+	// Windows was applied (exit waits for it)
+	volSettled chan struct{}
 	menuText      map[int]string
 }
 
@@ -429,8 +432,12 @@ func (a *App) disable() {
 		a.mu.Unlock()
 		logx.Dbgf("mode", "returning the adapter to Windows; volume restore for %q (mode %q)", name, nz(restore, "default"))
 		if restore != "off" {
+			settled := make(chan struct{})
+			a.mu.Lock()
+			a.volSettled = settled
+			a.mu.Unlock()
 			go func() {
-				if !audio.RestoreHeadphonesVolume(name, want, 40*time.Second, logf) {
+				if !audio.RestoreHeadphonesVolume(name, want, 40*time.Second, logf, settled) {
 					logf("volume: headphones %q did not come to Windows", name)
 				}
 			}()
@@ -1217,6 +1224,19 @@ func (a *App) exit(keepMode bool) {
 			a.s.Mode = mode
 			_ = config.Save(a.s)
 			a.mu.Unlock()
+		}
+	}
+	// The level carried to the headphones in Windows is applied once they
+	// held 3 s there: wait for it, or quitting would leave their old level.
+	a.mu.Lock()
+	settled := a.volSettled
+	a.mu.Unlock()
+	if settled != nil {
+		a.setBusy(T("перенос громкости в Windows", "carrying the volume to Windows"))
+		select {
+		case <-settled:
+		case <-time.After(8 * time.Second):
+			logf("exit: volume carry-over not finished in 8 s")
 		}
 	}
 	logf("tray exit (keep mode %v)", keepMode)

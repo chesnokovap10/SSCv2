@@ -412,7 +412,17 @@ func Muted(id string) (bool, error) {
 //   - once the endpoint has been present for 3 s, `want` (0..1; <0 = keep
 //     Windows' level) is applied once if it differs;
 //   - then 15 s more of the jump guard. Touches no other device.
-func RestoreHeadphonesVolume(name string, want float32, timeout time.Duration, logf func(string, ...any)) bool {
+//
+// settled (may be nil) is closed once the level was applied (or the wait
+// ended): the tray waits for it before quitting.
+func RestoreHeadphonesVolume(name string, want float32, timeout time.Duration, logf func(string, ...any), settled chan struct{}) bool {
+	var once sync.Once
+	done := func() {
+		if settled != nil {
+			once.Do(func() { close(settled) })
+		}
+	}
+	defer done()
 	if name == "" {
 		return false
 	}
@@ -476,6 +486,7 @@ func RestoreHeadphonesVolume(name string, want float32, timeout time.Duration, l
 				}
 				logf("volume: headphones settled in Windows (appeared %d time(s), 100%% jumps answered %d); level %.0f%% -> %.0f%%",
 					appears, jumps, cur*100, t*100)
+				done()
 			} else if err == nil && !settledAt.IsZero() && absf(cur-target()) > 0.015 && cur < 0.99 {
 				return true // the user changed it
 			}
