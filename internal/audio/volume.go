@@ -509,16 +509,3 @@ func nzs(a, b string) string {
 	}
 	return b
 }
-
-// HardwareSupport is IAudioEndpointVolume::QueryHardwareSupport (bit 0: the
-// driver applies the volume itself, 1: mute, 2: meter).
-func HardwareSupport(id string) (uint32, error) {
-	vol, err := endpointVolume(id)
-	if err != nil {
-		return 0, err
-	}
-	defer release(vol)
-	var m uint32
-	err = hr(vcall(vol, 18, uintptr(unsafe.Pointer(&m))))
-	return m, err
-}

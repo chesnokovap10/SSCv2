@@ -43,7 +43,6 @@ var (
 	iidIMMDeviceEnumerator    = guid("{A95664D2-9614-4F35-A746-DE8DB63617E6}")
 	iidIAudioClient           = guid("{1CB9AD4C-DBFA-4c32-B178-C2F568A703B2}")
 	iidIAudioCaptureClient    = guid("{C8ADBD64-E71E-48a0-A4DE-185C395CD317}")
-	iidIAudioRenderClient     = guid("{F294ACFC-3146-4483-A7BF-ADDCA7C260E2}")
 	iidIAudioEndpointVolume   = guid("{5CDF2C82-841E-4546-9722-0CF74078229A}")
 	iidIAudioEndpointVolumeCb = guid("{657804FA-D6AD-4496-8A60-352752AF4F89}")
 	iidIMMEndpoint            = guid("{1BE09788-6894-4089-8586-9A2A6C265AC5}")

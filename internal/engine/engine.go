@@ -517,15 +517,16 @@ func (e *engine) setupAudio() error {
 	}
 	captureID := ""
 	if audio.VirtualInstalled() {
-		if _, shown := audio.VirtualRender(); !shown {
+		_, shown := audio.VirtualRender()
+		_, shownC := audio.VirtualCapture()
+		if !shown || !shownC {
 			if err := audio.SetVirtualVisible(true); err != nil {
 				logf("virtual device: show: %v", err)
 			}
-		} else {
-			audio.HideVirtualCapture() // older versions showed it (microphone indicator)
 		}
 		r, okR := audio.VirtualRender()
-		if okR {
+		c, okC := audio.VirtualCapture()
+		if okR && okC {
 			prev, _ := audio.DefaultRender()
 			if prev.ID != r.ID {
 				err := audio.SetDefault(r.ID)
@@ -533,7 +534,7 @@ func (e *engine) setupAudio() error {
 			} else {
 				logf("default output: already %q", r.Name)
 			}
-			captureID = r.ID // loopback: not a microphone for Windows
+			captureID = c.ID
 			e.update(func(s *ipc.EngineStatus) {
 				s.Virtual = true
 				if prev.ID != r.ID {

@@ -65,20 +65,10 @@ func (f Format) String() string {
 type Callback func(samples []float32, frames int)
 
 // Capture is a WASAPI shared-mode capture: loopback on a render endpoint,
-// direct capture on a recording endpoint.
-//
-// Loopback delivers nothing while no app plays on the endpoint, so a silent
-// render stream is kept running on it (keep-alive): the capture then gets
-// continuous frames on the device clock, like a recording endpoint, and the
-// headphones a steady stream. Loopback is not "microphone in use" for
-// Windows (no mic indicator), unlike capturing the cable's recording side.
+// direct capture on a recording endpoint (e.g. the cable's "CABLE Output").
 type Capture struct {
 	client  uintptr
 	capture uintptr
-	// keep-alive render stream (loopback only)
-	rclient uintptr
-	render  uintptr
-	rframes uint32
 	Format  Format
 	Device  Endpoint
 	running atomic.Bool
@@ -138,9 +128,6 @@ func OpenCapture(id string) (*Capture, error) {
 		c.Close()
 		return nil, fmt.Errorf("IAudioCaptureClient: %w", err)
 	}
-	if loop != 0 {
-		c.openKeepAlive(dev, wfx)
-	}
 	if c.Format.Bits != 16 && c.Format.Bits != 32 {
 		c.Close()
 		return nil, fmt.Errorf(i18n.T("формат %s не поддерживается", "format %s is not supported"), c.Format)
@@ -148,51 +135,10 @@ func OpenCapture(id string) (*Capture, error) {
 	return c, nil
 }
 
-// openKeepAlive opens the silent render stream on the loopback endpoint (no
-// keep-alive on failure: capture then pauses while nothing plays).
-func (c *Capture) openKeepAlive(dev uintptr, wfx *waveFormatEx) {
-	const hns = 100 * 10000
-	if hr(vcall(dev, 3, uintptr(unsafe.Pointer(&iidIAudioClient)), clsctxAll, 0, uintptr(unsafe.Pointer(&c.rclient)))) != nil {
-		c.rclient = 0
-		return
-	}
-	if hr(vcall(c.rclient, 3, shareModeShared, 0, hns, 0, uintptr(unsafe.Pointer(wfx)), 0)) != nil ||
-		hr(vcall(c.rclient, 4, uintptr(unsafe.Pointer(&c.rframes)))) != nil ||
-		hr(vcall(c.rclient, 14, uintptr(unsafe.Pointer(&iidIAudioRenderClient)), uintptr(unsafe.Pointer(&c.render)))) != nil {
-		release(c.render)
-		release(c.rclient)
-		c.render, c.rclient = 0, 0
-	}
-}
-
-// feedSilence tops the keep-alive buffer up with silent frames.
-func (c *Capture) feedSilence() {
-	if c.render == 0 {
-		return
-	}
-	var pad uint32
-	if hr(vcall(c.rclient, 6, uintptr(unsafe.Pointer(&pad)))) != nil || pad >= c.rframes {
-		return
-	}
-	n := c.rframes - pad
-	var p uintptr
-	if hr(vcall(c.render, 3, uintptr(n), uintptr(unsafe.Pointer(&p)))) == nil {
-		vcall(c.render, 4, uintptr(n), bufferFlagsSilent)
-	}
-}
-
 // Start begins capturing on a dedicated, MMCSS-boosted OS thread.
 func (c *Capture) Start(cb Callback) error {
 	if c.client == 0 {
 		return errors.New("capture not open")
-	}
-	if c.render != 0 {
-		c.feedSilence()
-		if hr(vcall(c.rclient, 10)) != nil {
-			release(c.render)
-			release(c.rclient)
-			c.render, c.rclient = 0, 0
-		}
 	}
 	if err := hr(vcall(c.client, 10)); err != nil {
 		return fmt.Errorf("IAudioClient.Start: %w", err)
@@ -219,7 +165,6 @@ func (c *Capture) loop(cb Callback) {
 	ch := c.Format.Channels
 	for c.running.Load() {
 		time.Sleep(5 * time.Millisecond)
-		c.feedSilence()
 		var pkt uint32
 		if hr(vcall(c.capture, 5, uintptr(unsafe.Pointer(&pkt)))) != nil {
 			return
@@ -273,9 +218,6 @@ func (c *Capture) Stop() {
 	if c.client != 0 {
 		vcall(c.client, 11)
 	}
-	if c.rclient != 0 {
-		vcall(c.rclient, 11)
-	}
 }
 
 // Close releases COM objects.
@@ -285,11 +227,4 @@ func (c *Capture) Close() {
 	c.capture = 0
 	release(c.client)
 	c.client = 0
-	release(c.render)
-	c.render = 0
-	release(c.rclient)
-	c.rclient = 0
 }
-
-// KeepAlive reports whether the silent render stream runs (loopback).
-func (c *Capture) KeepAlive() bool { return c.render != 0 }

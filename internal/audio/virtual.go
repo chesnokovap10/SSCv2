@@ -73,37 +73,34 @@ func HeadphonesName() string {
 	return e.Desc
 }
 
-// SetVirtualVisible shows or hides the cable's render endpoint (the virtual
-// headphones). The recording side ("CABLE Output") always stays hidden: the
-// engine captures the render endpoint by loopback, and a visible recording
-// endpoint in use lights the microphone indicator. When showing it waits
-// until the endpoint is usable.
+// SetVirtualVisible shows or hides the cable's render + capture endpoints.
+// When showing it waits until they are usable.
 func SetVirtualVisible(visible bool) error {
 	r, ok := cableEndpoint(false, anyState)
 	if !ok {
 		return errNoDevice
 	}
-	HideVirtualCapture()
+	c, hasC := cableEndpoint(true, anyState)
 	if s, ok := cable16ch(anyState); ok && s.ID != r.ID {
 		_ = SetVisible(s.ID, false)
 	}
 	err := SetVisible(r.ID, visible)
+	if hasC {
+		if e := SetVisible(c.ID, visible); err == nil {
+			err = e
+		}
+	}
 	if visible {
 		for i := 0; i < 20; i++ {
-			if _, r1 := VirtualRender(); r1 {
+			_, r1 := VirtualRender()
+			_, c1 := VirtualCapture()
+			if r1 && (!hasC || c1) {
 				break
 			}
 			time.Sleep(100 * time.Millisecond)
 		}
 	}
 	return err
-}
-
-// HideVirtualCapture hides the cable's recording endpoint if it is shown.
-func HideVirtualCapture() {
-	if c, ok := cableEndpoint(true, StateActive); ok {
-		_ = SetVisible(c.ID, false)
-	}
 }
 
 // BrandVirtual renames the cable's render endpoint after the headphones.
