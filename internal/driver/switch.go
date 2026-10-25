@@ -267,6 +267,20 @@ func buildScript(enable bool, oldInfs []string, instanceID, infPath, catPath, si
 	w(`function Svc {
   try { [string](Get-PnpDeviceProperty -InstanceId $id -KeyName DEVPKEY_Device_Service -ErrorAction Stop).Data } catch { '' }
 }`)
+	// Present: the devnode exists now (it is gone between /remove-device and
+	// the next /scan-devices).
+	w(`function Present {
+  try { [bool](Get-PnpDevice -InstanceId $id -ErrorAction Stop).Present } catch { $false }
+}`)
+	// Reenumerate: drop the devnode and let PnP find the adapter again with
+	// the best driver; never leaves it removed.
+	w(`function Reenumerate {
+  if (Present) { Run 'pnputil.exe' @('/remove-device', $id, '/subtree') @(0, 3010) }
+  Run 'pnputil.exe' @('/scan-devices') @(0, 3010)
+  $t = (Get-Date).AddSeconds(20)
+  while (-not (Present) -and (Get-Date) -lt $t) { Start-Sleep -Milliseconds 250 }
+  Log ("adapter after re-enumeration: present " + (Present) + ", driver " + (Svc))
+}`)
 	w(`function Wait-Svc([string]$not, [int]$sec) {
   $t = (Get-Date).AddSeconds($sec)
   do { $v = Svc; if ($v -ne '' -and $v -ne $not) { return $v }; Start-Sleep -Milliseconds 250 } while ((Get-Date) -lt $t)
@@ -303,8 +317,8 @@ func buildScript(enable bool, oldInfs []string, instanceID, infPath, catPath, si
   Log "adapter driver after restore: $v"
   if ($v -eq 'WINUSB' -or $v -eq '') {
     Log 'in-place restore did not rebind - re-enumerating the adapter'
-    Run 'pnputil.exe' @('/enable-device', $id) @(0, 3010) 60
-    Run 'pnputil.exe' @('/remove-device', $id, '/subtree') @(0, 3010)
+    if (Present) { Run 'pnputil.exe' @('/enable-device', $id) @(0, 3010) 60 }
+    Reenumerate
   }`)
 	}
 	if enable {
@@ -326,7 +340,7 @@ func buildScript(enable bool, oldInfs []string, instanceID, infPath, catPath, si
     Log 'adapter could not be stopped (disable vetoed) - re-enumerating instead'
     Run 'pnputil.exe' @('/enable-device', $id) @(0, 3010) 60
     Run 'pnputil.exe' @('/add-driver', ` + psLit(infPath) + `) @(0, 3010)
-    Run 'pnputil.exe' @('/remove-device', $id, '/subtree') @(0, 3010)
+    Reenumerate
   } else {
     Run 'pnputil.exe' @('/add-driver', ` + psLit(infPath) + `, '/install') @(0, 3010, 259) 120
     Run 'pnputil.exe' @('/enable-device', $id) @(0, 3010) 60
@@ -335,8 +349,10 @@ func buildScript(enable bool, oldInfs []string, instanceID, infPath, catPath, si
   Log "adapter driver after install: $v"
   if ($v -ne 'WINUSB') {
     Log 'in-place install did not bind WinUSB - re-enumerating the adapter'
-    Run 'pnputil.exe' @('/enable-device', $id) @(0, 3010) 60
-    Run 'pnputil.exe' @('/remove-device', $id, '/subtree') @(0, 3010)
+    if (Present) { Run 'pnputil.exe' @('/enable-device', $id) @(0, 3010) 60 }
+    Reenumerate
+    $v = Wait-Svc 'usbccgp' 10
+    Log "adapter driver after re-enumeration: $v"
   }`)
 		} else {
 			w("  Run 'pnputil.exe' @('/add-driver', " + psLit(infPath) + ") @(0, 3010)")
@@ -362,6 +378,8 @@ func buildScript(enable bool, oldInfs []string, instanceID, infPath, catPath, si
 		w(`  try { if ((Get-PnpDevice -InstanceId $id).Problem -eq 'CM_PROB_DISABLED') { Run 'pnputil.exe' @('/enable-device', $id) @(0, 3010) 60 } } catch {}`)
 	}
 	w("} finally {")
+	// whatever failed: the adapter must not stay removed from the device tree
+	w("  try { if (-not (Present)) { Log 'adapter missing - rescanning'; Run 'pnputil.exe' @('/scan-devices') @(0, 3010) } } catch { Log (\"rescan ERROR: \" + $_.Exception.Message) }")
 	w("  try { Remove-Signer } catch { Log (\"cleanup ERROR: \" + $_.Exception.Message); $rc = 2 }")
 	if !enable {
 		w("  try { if ((Get-Service BthAvctpSvc).Status -ne 'Running') { Start-Avctp } } catch {}")
