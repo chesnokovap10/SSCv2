@@ -85,3 +85,38 @@ func TestMenuAACNoMaxMTU(t *testing.T) {
 	}
 	t.Fatal("no bitrate submenu")
 }
+
+func sscOffered(a *App) []int {
+	var out []int
+	for _, it := range a.menu() {
+		if it.Sub != nil && len(it.Sub) > 0 && it.Sub[0].ID == idBitrateBase {
+			for _, b := range it.Sub {
+				out = append(out, b.ID-idBitrateBase)
+			}
+		}
+	}
+	return out
+}
+
+func TestMenuWorkingBitrates(t *testing.T) {
+	t.Setenv("APPDATA", t.TempDir())
+	s := &config.Settings{Mode: config.ModeSSC, MaxMTU: true, SSCBitrate: 328,
+		Headphones: &config.Device{Addr: "00:11:22:33:44:56", Name: "Buds2 Pro JK08"}} // matched by name
+	a := &App{mode: config.ModeSSC, s: s}
+	if got := sscOffered(a); got[len(got)-1] != 229 {
+		t.Errorf("Buds2 Pro: %v, want up to 229", got)
+	}
+	if a.bitrateFor(config.ModeSSC) != 0 {
+		t.Error("saved 328 should fall back to Auto")
+	}
+	s.AllBitrates = true
+	if got := sscOffered(a); got[len(got)-1] != 328 {
+		t.Errorf("all bitrates: %v", got)
+	}
+	s.AllBitrates = false
+	// unknown to Windows (no Device ID), name of another model
+	s.Headphones = &config.Device{Addr: "00:11:22:33:44:55", Name: "Galaxy Buds3 FE"}
+	if got := sscOffered(a); got[len(got)-1] != 328 {
+		t.Errorf("no profile: %v, want every bitrate", got)
+	}
+}

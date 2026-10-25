@@ -91,6 +91,7 @@ func Run(in io.Reader, stdout *os.File) int {
 	sscForced = e.cfg.SSCBitrate * 1000
 	sscUHQMode = e.cfg.SSCUHQ
 	sscMaxMTU = e.cfg.MaxMTU
+	sscWorking = e.cfg.SSCMaxKbps * 1000
 	logf("engine start %s: codec=%s uhq=%v bitrate aac=%d ssc=%d maxmtu=%v headphones=%q mouse=%q adapter=%04X:%04X debug=%v lang=%s",
 		ipc.Version, e.cfg.Codec, e.cfg.SSCUHQ, e.cfg.AACBitrate, e.cfg.SSCBitrate, e.cfg.MaxMTU, e.cfg.Headphones, e.cfg.Mouse,
 		e.cfg.VID, e.cfg.PID, e.cfg.Debug, i18n.Lang())

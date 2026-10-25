@@ -17,7 +17,6 @@ import (
 
 	"sscv2/internal/codec/ssc"
 	"sscv2/internal/config"
-	"sscv2/internal/engine"
 	"sscv2/internal/helper"
 	"sscv2/internal/ipc"
 	"sscv2/internal/keys"
@@ -47,7 +46,7 @@ func tailFile(path string, n int) string {
 // so everything the menu does can be scripted ("ssc.exe ctl <cmd> [arg]").
 //
 //	status | info | log [debug|tray|engine|helper] [N] | debug on|off | lang ru|en
-//	mode off|aac|ssc|ssc_uhq | bitrate auto|<kbps> (current codec) | maxmtu on|off
+//	mode off|aac|ssc|ssc_uhq | bitrate auto|<kbps> (current codec) | maxmtu on|off | allbitrates on|off
 //	aac fit|frag|over | ssc auto|<kbps> | ssccap auto|<hex> | restore <mode> | variant <v>
 //	import windows | service install|remove | virtual install|remove
 //	scan | connect <addr> | headphones <addr> | mouse <addr|none>
@@ -172,6 +171,13 @@ func (a *App) ctl(args []string) string {
 		a.mu.Unlock()
 		go a.restartEngine()
 		return "ok: aac " + arg(1)
+	case "allbitrates":
+		switch arg(1) {
+		case "on", "off":
+			go a.setAllBitrates(arg(1) == "on")
+			return "ok: allbitrates " + arg(1)
+		}
+		return "error: allbitrates on|off"
 	case "maxmtu":
 		switch arg(1) {
 		case "on", "off":
@@ -200,10 +206,10 @@ func (a *App) ctl(args []string) string {
 				ok = ok || b == n && err == nil && n > 0
 			}
 			a.mu.Lock()
-			maxMTU := a.s.MaxMTU
+			fits := a.offered(m, n)
 			a.mu.Unlock()
-			if ok && !engine.BitrateFits(string(m), n, maxMTU) {
-				return fmt.Sprintf("error: %d kbps needs maxmtu on", n)
+			if ok && !fits {
+				return fmt.Sprintf("error: %d kbps needs maxmtu on or allbitrates on", n)
 			}
 			if !ok {
 				return fmt.Sprintf("error: bitrate auto|%v for %s", bitrates[m][1:], m)

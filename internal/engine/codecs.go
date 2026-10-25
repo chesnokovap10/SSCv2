@@ -34,12 +34,12 @@ func (a *aacEnc) Bandwidth() int   { return a.e.Bandwidth() }
 //     Android does;
 //   - "over" (Settings > Max MTU): 256 kbps in whole frames; the media
 //     channel is treated as overMTU bytes instead of the MTU the headphones
-//     announce. Galaxy Buds2 Pro announce 679 bytes (250 kbps) but play
+//     announce. Samsung Galaxy Buds2 Pro announce 679 bytes (250 kbps) but play
 //     frames of up to ~960 bytes cleanly (verified by ear). Not universal:
 //     other headphones may drop such packets - opt-in;
 //   - "frag": 256 kbps, frames larger than one packet are split over two RTP
 //     packets (RFC 3016, marker bit on the last fragment). Diagnostics only:
-//     Galaxy Buds2 Pro receive every packet (all acknowledged) but cannot
+//     Samsung Galaxy Buds2 Pro receive every packet (all acknowledged) but cannot
 //     decode split frames - the sound stutters badly.
 var aacMode = "fit"
 
@@ -140,6 +140,10 @@ func sscEncodeRate(captureRate int) int {
 	return captureRate
 }
 
+// sscWorking: highest SSC bitrate (bps) checked to work on these headphones
+// (profiles.go); "Auto" stays at or below it. 0 = not known.
+var sscWorking int
+
 // sscMaxMTU: Settings > Max MTU is on (1005-byte payload).
 var sscMaxMTU bool
 
@@ -190,6 +194,9 @@ func sscBitrate(sampleRate, mtu int, cfg uint8) (int, error) {
 	list := ssc.BasicBitrates
 	if sampleRate == 96000 {
 		list, top = ssc.UHQBitrates, ssc.UHQBitrates[len(ssc.UHQBitrates)-1]
+	}
+	if sscWorking > 0 && sampleRate != 96000 && top > sscWorking {
+		top = sscWorking
 	}
 	if sscForced > 0 {
 		top = sscForced

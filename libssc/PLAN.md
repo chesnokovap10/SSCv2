@@ -15,7 +15,7 @@ Our own Samsung Scalable Codec library for SSCv2: the encoder (done, bit-exact) 
 | 2 | libssc skeleton — an ABI twin of the blob | ✅ |
 | 3 | Bit-exactness stage by stage (3a–3g) | ✅ |
 | 4 | Full verification: long runs, extreme signals | ✅ |
-| 5 | Integration into SSCv2 (cgo), tested on Buds2 Pro | ✅ |
+| 5 | Integration into SSCv2 (cgo), tested on Samsung Galaxy Buds2 Pro | ✅ |
 | 6 | Decoder | ⏳ next |
 
 ## Decisions
@@ -23,7 +23,7 @@ Our own Samsung Scalable Codec library for SSCv2: the encoder (done, bit-exact) 
 | Question | Decision |
 |---|---|
 | Goal | Bit-exact output with `libScalable_Encoder.so` from the **current phone firmware** (clang 14, NDK r25) on all 14 bitrates. The older build (clang 8, from a third-party program) is no longer the reference and was removed in 3g |
-| Distribution | Private only, for our own hardware (Galaxy Buds2 Pro / Buds3 FE). No public release |
+| Distribution | Private only, for our own hardware (Samsung Galaxy Buds2 Pro / Buds3 FE). No public release |
 | Location | `libssc/` in SSCv2; in the app — cgo package `internal/codec/ssc`, entry `internal/engine/codecs.go` → `newSSC` |
 | Pace | One phase at a time; review after each, then the next |
 
@@ -109,11 +109,11 @@ In SSCv2: cgo package `internal/codec/ssc` (float → 24 bit, `FrameBytes`, one 
 process); `go test` checks the frames' sha256 against the blob on all 14 bitrates. The tray
 offers the SSC and SSC UHQ codecs and a bitrate choice.
 
-**On Buds2 Pro (cap 0x3C, configuration 0x0C):** 192k and 229k sound fine, 256k and 328k bad:
+**On Samsung Galaxy Buds2 Pro (cap 0x3C, configuration 0x0C):** 192k and 229k sound fine, 256k and 328k bad:
 these are the "wide" bitrates the phone never sends at 48 kHz, and our frames are bit-exact, so
 the headphones' decoder handles them poorly. The practical maximum is 229k.
 **Forced UHQ:** the 48 kHz capture upsampled 2× (half-band FIR, `engine/upsample.go`), the
-encoder at 96 kHz; Buds2 Pro accept configuration 0x0A, 584k runs without errors.
+encoder at 96 kHz; Samsung Galaxy Buds2 Pro accept configuration 0x0A, 584k runs without errors.
 
 ### 6 — Decoder (next)
 

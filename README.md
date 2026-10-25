@@ -33,7 +33,8 @@ and the shortcut are removed. The file the program was installed from stays.
 | Pair a device ▸ | Import keys from Windows, search nearby (codec on), choose headphones and mouse. |
 | Device info… | Adapter, chip/firmware, headphones (codec, bitrate, volume), mouse, service. Same text on a left click on the icon. |
 | **Settings ▸** Language | Русский / English (default: the Windows language). |
-| Settings ▸ Max MTU for Galaxy Buds2 Pro | Packets of up to 1017 bytes instead of the 679 the headphones announce: AAC 256 kbps in whole frames. Buds2 Pro play them cleanly; other headphones may drop them — hence an option. |
+| Settings ▸ Max MTU for Samsung Galaxy Buds2 Pro | Packets of up to 1017 bytes instead of the 679 the headphones announce: AAC 256 kbps in whole frames. Samsung Galaxy Buds2 Pro play them cleanly; other headphones may drop them — hence an option. |
+| Settings ▸ All bitrates | Also offer bitrates above the highest one checked to work on these headphones (see "Headphone profiles"). |
 | Settings ▸ Debug journal | Detailed shared journal of all processes (`debug.log`, see below). |
 | Settings ▸ Open the log folder | `%LOCALAPPDATA%\SSCv2\logs`. |
 | Settings ▸ Start / Remove the service | Helper service (LocalSystem): with it, switching and key import need no UAC prompts. |
@@ -46,14 +47,24 @@ green — streaming, red — error.
 
 | Codec | Bitrates, kbps | "Auto" |
 |---|---|---|
-| AAC | 128, 160, 192, 224, 256 | as much as the headphones' packet holds: `(MTU − 12) × 8 × rate / 1024`, at most 256 (Buds2 Pro: 250 at 48 kHz; 256 with "Max MTU") |
-| SSC | 88, 96, 128, 192, 229, 256, 328 | the highest one packet holds: 256, 328 with "Max MTU" (128 if the headphones announce a limit) |
+| AAC | 128, 160, 192, 224, 256 | as much as the headphones' packet holds: `(MTU − 12) × 8 × rate / 1024`, at most 256 (Samsung Galaxy Buds2 Pro: 250 at 48 kHz; 256 with "Max MTU") |
+| SSC | 88, 96, 128, 192, 229, 256, 328 | the headphones' highest working rate if known (Samsung Galaxy Buds2 Pro: 229), otherwise the highest one packet holds: 256, 328 with "Max MTU" (128 if the headphones announce a limit) |
 | SSC UHQ | 152, 250, 291, 308, 442, 584, 886 | the highest one packet holds (584; 886 with "Max MTU") |
 
 * SSC is our `libssc`, a bit-exact twin of the encoder in the phone firmware. Windows output
   must run at 48000 Hz. The phone sends at most 192 at 48 kHz; 256 and 328 are the encoder's
   "wide" modes.
-* SSC UHQ: the 48 kHz capture is upsampled 2× to 96 kHz, 9 ms frames. Buds2 Pro accept it
+
+### Headphone profiles
+
+`internal/engine/profiles.go` holds the highest bitrate checked by ear per model. The model is
+matched by its Bluetooth Device ID (vendor/product id, as Windows recorded it on pairing:
+`BTHPORT\Parameters\Devices\<mac>` `VID`/`PID`); by the Bluetooth name only when Windows does
+not know the device. Only **Samsung Galaxy Buds2 Pro** (SM-R510, Samsung `0x0075` / `0xA013`)
+are checked: SSC 229 kbps (256/328 sound
+choked). For them "Auto" is 229 and higher rates appear only with "Settings ▸ All bitrates".
+Headphones without a profile always see every bitrate.
+* SSC UHQ: the 48 kHz capture is upsampled 2× to 96 kHz, 9 ms frames. Samsung Galaxy Buds2 Pro accept it
   although they do not announce it.
 * Bitrates whose frames do not fit the headphones' packet (AAC 256, SSC 328, UHQ 886) are
   offered only with "Max MTU". The SSC configuration byte (`ctl ssccap`) is not saved — it lasts
@@ -165,7 +176,7 @@ ssc.exe ctl debug on|off | import windows | service install|remove | scan | conn
 ssc.exe ctl quit | uninstall
 ```
 
-Diagnostics: `ctl aac frag` (AAC 256 frames split over two RFC 3016 packets — Buds2 Pro do not
+Diagnostics: `ctl aac frag` (AAC 256 frames split over two RFC 3016 packets — Samsung Galaxy Buds2 Pro do not
 reassemble them), `ctl ssccap auto|<hex>` (SSC configuration byte), `SSCV2_SSC_SHIFT=1..8`
 (feed the SSC encoder extra headroom bits).
 

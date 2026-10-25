@@ -47,6 +47,7 @@ const (
 	idLangRU
 	idLangEN
 	idUninstall
+	idAllBitrates
 	idExit
 
 	idBitrateBase    = 500 // + kbps (0 = auto)
@@ -338,6 +339,9 @@ func (a *App) startEngineLocked() {
 		SSCCap:       a.s.SSCCap,
 	}
 	cfg.AACBitrate = a.bitrateFor(config.ModeAAC)
+	if a.mode == config.ModeSSC {
+		cfg.SSCMaxKbps, _ = a.workingMax(config.ModeSSC)
+	}
 	if a.mode != config.ModeAAC {
 		cfg.SSCBitrate = a.bitrateFor(a.mode)
 	}
@@ -571,6 +575,19 @@ func (a *App) setMaxMTU(on bool) {
 	a.restartEngine()
 }
 
+func (a *App) setAllBitrates(on bool) {
+	a.mu.Lock()
+	m := a.mode
+	before := a.bitrateFor(m)
+	a.s.AllBitrates = on
+	_ = config.Save(a.s)
+	after := a.bitrateFor(m)
+	a.mu.Unlock()
+	if before != after {
+		a.restartEngine() // the saved bitrate is (no longer) hidden
+	}
+}
+
 func (a *App) setLang(lang string) {
 	a.mu.Lock()
 	a.s.Lang = lang
@@ -790,7 +807,10 @@ func bitrateText(kbps int) string {
 }
 
 // autoHint explains what "Auto" means for a codec.
-func autoHint(m config.Mode, maxMTU bool) string {
+func autoHint(m config.Mode, maxMTU bool, limit int, model string) string {
+	if limit > 0 {
+		return fmt.Sprintf(T("%d кбит/с - макс. рабочий для %s", "%d kbps - the highest working on %s"), limit, model)
+	}
 	switch m {
 	case config.ModeAAC:
 		if maxMTU {
@@ -811,14 +831,45 @@ func autoHint(m config.Mode, maxMTU bool) string {
 	return ""
 }
 
-// bitrateFor is the saved bitrate of a codec if it can be streamed with
-// the current Max MTU setting, else 0 (auto).
-func (a *App) bitrateFor(m config.Mode) int {
-	b := a.s.Bitrate(m)
-	if !engine.BitrateFits(string(m), b, a.s.MaxMTU) {
-		return 0
+// workingMax: the highest bitrate checked to work for a codec on the chosen
+// headphones and their model (0, "" = not known). a.mu held.
+func (a *App) workingMax(m config.Mode) (int, string) {
+	name, id := "", engine.DevID{}
+	if h := a.s.Headphones; h != nil {
+		name = h.Name
+		if name == "" {
+			if store, err := keys.Open(); err == nil {
+				if c, ok := store.FindClassic(h.Addr); ok {
+					name = c.Name
+				}
+			}
+		}
+		// Device ID as Windows recorded it when the headphones were paired
+		if src, vid, pid, _, ok := keys.DeviceID(h.Addr); ok {
+			id = engine.DevID{Source: src, Vendor: vid, Product: pid}
+		}
 	}
-	return b
+	return engine.WorkingMax(string(m), id, name)
+}
+
+// offered: the bitrate can be chosen now - its frames fit the packet and
+// (unless "All bitrates") it is not above the headphones' working maximum.
+// a.mu held.
+func (a *App) offered(m config.Mode, kbps int) bool {
+	if !engine.BitrateFits(string(m), kbps, a.s.MaxMTU) {
+		return false
+	}
+	lim, _ := a.workingMax(m)
+	return a.s.AllBitrates || lim == 0 || kbps <= lim
+}
+
+// bitrateFor is the saved bitrate of a codec if it is offered now, else 0
+// (auto). a.mu held.
+func (a *App) bitrateFor(m config.Mode) int {
+	if b := a.s.Bitrate(m); a.offered(m, b) {
+		return b
+	}
+	return 0
 }
 
 func (a *App) menu() []tray.Item {
@@ -853,13 +904,16 @@ func (a *App) menu() []tray.Item {
 			label += fmt.Sprintf(" (%d)", a.st.BitrateKbps)
 		}
 		var sub []tray.Item
+		lim, model := a.workingMax(mode)
 		for _, b := range bitrates[mode] {
-			if !engine.BitrateFits(string(mode), b, a.s.MaxMTU) {
-				continue // needs Max MTU
+			if !a.offered(mode, b) {
+				continue // needs Max MTU / above the working maximum
 			}
 			t := bitrateText(b)
 			if b == 0 {
-				t += " (" + autoHint(mode, a.s.MaxMTU) + ")"
+				t += " (" + autoHint(mode, a.s.MaxMTU, lim, model) + ")"
+			} else if lim > 0 && b > lim {
+				t += T(" - не проверен", " - not checked")
 			}
 			sub = append(sub, tray.Item{Text: t, ID: idBitrateBase + b, Radio: true, Checked: b == cur, Disabled: busy})
 		}
@@ -919,7 +973,8 @@ func (a *App) menu() []tray.Item {
 			{Text: "Русский", ID: idLangRU, Radio: true, Checked: lang == i18n.RU},
 			{Text: "English", ID: idLangEN, Radio: true, Checked: lang == i18n.EN},
 		}},
-		{Text: T("Макс. MTU для Galaxy Buds2 Pro (1017 байт)", "Max MTU for Galaxy Buds2 Pro (1017 bytes)"), ID: idMaxMTU, Checked: a.s.MaxMTU, Disabled: busy},
+		{Text: T("Макс. MTU для Samsung Galaxy Buds2 Pro (1017 байт)", "Max MTU for Samsung Galaxy Buds2 Pro (1017 bytes)"), ID: idMaxMTU, Checked: a.s.MaxMTU, Disabled: busy},
+		{Text: T("Все битрейты (не только проверенные на этих наушниках)", "All bitrates (not only those checked on these headphones)"), ID: idAllBitrates, Checked: a.s.AllBitrates, Disabled: busy},
 		{Text: T("Отладочный журнал (debug.log)", "Debug journal (debug.log)"), ID: idDebug, Checked: a.s.Debug},
 		{Text: T("Открыть папку журналов", "Open the log folder"), ID: idOpenLogs},
 		{Separator: true},
@@ -1085,6 +1140,11 @@ func (a *App) command(id int) {
 		on := !a.s.Debug
 		a.mu.Unlock()
 		go a.setDebug(on)
+	case id == idAllBitrates:
+		a.mu.Lock()
+		on := !a.s.AllBitrates
+		a.mu.Unlock()
+		go a.setAllBitrates(on)
 	case id == idUninstall:
 		go a.uninstall(false)
 	case id == idExit:
@@ -1135,7 +1195,10 @@ func (a *App) infoText() string {
 	if mode == config.ModeOff {
 		w(T("Кодек: выкл (Bluetooth Windows)", "Codec: off (Windows Bluetooth)"))
 	} else {
-		w(T("Кодек: %s, битрейт %s", "Codec: %s, bitrate %s"), modeName(mode), bitrateText(a.bitrateFor(mode)))
+		a.mu.Lock()
+		br := a.bitrateFor(mode)
+		a.mu.Unlock()
+		w(T("Кодек: %s, битрейт %s", "Codec: %s, bitrate %s"), modeName(mode), bitrateText(br))
 	}
 	w("")
 	if st.Mode == driver.NotPresent {

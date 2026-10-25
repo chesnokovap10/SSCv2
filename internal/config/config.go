@@ -72,9 +72,13 @@ type Settings struct {
 	// Lang: "ru" | "en"; "" = the Windows UI language.
 	Lang string `json:"lang,omitempty"`
 	// MaxMTU: media packets of up to 1017 bytes instead of the 679 the
-	// Galaxy Buds2 Pro announce (they play them cleanly; other headphones
+	// Samsung Galaxy Buds2 Pro announce (they play them cleanly; other headphones
 	// may not): AAC 256 kbps, larger SSC frames.
 	MaxMTU bool `json:"maxMTU,omitempty"`
+	// AllBitrates: offer every bitrate, also those above the highest one
+	// checked to work on these headphones (engine profiles; Samsung Galaxy Buds2 Pro: SSC
+	// 229k). Headphones without a profile always get every bitrate.
+	AllBitrates bool `json:"allBitrates,omitempty"`
 	// AACMode: "" / "fit" (every frame fits one packet) or "frag"
 	// (diagnostics: frames split over two packets). The old "over" is
 	// MaxMTU now.

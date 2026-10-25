@@ -23,11 +23,12 @@ type EngineConfig struct {
 	Verbose      bool   `json:"verbose,omitempty"`
 	Debug        bool   `json:"debug,omitempty"`
 	Lang         string `json:"lang,omitempty"`       // "ru" | "en"
-	MaxMTU       bool   `json:"maxMTU,omitempty"`     // 1017-byte media packets (Buds2 Pro)
+	MaxMTU       bool   `json:"maxMTU,omitempty"`     // 1017-byte media packets (Samsung Galaxy Buds2 Pro)
 	AACMode      string `json:"aacMode,omitempty"`    // "fit" | "frag"
 	AACBitrate   int    `json:"aacBitrate,omitempty"` // kbps, 0 = as high as a packet allows
 	SSCBitrate   int    `json:"sscBitrate,omitempty"` // kbps, 0 = like the phone / UHQ: highest that fits
 	SSCUHQ       bool   `json:"sscUhq,omitempty"`     // SSC UHQ (96 kHz)
+	SSCMaxKbps   int    `json:"sscMaxKbps,omitempty"` // highest working SSC kbps on these headphones (Auto), 0 = not known
 	SSCCap       int    `json:"sscCap,omitempty"`     // SSC config byte, 0 = like the phone
 }
 

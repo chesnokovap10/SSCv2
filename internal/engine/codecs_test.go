@@ -103,3 +103,24 @@ func TestBitrateFits(t *testing.T) {
 		}
 	}
 }
+
+func TestWorkingMax(t *testing.T) {
+	b2p := DevID{1, 0x0075, 0xA013}
+	if k, m := WorkingMax("ssc", b2p, "renamed"); k != 229 || m != "Samsung Galaxy Buds2 Pro" {
+		t.Errorf("Buds2 Pro by id: %d %q", k, m)
+	}
+	if k, _ := WorkingMax("ssc", DevID{}, "Buds2 Pro JK08"); k != 229 {
+		t.Errorf("Buds2 Pro by name (no id): %d", k)
+	}
+	if k, _ := WorkingMax("ssc", DevID{1, 0x0075, 0xA0FF}, "Buds2 Pro JK08"); k != 0 {
+		t.Errorf("another Samsung product id named like Buds2 Pro: %d", k)
+	}
+	if k, _ := WorkingMax("aac", b2p, ""); k != 0 {
+		t.Errorf("AAC not profiled: %d", k)
+	}
+	defer func() { sscWorking, sscMaxMTU = 0, false }()
+	sscWorking, sscMaxMTU = 229000, true
+	if got, _ := sscBitrate(48000, 1005, 0x0C); got != 229000 {
+		t.Errorf("Auto on Buds2 Pro: %d, want 229000", got)
+	}
+}

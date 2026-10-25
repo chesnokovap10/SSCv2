@@ -170,3 +170,20 @@ func WriteWindowsClassic(adapter, device, keyHex string) error {
 	defer k.Close()
 	return k.SetBinaryValue(addrToMac(device), b)
 }
+
+// DeviceID is the Bluetooth Device ID (DI profile) Windows recorded for a
+// paired device: vendor id source (1 = Bluetooth SIG, 2 = USB-IF), vendor,
+// product, version. ok = false when Windows does not know the device.
+func DeviceID(addr string) (source, vendor, product, version uint16, ok bool) {
+	k, err := registry.OpenKey(registry.LOCAL_MACHINE, bthDevicesPath+`\`+addrToMac(addr), registry.QUERY_VALUE)
+	if err != nil {
+		return 0, 0, 0, 0, false
+	}
+	defer k.Close()
+	get := func(n string) uint16 {
+		v, _, _ := k.GetIntegerValue(n)
+		return uint16(v)
+	}
+	source, vendor, product, version = get("VIDType"), get("VID"), get("PID"), get("Version")
+	return source, vendor, product, version, vendor != 0
+}
