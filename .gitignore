@@ -7,3 +7,4 @@ libssc/build/
 libssc/research/decomp/_all.c
 libssc/ref/firm/
 libssc/research/decomp_bt/_callees.c
+.claude/settings.local.json
