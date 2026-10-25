@@ -88,6 +88,8 @@ type App struct {
 	// volSettled: closed when the level carried to the headphones in
 	// Windows was applied (exit waits for it)
 	volSettled chan struct{}
+	// carry: audio routing left by an engine stopped for a restart
+	carry *ipc.AudioCarry
 	menuText      map[int]string
 }
 
@@ -169,6 +171,12 @@ func (a *App) startup() {
 	}
 	st := a.refreshAdapter()
 	_, svcRunning := helper.ServiceState()
+	if svcRunning {
+		// stale virtual-cable endpoints of earlier installs (no UAC via the service)
+		if resp, err := helper.Call(ipc.Request{Op: "virtual-cleanup"}); err == nil {
+			logf("virtual-cleanup: %s", resp.Message)
+		}
+	}
 	a.mu.Lock()
 	want := a.s.Mode
 	a.mu.Unlock()
@@ -294,15 +302,15 @@ func (a *App) enable(m config.Mode) {
 	if cur == m && eng != nil && eng.running() {
 		return
 	}
-	if eng != nil {
-		a.setBusy(T("остановка потока", "stopping the stream"))
-		eng.stop(15 * time.Second)
-		a.mu.Lock()
-		a.eng = nil
-		a.mu.Unlock()
-	}
 	a.mu.Lock()
 	blocked := a.noBitrate(m)
+	a.mu.Unlock()
+	if eng != nil {
+		a.setBusy(T("остановка потока", "stopping the stream"))
+		a.stopForRestart(eng, !blocked)
+	}
+	a.mu.Lock()
+	blocked = a.noBitrate(m)
 	a.mu.Unlock()
 	if blocked {
 		// codec chosen, but not supported by these headphones: no stream
@@ -363,7 +371,9 @@ func (a *App) startEngineLocked() {
 		AACBitrate:   a.s.AACBitrate,
 		SSCUHQ:       a.mode == config.ModeSSCUHQ,
 		SSCCap:       a.s.SSCCap,
+		Carry:        a.carry,
 	}
+	a.carry = nil
 	cfg.AACBitrate = a.bitrateFor(config.ModeAAC)
 	if a.mode == config.ModeSSC {
 		cfg.SSCMaxKbps, _ = a.workingMax(config.ModeSSC)
@@ -414,8 +424,11 @@ func (a *App) disable() {
 	a.mu.Unlock()
 	if eng != nil {
 		a.setBusy(T("остановка потока", "stopping the stream"))
-		eng.stop(15 * time.Second)
+		eng.stop(15*time.Second, false)
 	}
+	a.mu.Lock()
+	a.carry = nil
+	a.mu.Unlock()
 	a.setMode(config.ModeOff)
 	st := a.refreshAdapter()
 	if st.Mode == driver.WinUSB {
@@ -561,6 +574,31 @@ func nz(a, b string) string {
 	return b
 }
 
+// stopForRestart stops the engine; keep: another engine starts right away,
+// so the audio routing (virtual device as default output, speaker mute)
+// stays and is handed over (no flip to the speakers and back).
+func (a *App) stopForRestart(eng *engineProc, keep bool) {
+	a.mu.Lock()
+	st := a.st
+	a.mu.Unlock()
+	eng.stop(15*time.Second, keep)
+	a.mu.Lock()
+	if a.eng == eng {
+		a.eng = nil
+	}
+	a.carry = nil
+	if keep && (st.Virtual || st.Muted || st.PrevDefault != "") {
+		a.carry = &ipc.AudioCarry{PrevDefault: st.PrevDefault, Muted: st.Muted, Virtual: st.Virtual}
+	}
+	a.mu.Unlock()
+	if !keep {
+		return
+	}
+	if a.carry == nil {
+		logx.Dbgf("mode", "restart: nothing to hand over")
+	}
+}
+
 // restartEngine applies new settings / keys / mouse choice to a running engine.
 func (a *App) restartEngine() {
 	a.opMu.Lock()
@@ -572,10 +610,10 @@ func (a *App) restartEngine() {
 		return
 	}
 	a.setBusy(T("перезапуск потока", "restarting the stream"))
-	eng.stop(15 * time.Second)
 	a.mu.Lock()
-	a.eng = nil
+	keep := !a.noBitrate(a.mode)
 	a.mu.Unlock()
+	a.stopForRestart(eng, keep)
 	a.startEngineLocked()
 	a.setBusy("")
 }

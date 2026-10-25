@@ -49,6 +49,8 @@ type engine struct {
 	vsp      atomic.Pointer[audio.VolumeSync]
 	srate    int
 	unmuteAt atomic.Int64 // unix ms when the pipeline may play again
+	keep     atomic.Bool  // stopped for a restart: leave the audio routing
+	carried  bool         // the routing came from the previous engine (not set up here yet)
 }
 
 func logf(f string, a ...any) { logx.Printf(f, a...) }
@@ -96,6 +98,12 @@ func Run(in io.Reader, stdout *os.File) int {
 		ipc.Version, e.cfg.Codec, e.cfg.SSCUHQ, e.cfg.AACBitrate, e.cfg.SSCBitrate, e.cfg.MaxMTU, e.cfg.Headphones, e.cfg.Mouse,
 		e.cfg.VID, e.cfg.PID, e.cfg.Debug, i18n.Lang())
 	e.target = e.cfg.Headphones
+	if c := e.cfg.Carry; c != nil {
+		// the previous engine left the routing in place: own it from now on
+		e.st.PrevDefault, e.st.Muted, e.st.Virtual = c.PrevDefault, c.Muted, c.Virtual
+		e.carried = true
+		logf("audio: routing handed over (virtual %v, muted %v, give back %q)", c.Virtual, c.Muted, c.PrevDefault)
+	}
 	e.ctx, e.cancel = context.WithCancel(context.Background())
 	go e.commands(r)
 
@@ -126,6 +134,7 @@ func (e *engine) commands(r *ipc.Reader) {
 		case "lang":
 			i18n.Set(c.Lang)
 		case "stop":
+			e.keep.Store(c.Keep)
 			e.cancel()
 		case "scan":
 			go e.scan()
@@ -241,6 +250,9 @@ func (e *engine) run() error {
 		}
 
 		if time.Now().After(activeUntil) {
+			if e.carried {
+				e.releaseAudio() // the headphones did not come: sound back to the speakers
+			}
 			// passive: wait until the headphones connect to us
 			e.update(func(s *ipc.EngineStatus) {
 				s.Phase, s.Message = "waiting", i18n.T("ожидание наушников (подключатся, когда их достанут из кейса)", "waiting for the headphones (they connect when taken out of the case)")
@@ -505,24 +517,33 @@ func (e *engine) setupAudio() error {
 	}
 	captureID := ""
 	if audio.VirtualInstalled() {
-		if err := audio.SetVirtualVisible(true); err != nil {
-			logf("virtual device: show: %v", err)
+		_, shown := audio.VirtualRender()
+		_, shownC := audio.VirtualCapture()
+		if !shown || !shownC {
+			if err := audio.SetVirtualVisible(true); err != nil {
+				logf("virtual device: show: %v", err)
+			}
 		}
 		r, okR := audio.VirtualRender()
 		c, okC := audio.VirtualCapture()
 		if okR && okC {
 			prev, _ := audio.DefaultRender()
-			err := audio.SetDefault(r.ID)
-			logf("default output: %q -> %q: %v", prev.Name, r.Name, err)
+			if prev.ID != r.ID {
+				err := audio.SetDefault(r.ID)
+				logf("default output: %q -> %q: %v", prev.Name, r.Name, err)
+			} else {
+				logf("default output: already %q", r.Name)
+			}
 			captureID = c.ID
 			e.update(func(s *ipc.EngineStatus) {
 				s.Virtual = true
 				if prev.ID != r.ID {
 					s.PrevDefault = prev.ID
-				}
+				} // else: kept from the previous engine (carry)
 			})
 		}
 	}
+	e.carried = false
 	cp, err := audio.OpenCapture(captureID)
 	if err != nil && captureID != "" {
 		logf("virtual capture failed (%v), falling back to loopback", err)
@@ -539,9 +560,11 @@ func (e *engine) setupAudio() error {
 	e.cap = cp
 	e.srate = cp.Format.SampleRate
 	logf("capture: %s [%s]", cp.Device.Name, cp.Format)
-	muted := false
+	e.mu.Lock()
+	muted := e.st.Muted
+	e.mu.Unlock()
 	if captureID == "" && e.cfg.MuteSpeakers {
-		muted = audio.SetMute("", true) == nil
+		muted = audio.SetMute("", true) == nil || muted
 	}
 	e.update(func(s *ipc.EngineStatus) {
 		s.CaptureDevice = cp.Device.Name
@@ -706,7 +729,22 @@ func (e *engine) onLinkLost() {
 // releaseAudio stops capture and volume sync and undoes the output changes
 // (default device, speaker mute, virtual device visibility). setupAudio
 // redoes them on the next connection.
+// stopAudio stops capture and volume sync only.
+func (e *engine) stopAudio() {
+	e.pipe.set(nil, 0)
+	if v := e.vs(); v != nil {
+		v.Stop()
+		e.vsp.Store(nil)
+	}
+	if e.cap != nil {
+		e.cap.Close()
+		e.cap = nil
+	}
+	logf("audio: routing left for the next engine")
+}
+
 func (e *engine) releaseAudio() {
+	e.carried = false
 	e.pipe.set(nil, 0)
 	e.pipe.userMuted.Store(false)
 	if v := e.vs(); v != nil {
@@ -729,7 +767,11 @@ func (e *engine) releaseAudio() {
 
 // teardown restores the audio setup and releases the adapter.
 func (e *engine) teardown() {
-	e.releaseAudio()
+	if e.keep.Load() {
+		e.stopAudio() // routing stays for the next engine
+	} else {
+		e.releaseAudio()
+	}
 	bt.Disconnect()
 	bt.Shutdown()
 	logf("engine stopped")

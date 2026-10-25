@@ -88,6 +88,8 @@ func Handle(req ipc.Request) (resp ipc.Response) {
 			return fail(err)
 		}
 		resp.OK, resp.Message = true, msg
+	case "virtual-cleanup":
+		resp.OK, resp.Message = true, fmt.Sprintf("stale endpoints removed: %d", cleanupEndpoints(false))
 	case "virtual-uninstall":
 		msg, err := uninstallVirtual()
 		if err != nil {
@@ -134,6 +136,63 @@ func verifySignature(path string) error {
 	data.StateAction = windows.WTD_STATEACTION_CLOSE
 	windows.WinVerifyTrustEx(windows.InvalidHWND, &windows.WINTRUST_ACTION_GENERIC_VERIFY_V2, data)
 	return err
+}
+
+var guidAudioEndpoint = windows.GUID{Data1: 0xc166523c, Data2: 0xfe0c, Data3: 0x4a94,
+	Data4: [8]byte{0xa5, 0x86, 0xf1, 0xa8, 0x0c, 0xfb, 0xbf, 0x3e}}
+
+// cleanupEndpoints removes audio endpoint devnodes of the cable that the
+// audio system no longer uses (left by earlier installs; Windows keeps them as
+// "not present"). The cable's endpoints in use - active or hidden (disabled)
+// - are kept; all = remove every cable endpoint (uninstall).
+func cleanupEndpoints(all bool) int {
+	keep := map[string]bool{}
+	if !all {
+		if err := audio.InitCOM(); err != nil {
+			return 0
+		}
+		for _, capture := range []bool{false, true} {
+			for _, e := range audio.List(capture, audio.StateActive|audio.StateDisabled) {
+				if audio.IsVirtual(e) {
+					keep[strings.ToUpper(e.ID)] = true
+				}
+			}
+		}
+		if len(keep) == 0 {
+			return 0 // the cable is not seen at all: touch nothing
+		}
+	}
+	set, err := windows.SetupDiGetClassDevsEx(&guidAudioEndpoint, "", 0, 0, 0, "")
+	if err != nil {
+		return 0
+	}
+	defer set.Close()
+	n := 0
+	for i := 0; ; i++ {
+		d, err := set.EnumDeviceInfo(i)
+		if err != nil {
+			break
+		}
+		id, err := set.DeviceInstanceID(d)
+		if err != nil {
+			continue
+		}
+		// SWD\MMDEVAPI\{0.0.0.00000000}.{guid}: the part after the prefix is the endpoint id
+		ep := strings.ToUpper(id)
+		if k := strings.LastIndex(ep, "\\"); k >= 0 {
+			ep = ep[k+1:]
+		}
+		v, err := set.DeviceRegistryProperty(d, windows.SPDRP_FRIENDLYNAME)
+		name, _ := v.(string)
+		if err != nil || !strings.Contains(name, audio.CableAdapter) || keep[ep] {
+			continue
+		}
+		if set.CallClassInstaller(windows.DIF_REMOVE, d) == nil {
+			n++
+			logx.Printf("helper: removed stale endpoint %q %s", name, id)
+		}
+	}
+	return n
 }
 
 // cableNodes calls fn for every devnode carrying the cable hardware id.
@@ -233,6 +292,7 @@ func installVirtual(name string) (string, error) {
 	if reboot != 0 {
 		msg += i18n.T(" (нужна перезагрузка)", " (restart needed)")
 	}
+	cleanupEndpoints(false)
 	return msg, nil
 }
 
@@ -261,5 +321,6 @@ func uninstallVirtual() (string, error) {
 			pk++
 		}
 	}
+	cleanupEndpoints(true)
 	return fmt.Sprintf(i18n.T("удалено устройств: %d, пакетов драйвера: %d", "removed devices: %d, driver packages: %d"), removed, pk), nil
 }

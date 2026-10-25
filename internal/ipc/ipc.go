@@ -30,6 +30,16 @@ type EngineConfig struct {
 	SSCUHQ       bool   `json:"sscUhq,omitempty"`     // SSC UHQ (96 kHz)
 	SSCMaxKbps   int    `json:"sscMaxKbps,omitempty"` // highest working SSC kbps on these headphones (Auto), 0 = not known
 	SSCCap       int    `json:"sscCap,omitempty"`     // SSC config byte, 0 = like the phone
+	// Carry: the audio routing a previous engine left in place (it was
+	// stopped for a restart with Keep): this engine owns and undoes it.
+	Carry *AudioCarry `json:"carry,omitempty"`
+}
+
+// AudioCarry is what an engine changed in the Windows audio setup.
+type AudioCarry struct {
+	PrevDefault string `json:"prevDefault,omitempty"` // output to give back at "off"
+	Muted       bool   `json:"muted,omitempty"`       // speakers muted by us (loopback)
+	Virtual     bool   `json:"virtual,omitempty"`     // virtual headphones shown and default
 }
 
 // Command from tray to engine.
@@ -37,6 +47,7 @@ type Command struct {
 	Cmd  string `json:"cmd"` // "stop" | "scan" | "connect" | "debug" | "lang"
 	Addr string `json:"addr,omitempty"`
 	On   bool   `json:"on,omitempty"`
+	Keep bool   `json:"keep,omitempty"` // stop: leave the audio routing for the next engine
 	Lang string `json:"lang,omitempty"`
 }
 
