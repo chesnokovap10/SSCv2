@@ -2,9 +2,11 @@
 
 [English](README.md) · **Русский**
 
-Своя реализация энкодера Samsung Scalable Codec (SSC), **бит-точная** относительно
+Своя реализация Samsung Scalable Codec (SSC): энкодер **бит-точный** относительно
 `libScalable_Encoder.so` из текущей прошивки телефона (clang 14, NDK r25). C99, fixed-point,
 на основе CELT из Opus 1.1.5. В SSCv2 подключается через cgo-пакет `internal/codec/ssc`.
+Декодер (фаза 6) читает те же кадры точно и синтезирует звук во float — чтобы слушать и
+сравнивать битрейты на ПК.
 Только для личного использования. План и итоги фаз: [PLAN.ru.md](PLAN.ru.md).
 
 ## Что внутри
@@ -12,6 +14,7 @@
 | Путь | Что |
 |---|---|
 | `src/` | **сама библиотека**: `ssc_*.c` — наш код, `src/opus/` — Opus 1.1.5 + патчи (`PATCHES.md`, лицензия `COPYING`) |
+| `src/ssc_decoder.{h,c}` | декодер (фаза 6): точный разбор кадра, синтез во float; только для стенда |
 | `src/ssc_names.h` | имена блоба (`ssc_quant_all_bands`, `ssc_ec_encode`, …) для всех файлов (`-include` в `build.py`, `#include` в обёртках cgo) |
 | `ref/libScalable_Encoder.so` | блоб Samsung из прошивки (aarch64), только для сверки |
 | `ref/libbluetooth_jni.so` | Bluetooth-стек телефона (`com.android.bt.apex`): как телефон вызывает энкодер, выбирает битрейт и пакует кадры |
@@ -49,6 +52,8 @@ py -3.14 libssc\test\replay.py    # функции libssc на реальных 
 py -3.14 libssc\test\stages.py    # покадровые контрольные точки по цепочке
 # replay.py и stages.py: --rates all — все 14 битрейтов вместо 6 профилей
 
+py -3.14 libssc\test\decode.py    # декодер: синхронность с энкодером, SNR; --golden, --wav song.wav
+
 go test ./internal/codec/ssc      # cgo-сборка против хэшей блоба (testdata/oracle.txt)
 py -3.14 libssc\test\cgo_ref.py   # переснять эти хэши
 ```
@@ -61,6 +66,7 @@ py -3.14 libssc\test\cgo_ref.py   # переснять эти хэши
 | `test/corpus.py` | кадры целиком на всех битрейтах и сигналах `test/signals.py` |
 | `test/edge.py` | длинные прогоны, неизвестные и меняющиеся битрейты, крайние сигналы, 16 бит, 44,1 кГц |
 | `test/cgo_ref.py` | хэши кадров блоба для Go-теста |
+| `test/decode.py` | декодер: энергии против энкодера на каждом кадре, SNR, кадры блоба (`--golden`), WAV для прослушивания (`--wav`) |
 
 После добавления файлов в `src/` перегенерировать обёртки: `go run ./tools/genwrap`.
 

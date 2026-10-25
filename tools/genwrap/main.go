@@ -74,7 +74,9 @@ void ssc_l2cap_set_remote_mtu(uint16_t local_cid, uint16_t mtu) {
 		pkgDir: "internal/codec/ssc", prefix: "zssc_", root: "libssc/src", ext: ".c",
 		files:   []string{"*.c", "opus/*.c"},
 		prelude: "#include \"ssc_names.h\"\n",
-		skip:    map[string]bool{"opus/pitch.c": true, "opus/celt_lpc.c": true}, // included by ssc_*.c
+		// pitch.c / celt_lpc.c: included by ssc_*.c; the decoder is for the test
+		// bench only (libssc/test/decode.py), the app only encodes
+		skip: map[string]bool{"opus/pitch.c": true, "opus/celt_lpc.c": true, "ssc_decoder.c": true},
 	},
 }
 

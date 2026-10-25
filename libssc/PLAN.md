@@ -2,8 +2,8 @@
 
 **English** · [Русский](PLAN.ru.md)
 
-Our own Samsung Scalable Codec library for SSCv2: the encoder (done, bit-exact) and a decoder
-(ahead). Started 2026-10-24. The detailed step-by-step journal is in git history
+Our own Samsung Scalable Codec library for SSCv2: the encoder (bit-exact) and a decoder
+(exact parse, float synthesis). Started 2026-10-24. The detailed step-by-step journal is in git history
 (`libssc/PLAN.md` before 2026-10-25).
 
 ## Status
@@ -16,7 +16,7 @@ Our own Samsung Scalable Codec library for SSCv2: the encoder (done, bit-exact) 
 | 3 | Bit-exactness stage by stage (3a–3g) | ✅ |
 | 4 | Full verification: long runs, extreme signals | ✅ |
 | 5 | Integration into SSCv2 (cgo), tested on Samsung Galaxy Buds2 Pro | ✅ |
-| 6 | Decoder | ⏳ next |
+| 6 | Decoder: exact parse, synthesis, bench | ✅ |
 
 ## Decisions
 
@@ -115,13 +115,46 @@ the headphones' decoder handles them poorly. The practical maximum is 229k.
 **Forced UHQ:** the 48 kHz capture upsampled 2× (half-band FIR, `engine/upsample.go`), the
 encoder at 96 kHz; Samsung Galaxy Buds2 Pro accept configuration 0x0A, 584k runs without errors.
 
-### 6 — Decoder (next)
+### 6 — Decoder
 
-Based on the Opus 1.1.5 CELT decoder with Samsung's differences from phases 3–4. Check:
-decode(libssc) ≈ the source PCM, and decoding the blob's frames. Needed to judge quality without
-headphones — first of all, to find out what is wrong with 256k/328k.
+`src/ssc_decoder.{h,c}`, bench `test/decode.py`. Not built into the app (it only encodes).
+
+- **Parsing mirrors the encoder**: header (bitrate from its index, counter, UHQ dropped
+  bands), silence, post-filter, transient, coarse energy, tf (narrow rates only), spread,
+  dynalloc boosts with Samsung's spill-over on bands 18–20, trim, bit allocation (intensity,
+  dual stereo, band skipping), fine energy, PVQ (stereo/mono theta, pulses, `exp_rotation`
+  reversed), the anti-collapse bit, final energy bits. The allocation integer arithmetic is
+  copied from the encoder.
+- **Float synthesis**: the inverse MDCT is the transpose of `ssc_mdct_forward` itself (taken
+  with unit impulses, long and short blocks) with a fitted gain; reconstruction 97 dB (long)
+  / 110 dB (short). The post-filter is the encoder's `comb_filter` with positive gains (the
+  first short block keeps the previous frame's filter, then the crossfade to the new one, as
+  Opus with LM ≠ 0). Output 24 bit, delay 108 samples.
+- **Band energy**: `amp2Log2` is log2(4·bandE) with `celt_log2`'s Q14 input, so
+  bandE = 2^((E + eMeans·64)/1024) · 4096.
+
+**Results** (30 frames × 6 signals × 14 bitrates):
+- the decoder's quantised energies equal the encoder's `oldBandE` **on every frame** — the
+  parse is exact;
+- the blob's frames (all 6 goldens) decode fully, the parse ends within 1 bit of the budget;
+- waveform SNR (music / chord / tone): 88k 25/26/47 dB, 229k 28/33/48, 256k 27/34/48,
+  328k 29/36/49, UHQ 584k 39/41/54, 886k 41/44/56. Noise 0–8 dB (CELT keeps band energies, not
+  the waveform), the sweep at 88–128k 16 dB (cut above the last band).
+
+**About 256k/328k:** our decoder reconstructs them as well as 229k (328k even better), so the
+frames are valid. The "choking" on Samsung Galaxy Buds2 Pro is their decoder's: the phone never
+sends these "wide" 48 kHz rates, and the headphones apparently handle them differently. The
+229k maximum in the headphone profile stays.
+
+**Not reproduced** (the stream does not show how the headphones do it): folding into bands
+without pulses (we use noise), anti-collapse (the flag is read, not applied).
+
+Listen on a PC: `py -3.14 libssc/test/decode.py --wav song.wav --rates 229,256` → next to it
+`song.ssc229k.wav`, `song.ssc256k.wav` (48 kHz: basic rates, 96 kHz: UHQ).
 
 ## Open
+
+- Decoder: folding and anti-collapse, if we find out how the headphones do them.
 
 - Lowering the bitrate by link load (the phone uses the controller's busy level).
 - A real 96 kHz capture for UHQ instead of upsampling.

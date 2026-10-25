@@ -2,9 +2,11 @@
 
 **English** · [Русский](README.ru.md)
 
-Our own Samsung Scalable Codec (SSC) encoder, **bit-exact** with `libScalable_Encoder.so`
+Our own Samsung Scalable Codec (SSC): the encoder is **bit-exact** with `libScalable_Encoder.so`
 from the current phone firmware (clang 14, NDK r25). C99, fixed-point, built on CELT from
-Opus 1.1.5. SSCv2 uses it through the cgo package `internal/codec/ssc`. Personal use only.
+Opus 1.1.5. SSCv2 uses it through the cgo package `internal/codec/ssc`. The decoder (phase 6)
+reads the same frames exactly and synthesises in float — to listen to and compare bitrates on a
+PC. Personal use only.
 Plan and phase results: [PLAN.md](PLAN.md).
 
 ## Contents
@@ -12,6 +14,7 @@ Plan and phase results: [PLAN.md](PLAN.md).
 | Path | What |
 |---|---|
 | `src/` | **the library**: `ssc_*.c` — our code, `src/opus/` — Opus 1.1.5 + patches (`PATCHES.md`, licence `COPYING`) |
+| `src/ssc_decoder.{h,c}` | decoder (phase 6): exact frame parsing, float synthesis; bench only |
 | `src/ssc_names.h` | the blob's names (`ssc_quant_all_bands`, `ssc_ec_encode`, …) for every file (`-include` in `build.py`, `#include` in the cgo wrappers) |
 | `ref/libScalable_Encoder.so` | Samsung's blob from the firmware (aarch64), for comparison only |
 | `ref/libbluetooth_jni.so` | the phone's Bluetooth stack (`com.android.bt.apex`): how the phone calls the encoder, picks the bitrate and packs frames |
@@ -50,6 +53,8 @@ py -3.14 libssc\test\replay.py    # libssc functions on real calls recorded in t
 py -3.14 libssc\test\stages.py    # per-frame checkpoints along the chain
 # replay.py and stages.py: --rates all — all 14 bitrates instead of the 6 profiles
 
+py -3.14 libssc\test\decode.py    # decoder: sync with the encoder, SNR; --golden, --wav song.wav
+
 go test ./internal/codec/ssc      # the cgo build against blob hashes (testdata/oracle.txt)
 py -3.14 libssc\test\cgo_ref.py   # re-take those hashes
 ```
@@ -62,6 +67,7 @@ py -3.14 libssc\test\cgo_ref.py   # re-take those hashes
 | `test/corpus.py` | whole frames on every bitrate and `test/signals.py` signal |
 | `test/edge.py` | long runs, unknown and changing bitrates, extreme signals, 16 bit, 44.1 kHz |
 | `test/cgo_ref.py` | blob frame hashes for the Go test |
+| `test/decode.py` | decoder: energies vs the encoder on every frame, SNR, blob frames (`--golden`), WAVs to listen to (`--wav`) |
 
 After adding files to `src/`, regenerate the wrappers: `go run ./tools/genwrap`.
 

@@ -90,7 +90,8 @@ func TestOracle(t *testing.T) {
 // TestWrappers: every libssc source has a z*.c wrapper here.
 func TestWrappers(t *testing.T) {
 	src := filepath.Join("..", "..", "..", "libssc", "src")
-	skip := map[string]bool{"pitch.c": true, "celt_lpc.c": true} // included by ssc_*.c
+	// pitch.c / celt_lpc.c: included by ssc_*.c; ssc_decoder.c: test bench only
+	skip := map[string]bool{"pitch.c": true, "celt_lpc.c": true, "ssc_decoder.c": true}
 	for _, dir := range []string{"", "opus"} {
 		files, _ := filepath.Glob(filepath.Join(src, dir, "*.c"))
 		for _, p := range files {
