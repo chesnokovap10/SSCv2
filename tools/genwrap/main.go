@@ -41,6 +41,7 @@ var libs = []lib{
 			"src/classic/a2dp.c", "src/classic/a2dp_source.c", "src/classic/avdtp.c", "src/classic/avdtp_acceptor.c",
 			"src/classic/avdtp_initiator.c", "src/classic/avdtp_source.c", "src/classic/avdtp_util.c",
 			"src/classic/avrcp.c", "src/classic/avrcp_controller.c", "src/classic/avrcp_target.c",
+			"src/classic/hid_host.c",
 			"src/classic/sdp_client.c", "src/classic/sdp_server.c", "src/classic/sdp_util.c",
 			"src/ble/att_db.c", "src/ble/att_db_util.c", "src/ble/att_dispatch.c", "src/ble/att_server.c",
 			"src/ble/gatt_client.c", "src/ble/le_device_db_memory.c", "src/ble/sm.c",

@@ -1,6 +1,8 @@
 package app
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -146,5 +148,45 @@ func TestMenuUHQUnsupported(t *testing.T) {
 	}
 	if a.noBitrate(config.ModeOff) {
 		t.Error("off is never blocked")
+	}
+}
+
+func TestMenuClassicMouse(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("APPDATA", dir)
+	i18n.Set(i18n.EN)
+	defer i18n.Set("")
+	keysJSON := `{"classic":[{"addr":"40:5E:F6:B0:06:C2","key":"00","type":7,"name":"Buds2 Pro","cod":2360344},
+	{"addr":"00:1F:20:AA:BB:CC","key":"00","type":7,"name":"BT Mouse","cod":9600}],"le":[]}`
+	if err := os.MkdirAll(filepath.Join(dir, "SSCv2"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "SSCv2", "keys.json"), []byte(keysJSON), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	a := &App{mode: config.ModeOff, s: &config.Settings{Mode: config.ModeOff}}
+	var pair []tray.Item
+	for _, it := range a.menu() {
+		if it.Text == "Pair a device" {
+			pair = it.Sub
+		}
+	}
+	hp, mice := []string{}, []string{}
+	section := ""
+	for _, it := range pair {
+		switch {
+		case it.Text == "Headphones:" || it.Text == "Mouse:":
+			section = it.Text
+		case it.ID >= idHeadphonesBase && it.ID < idHeadphonesBase+500:
+			hp = append(hp, strings.TrimSpace(it.Text))
+		case it.ID >= idClassicMouse && it.ID < idClassicMouse+500 && section == "Mouse:":
+			mice = append(mice, strings.TrimSpace(it.Text))
+		}
+	}
+	if len(hp) != 1 || hp[0] != "Buds2 Pro" {
+		t.Errorf("headphones: %q", hp)
+	}
+	if len(mice) != 1 || mice[0] != "BT Mouse (classic)" {
+		t.Errorf("classic mice: %q", mice)
 	}
 }

@@ -51,6 +51,8 @@ type mouseBridge struct {
 	state      atomic.Int32
 	handle     uint16
 	hidsCid    uint16
+	classic    bool   // BR/EDR HID mouse (hid_host) instead of HID over GATT
+	hidCid     uint16 // classic: hid_host connection
 	buttons    uint32
 	reports    atomic.Uint32
 	raw        atomic.Uint32
@@ -107,6 +109,9 @@ func (m *mouseBridge) onHCIWorking(s *stackT) {
 }
 
 func (m *mouseBridge) connect(s *stackT) {
+	if m.classic {
+		return // the classic mouse connects to us (pages its host when moved)
+	}
 	if !m.configured || !s.hciReady.Load() || m.handle != 0xFFFF {
 		return
 	}
@@ -145,6 +150,14 @@ func (m *mouseBridge) onGapMeta(s *stackT, cp *C.uint8_t) {
 func (m *mouseBridge) onDisconnect(s *stackT, h uint16, reason uint8) bool {
 	if !m.configured || h != m.handle {
 		return false
+	}
+	if m.classic {
+		s.logf("mouse: link down (0x%02X), %d reports", reason, m.reports.Load())
+		m.releaseButtons()
+		m.handle = 0xFFFF
+		m.hidCid = 0
+		m.set(s, mouseConnecting)
+		return true
 	}
 	s.logf("mouse: disconnected (0x%02X), %d reports", reason, m.reports.Load())
 	m.releaseButtons()
@@ -316,5 +329,86 @@ func (m *mouseBridge) send(dx, dy, wheel, hwheel int32, buttons uint32) {
 func (m *mouseBridge) releaseButtons() {
 	if m.buttons != 0 {
 		m.send(0, 0, 0, 0, 0)
+	}
+}
+
+// ---- classic (BR/EDR) HID mouse ----------------------------------------------------
+
+// BTstack thread, before power-on. The link key comes from the key store
+// (imported from Windows, like the headphones'). The mouse reconnects by
+// itself when moved; BTstack accepts its HID channels.
+func (m *mouseBridge) setupClassic(s *stackT, a Addr) {
+	C.ssc_hid_classic_init()
+	m.addr = a
+	m.classic = true
+	m.configured = true
+	m.handle = 0xFFFF
+	m.state.Store(int32(mouseConnecting))
+	s.logf("mouse: classic HID %s, waiting for it to connect (move it)", a)
+}
+
+func (m *mouseBridge) isClassicMouse(a Addr) bool { return m.configured && m.classic && a == m.addr }
+
+func (m *mouseBridge) onHIDClassic(s *stackT, cp *C.uint8_t) {
+	if !m.classic || uint8(C.hci_event_packet_get_type(cp)) != C.HCI_EVENT_HID_META {
+		return
+	}
+	switch uint8(C.hci_event_hid_meta_get_subevent_code(cp)) {
+	case C.HID_SUBEVENT_INCOMING_CONNECTION:
+		var a C.bd_addr_t
+		C.hid_subevent_incoming_connection_get_address(cp, &a[0])
+		cid := C.hid_subevent_incoming_connection_get_hid_cid(cp)
+		if addrFromC(&a[0]) != m.addr {
+			s.logf("mouse: HID connection from %s declined (not the chosen mouse)", addrFromC(&a[0]))
+			C.ssc_hid_classic_decline(cid)
+			return
+		}
+		m.set(s, mouseDiscovering)
+		if st := uint8(C.ssc_hid_classic_accept(cid)); st != 0 {
+			s.logf("mouse: accepting the HID connection failed (0x%02X)", st)
+		}
+	case C.HID_SUBEVENT_CONNECTION_OPENED:
+		st := uint8(C.hid_subevent_connection_opened_get_status(cp))
+		if st != 0 {
+			s.logf("mouse: HID connection failed (0x%02X %s)", st, hciErr(st))
+			m.set(s, mouseConnecting)
+			return
+		}
+		m.hidCid = uint16(C.hid_subevent_connection_opened_get_hid_cid(cp))
+		m.handle = uint16(C.hid_subevent_connection_opened_get_con_handle(cp))
+		m.raw.Store(0)
+		m.set(s, mouseReady)
+		s.logf("mouse: classic HID connected (cid 0x%04X, incoming %v)", m.hidCid,
+			C.hid_subevent_connection_opened_get_incoming(cp) != 0)
+	case C.HID_SUBEVENT_DESCRIPTOR_AVAILABLE:
+		st := uint8(C.hid_subevent_descriptor_available_get_status(cp))
+		cid := C.hid_subevent_descriptor_available_get_hid_cid(cp)
+		s.logf("mouse: HID descriptor %d bytes (status 0x%02X; none = boot protocol)",
+			int(C.hid_descriptor_storage_get_descriptor_len(cid)), st)
+	case C.HID_SUBEVENT_REPORT:
+		cid := C.hid_subevent_report_get_hid_cid(cp)
+		rep := C.hid_subevent_report_get_report(cp)
+		n := C.hid_subevent_report_get_report_len(cp)
+		var dx, dy, wh, hw C.int32_t
+		var btn C.uint32_t
+		ok := C.ssc_hid_classic_parse(cid, rep, n, C.uint32_t(m.buttons), &dx, &dy, &wh, &hw, &btn)
+		if m.raw.Add(1) <= 8 {
+			b := unsafe.Slice((*byte)(unsafe.Pointer(rep)), int(n))
+			s.logf("mouse: report #%d len=%d % X -> mouse=%d dx=%d dy=%d btn=%d", m.raw.Load(), int(n), b,
+				int(ok), int(dx), int(dy), int(btn))
+		}
+		if ok == 0 {
+			return
+		}
+		if m.reports.Add(1) == 1 {
+			s.logf("mouse: first input report - mouse is live")
+		}
+		m.send(int32(dx), int32(dy), int32(wh), int32(hw), uint32(btn))
+	case C.HID_SUBEVENT_CONNECTION_CLOSED:
+		s.logf("mouse: classic HID closed, %d reports", m.reports.Load())
+		m.releaseButtons()
+		m.hidCid = 0
+		m.reports.Store(0)
+		m.set(s, mouseConnecting)
 	}
 }

@@ -123,7 +123,9 @@ type Options struct {
 	Verbose   bool // forward BTstack log_info lines
 	USBIDs    [][2]uint16
 	LocalName string
-	Mouse     *LEBond // nil = no mouse bridge
+	Mouse     *LEBond // nil = no LE mouse bridge
+	// ClassicMouse: a BR/EDR HID mouse (link key from Keys) instead of an LE one.
+	ClassicMouse *Addr
 	EnableSSC bool    // offer the SSC endpoint (only when SSC can be encoded)
 	SSCCap    uint8   // SSC configuration byte to send (0 = like the phone)
 	Debug     bool    // packet journal (logx debug mode)

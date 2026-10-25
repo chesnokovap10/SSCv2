@@ -21,6 +21,7 @@
 #include "classic/avrcp.h"
 #include "classic/avrcp_controller.h"
 #include "classic/avrcp_target.h"
+#include "classic/hid_host.h"
 #include "ble/sm.h"
 #include "ble/gatt-service/hids_host.h"
 #include "shim.h"

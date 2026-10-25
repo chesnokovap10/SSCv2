@@ -264,6 +264,8 @@ func (s *stackT) loop(started chan struct{}) {
 
 	if s.opts.Mouse != nil {
 		s.mouse.setup(s, s.opts.Mouse)
+	} else if s.opts.ClassicMouse != nil {
+		s.mouse.setupClassic(s, *s.opts.ClassicMouse)
 	}
 
 	C.a2dp_source_init()

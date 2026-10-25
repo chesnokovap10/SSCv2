@@ -82,6 +82,19 @@ Headphones without a profile always see every bitrate.
 * When the link is lost (headphones in the case) playback is paused and the sound goes back
   to the speakers until the headphones return.
 
+### Mouse
+
+While a codec is on, Windows Bluetooth is off, so the program serves the mouse itself
+("Pair a device ▸ Mouse"):
+
+* **BLE mice** (HID over GATT) — the program connects to the mouse with the keys from Windows;
+* **classic mice** (Bluetooth BR/EDR HID, "(classic)" in the list) — the mouse connects by itself
+  when moved; the program accepts it with the key from Windows. The report layout comes from the
+  mouse's SDP record, the standard boot format otherwise.
+
+Pair the mouse in Windows first, then "Import devices paired in Windows". Movement, wheel,
+horizontal scroll and buttons 1–5 are passed on; one mouse at a time, no keyboards.
+
 ## How it works
 
 One `ssc.exe`, several roles:
@@ -134,7 +147,7 @@ per source (`internal/bt/zbt_*.c`, `internal/codec/aac/zfdk_*.cpp`,
 | `cmd/ssc` | entry point, process roles, icon |
 | `internal/app` | tray: menu, codecs, install/uninstall, `ctl` commands |
 | `internal/engine` | streaming process: capture → codec → BT, reconnects, buttons, mute |
-| `internal/bt` | BTstack: bring-up, A2DP source (AAC/SSC), AVRCP, inquiry, BLE mouse bridge |
+| `internal/bt` | BTstack: bring-up, A2DP source (AAC/SSC), AVRCP, inquiry, mouse bridge (BLE and classic) |
 | `internal/codec/aac`, `internal/codec/ssc` | AAC-LC (LATM like Android), SSC through libssc |
 | `internal/audio` | WASAPI capture, volume and mute, virtual headphones |
 | `internal/driver`, `internal/mtk` | WinUSB ↔ BTHUSB, MT79xx RAM firmware (from DriverStore `mtkbt*`) |

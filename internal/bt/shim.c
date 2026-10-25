@@ -17,6 +17,7 @@
 #include "classic/avrcp.h"
 #include "classic/avrcp_controller.h"
 #include "classic/avrcp_target.h"
+#include "classic/hid_host.h"
 #include "classic/btstack_link_key_db.h"
 #include "classic/sdp_server.h"
 #include "classic/sdp_util.h"
@@ -257,14 +258,13 @@ int ssc_le_add_bond(int addr_type, const uint8_t addr[6], const uint8_t irk[16],
     return idx;
 }
 
-int ssc_hog_parse(uint16_t hids_cid, uint8_t service_index, const uint8_t *report,
-                  uint16_t len, uint32_t prev_buttons, int32_t *dx, int32_t *dy,
-                  int32_t *wheel, int32_t *hwheel, uint32_t *buttons) {
+/* Mouse fields of one HID input report, parsed with the device's report
+ * descriptor (LE: from GATT, classic: from SDP). */
+static int hid_parse_mouse(const uint8_t *desc, uint16_t desc_len, const uint8_t *report,
+                           uint16_t len, uint32_t prev_buttons, int32_t *dx, int32_t *dy,
+                           int32_t *wheel, int32_t *hwheel, uint32_t *buttons) {
     btstack_hid_parser_t parser;
-    btstack_hid_parser_init(&parser,
-        hids_host_descriptor_storage_get_descriptor_data(hids_cid, service_index),
-        hids_host_descriptor_storage_get_descriptor_len(hids_cid, service_index),
-        HID_REPORT_TYPE_INPUT, report, len);
+    btstack_hid_parser_init(&parser, desc, desc_len, HID_REPORT_TYPE_INPUT, report, len);
     int is_mouse = 0;
     uint32_t b = prev_buttons;
     *dx = *dy = *wheel = *hwheel = 0;
@@ -286,6 +286,61 @@ int ssc_hog_parse(uint16_t hids_cid, uint8_t service_index, const uint8_t *repor
     }
     *buttons = b;
     return is_mouse;
+}
+
+int ssc_hog_parse(uint16_t hids_cid, uint8_t service_index, const uint8_t *report,
+                  uint16_t len, uint32_t prev_buttons, int32_t *dx, int32_t *dy,
+                  int32_t *wheel, int32_t *hwheel, uint32_t *buttons) {
+    return hid_parse_mouse(hids_host_descriptor_storage_get_descriptor_data(hids_cid, service_index),
+                           hids_host_descriptor_storage_get_descriptor_len(hids_cid, service_index),
+                           report, len, prev_buttons, dx, dy, wheel, hwheel, buttons);
+}
+
+/* ---- classic (BR/EDR) HID mouse --------------------------------------------- */
+
+static uint8_t g_hid_classic_storage[1024];
+
+static void on_hid(uint8_t t, uint16_t ch, uint8_t *p, uint16_t n) { goBtPacket(SSC_SRC_HID, t, ch, p, n); }
+
+/* Registers the HID control/interrupt PSMs: the mouse reconnects by itself
+ * (it pages its host when moved) and is accepted in ssc_hid_classic_accept. */
+void ssc_hid_classic_init(void) {
+    hid_host_init(g_hid_classic_storage, sizeof(g_hid_classic_storage));
+    hid_host_register_packet_handler(on_hid);
+}
+
+uint8_t ssc_hid_classic_accept(uint16_t hid_cid) {
+    return hid_host_accept_connection(hid_cid, HID_PROTOCOL_MODE_REPORT);
+}
+
+uint8_t ssc_hid_classic_decline(uint16_t hid_cid) { return hid_host_decline_connection(hid_cid); }
+
+uint8_t ssc_hid_classic_connect(const uint8_t addr[6], uint16_t *hid_cid) {
+    bd_addr_t a;
+    memcpy(a, addr, 6);
+    return hid_host_connect(a, HID_PROTOCOL_MODE_REPORT, hid_cid);
+}
+
+/* report: the interrupt-channel payload, HID header (0xA1 = DATA | INPUT)
+ * first. Report protocol: parsed with the SDP descriptor; boot protocol (no
+ * descriptor): buttons, dx, dy[, wheel] as signed bytes. */
+int ssc_hid_classic_parse(uint16_t hid_cid, const uint8_t *report, uint16_t len, uint32_t prev_buttons,
+                          int32_t *dx, int32_t *dy, int32_t *wheel, int32_t *hwheel, uint32_t *buttons) {
+    const uint8_t *desc = hid_descriptor_storage_get_descriptor_data(hid_cid);
+    uint16_t desc_len = hid_descriptor_storage_get_descriptor_len(hid_cid);
+    *dx = *dy = *wheel = *hwheel = 0;
+    *buttons = prev_buttons;
+    if (len < 2 || report[0] != 0xA1) return 0;
+    report++;
+    len--;
+    if (desc && desc_len)
+        return hid_parse_mouse(desc, desc_len, report, len, prev_buttons, dx, dy, wheel, hwheel, buttons);
+    if (len < 3) return 0;
+    *buttons = report[0] & 0x1F;
+    *dx = (int8_t)report[1];
+    *dy = (int8_t)report[2];
+    if (len >= 4) *wheel = (int8_t)report[3];
+    return 1;
 }
 
 /* ---- media channel MTU override ("AAC 256" mode) ------------------------- */

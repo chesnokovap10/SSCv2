@@ -9,7 +9,7 @@
 #include <stdint.h>
 
 /* Packet sources reported to goBtPacket(). */
-enum { SSC_SRC_HCI = 0, SSC_SRC_A2DP, SSC_SRC_AVRCP, SSC_SRC_SM, SSC_SRC_HIDS };
+enum { SSC_SRC_HCI = 0, SSC_SRC_A2DP, SSC_SRC_AVRCP, SSC_SRC_SM, SSC_SRC_HIDS, SSC_SRC_HID };
 
 /* SSC vendor codec (Samsung Scalable Codec). */
 #define SSC_VENDOR_ID 0x00000075u
@@ -49,5 +49,13 @@ int ssc_le_add_bond(int addr_type, const uint8_t addr[6], const uint8_t irk[16],
 int ssc_hog_parse(uint16_t hids_cid, uint8_t service_index, const uint8_t *report,
                   uint16_t len, uint32_t prev_buttons, int32_t *dx, int32_t *dy,
                   int32_t *wheel, int32_t *hwheel, uint32_t *buttons);
+
+/* Classic (BR/EDR) HID mouse. */
+void ssc_hid_classic_init(void);
+uint8_t ssc_hid_classic_accept(uint16_t hid_cid);
+uint8_t ssc_hid_classic_decline(uint16_t hid_cid);
+uint8_t ssc_hid_classic_connect(const uint8_t addr[6], uint16_t *hid_cid);
+int ssc_hid_classic_parse(uint16_t hid_cid, const uint8_t *report, uint16_t len, uint32_t prev_buttons,
+                          int32_t *dx, int32_t *dy, int32_t *wheel, int32_t *hwheel, uint32_t *buttons);
 
 #endif

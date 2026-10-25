@@ -22,7 +22,7 @@ import (
 	"sscv2/internal/config"
 )
 
-// Classic is a BR/EDR bond (headphones).
+// Classic is a BR/EDR bond (headphones, or a classic HID mouse).
 type Classic struct {
 	Addr string `json:"addr"`
 	Key  string `json:"key"`  // 32 hex chars, HCI byte order
@@ -36,6 +36,12 @@ type Classic struct {
 func (c Classic) IsAudio() bool {
 	return (c.CoD>>8)&0x1F == 0x04 || strings.Contains(strings.ToLower(c.Name), "buds")
 }
+
+// IsPeripheral reports the Peripheral major class (mice, keyboards).
+func (c Classic) IsPeripheral() bool { return (c.CoD>>8)&0x1F == 0x05 }
+
+// IsPointing reports a pointing device (Peripheral, minor bit "pointing").
+func (c Classic) IsPointing() bool { return c.IsPeripheral() && c.CoD&0x80 != 0 }
 
 // LE is an LE bond (mouse), keys already in BTstack byte order.
 type LE struct {
@@ -260,9 +266,25 @@ func (s *Store) FindClassic(addr string) (Classic, bool) {
 			return c, true
 		}
 	}
-	// keys without name/class: take the first one
-	if addr == "" && len(s.f.Classic) > 0 {
-		return s.f.Classic[0], true
+	// keys without name/class: take the first one that is not a mouse/keyboard
+	if addr == "" {
+		for _, c := range s.f.Classic {
+			if !c.IsPeripheral() {
+				return c, true
+			}
+		}
+	}
+	return Classic{}, false
+}
+
+// FindClassicMouse returns the first classic pointing device.
+func (s *Store) FindClassicMouse() (Classic, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, c := range s.f.Classic {
+		if c.IsPointing() {
+			return c, true
+		}
 	}
 	return Classic{}, false
 }

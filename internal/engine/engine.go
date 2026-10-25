@@ -196,6 +196,11 @@ func (e *engine) run() error {
 			} else {
 				logf("mouse bond: %v", err)
 			}
+		} else if c, ok := e.store.FindClassic(e.cfg.Mouse); ok {
+			if a, err := bt.ParseAddr(c.Addr); err == nil {
+				opts.ClassicMouse = &a
+				e.update(func(s *ipc.EngineStatus) { s.Mouse = c.Addr; s.MouseState = i18n.T("запуск", "starting") })
+			}
 		} else {
 			logf("mouse %s: no keys", e.cfg.Mouse)
 		}

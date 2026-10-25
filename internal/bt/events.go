@@ -53,6 +53,12 @@ func (s *stackT) onPacket(src int, ptype uint8, channel uint16, p []byte, cp *C.
 		s.mouse.onHIDS(s, cp)
 		return
 	}
+	if src == C.SSC_SRC_HID {
+		if ptype == C.HCI_EVENT_PACKET {
+			s.mouse.onHIDClassic(s, cp)
+		}
+		return
+	}
 	if ptype != C.HCI_EVENT_PACKET {
 		return
 	}
@@ -105,6 +111,10 @@ func (s *stackT) onPacket(src int, ptype uint8, channel uint16, p []byte, cp *C.
 		st := uint8(C.hci_event_connection_complete_get_status(cp))
 		if st != 0 {
 			s.logf("bt: ACL to %s failed: 0x%02X (%s)", addrFromC(&a[0]), st, hciErr(st))
+		} else if s.mouse.isClassicMouse(addrFromC(&a[0])) {
+			// the classic mouse's own link: not the headphones'
+			s.mouse.handle = uint16(C.hci_event_connection_complete_get_connection_handle(cp))
+			s.logf("bt: ACL up to the mouse %s", addrFromC(&a[0]))
 		} else {
 			s.aclHandle.Store(uint32(C.hci_event_connection_complete_get_connection_handle(cp)))
 			s.logf("bt: ACL up to %s", addrFromC(&a[0]))

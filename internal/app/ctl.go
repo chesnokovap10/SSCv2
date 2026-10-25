@@ -344,6 +344,8 @@ func (a *App) ctl(args []string) string {
 			if store, err := keys.Open(); err == nil {
 				if l, ok := store.FindLE(dev.Addr); ok {
 					dev.Name = l.Name
+				} else if c, ok := store.FindClassic(dev.Addr); ok {
+					dev.Name = c.Name
 				}
 			}
 			a.s.Mouse = dev
