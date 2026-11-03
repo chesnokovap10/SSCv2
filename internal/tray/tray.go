@@ -30,6 +30,8 @@ type Item struct {
 type Tray struct {
 	Menu                        func() []Item
 	Command                     func(id int)
+	DismissBefore               func(id int) bool
+	afterDismiss                int
 	Volume                      func() (uint8, bool, bool)
 	SetVolume                   func(uint8)
 	ToggleMute                  func()
@@ -37,6 +39,10 @@ type Tray struct {
 	openMenu                    *liveMenu
 	selectedMenu, selectedFlags uintptr
 	selectedID                  int
+	activeMenus                 []uintptr
+	menuButtonUp                uintptr
+	menuMouseCommand            int
+	menuIconBounds              menuRect
 	VolumeKey                   func(uint32)
 	volumeKeys                  atomic.Bool
 	menuOpen                    atomic.Bool
@@ -225,10 +231,13 @@ func (t *Tray) showMenu() {
 	m := t.buildMenu(items)
 	t.rendered.Store(&items)
 	t.openMenu = m
+	t.activeMenus = append(t.activeMenus[:0], m.handle)
 	defer func() {
 		t.rendered.Store(nil)
 		t.openMenu, t.volumeRow = nil, nil
 		t.selectedMenu, t.selectedID = 0, 0
+		t.activeMenus = t.activeMenus[:0]
+		t.menuButtonUp, t.menuMouseCommand = 0, 0
 		pDestroyMenu.Call(m.handle)
 	}()
 	thread := windows.GetCurrentThreadId()
@@ -238,17 +247,31 @@ func (t *Tray) showMenu() {
 	} else {
 		logx.Printf("menu input: %v", err)
 	}
+	instance, _, _ := pGetModuleHandleW.Call(0)
+	mouseHook, _, mouseErr := setWindowsHook.Call(14, menuMouseCallback, instance, 0) // WH_MOUSE_LL
+	if mouseHook != 0 {
+		defer unhookWindowsHook.Call(mouseHook)
+	} else {
+		logx.Printf("tray icon mouse input: %v", mouseErr)
+	}
 	setTimer.Call(t.hwnd, 1, 75, 0)
 	defer killTimer.Call(t.hwnd, 1)
 	setTimer.Call(t.hwnd, 2, 300, 0)
 	defer killTimer.Call(t.hwnd, 2)
 
 	x, y, alignment := t.menuAnchor()
+	t.menuIconBounds, _ = t.iconBounds()
 	pSetForegroundWindow.Call(t.hwnd)
 	id, _, _ := pTrackPopupMenu.Call(m.handle, tpmReturnCmd|tpmRightButton|alignment,
 		uintptr(x), uintptr(y), 0, t.hwnd, 0)
 	pPostMessageW.Call(t.hwnd, wmNull, 0, 0)
+	if t.afterDismiss != 0 {
+		t.ActivateMenuItem(t.afterDismiss)
+		t.afterDismiss = 0
+		return
+	}
 	if id != 0 && t.Command != nil && (t.volumeRow == nil || int(id) != t.volumeRow.id) {
+		logx.Dbgf("ui", "native popup returned command %d", id)
 		t.Command(int(id))
 	}
 }
@@ -259,6 +282,17 @@ func wndProc(hwnd, msg, wparam, lparam uintptr) uintptr {
 		return 1
 	}
 	switch uint32(msg) {
+	case 0x0117: // WM_INITMENUPOPUP
+		if t.openMenu != nil && wparam != t.openMenu.handle {
+			t.activeMenus = append(t.activeMenus, wparam)
+		}
+	case 0x0125: // WM_UNINITMENUPOPUP
+		for i := len(t.activeMenus) - 1; i >= 0; i-- {
+			if t.activeMenus[i] == wparam {
+				t.activeMenus = t.activeMenus[:i]
+				break
+			}
+		}
 	case wmMenuSelect:
 		t.selectedMenu, t.selectedFlags, t.selectedID = lparam, wparam>>16, int(wparam&0xffff)
 	case menuOpenMsg:
@@ -268,6 +302,11 @@ func wndProc(hwnd, msg, wparam, lparam uintptr) uintptr {
 		endMenu.Call()
 		return 0
 	case menuActionMsg:
+		if t.openMenu != nil && t.DismissBefore != nil && t.DismissBefore(int(wparam)) {
+			t.afterDismiss = int(wparam)
+			endMenu.Call()
+			return 0
+		}
 		if t.Command != nil {
 			t.Command(int(wparam))
 		}
@@ -282,7 +321,11 @@ func wndProc(hwnd, msg, wparam, lparam uintptr) uintptr {
 	case callbackMsg:
 		switch uint32(lparam & 0xFFFF) { // NOTIFYICON_VERSION_4: event in LOWORD
 		case wmContextMenu, wmLButtonUp, 0x0401: // NIN_KEYSELECT
-			t.showMenu()
+			if t.menuOpen.Load() {
+				endMenu.Call()
+			} else {
+				t.showMenu()
+			}
 		}
 		return 0
 	case volumeKeyMsg:

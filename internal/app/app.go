@@ -124,7 +124,7 @@ func Run() int {
 	if a.s.Debug {
 		logx.SetDebug(true)
 	}
-	a.t = &tray.Tray{Menu: a.menu, Command: a.command, VolumeKey: a.volumeKey, Volume: a.sliderVolume, SetVolume: a.setSliderVolume, ToggleMute: func() { a.adjustVolume(idVolMute) }}
+	a.t = &tray.Tray{Menu: a.menu, Command: a.command, DismissBefore: func(id int) bool { return id == idInfo || id == idLangRU || id == idLangEN }, VolumeKey: a.volumeKey, Volume: a.sliderVolume, SetVolume: a.setSliderVolume, ToggleMute: func() { a.adjustVolume(idVolMute) }}
 	go a.startup()
 	go a.serveCtl()
 	if err := a.t.Run(tray.Gray, "SSCv2"); err != nil {
@@ -1105,7 +1105,7 @@ func (a *App) menu() []tray.Item {
 		}},
 		{Text: T("Макс. MTU для Samsung Galaxy Buds2 Pro (1017 байт)", "Max MTU for Samsung Galaxy Buds2 Pro (1017 bytes)"), ID: idMaxMTU, Checked: a.s.MaxMTU, Disabled: busy},
 		{Text: T("Все битрейты (не только проверенные на этих наушниках)", "All bitrates (not only those checked on these headphones)"), ID: idAllBitrates, Checked: a.s.AllBitrates, Disabled: busy},
-		{Text: T("Отладочный журнал (debug.log)", "Debug journal (debug.log)"), ID: idDebug, Checked: a.s.Debug},
+		{Text: T("Отладка и API интерфейса", "Debug and UI API"), ID: idDebug, Checked: a.s.Debug},
 		{Text: T("Открыть папку журналов", "Open the log folder"), ID: idOpenLogs},
 		{Separator: true},
 		{Text: T("Служба: ", "Service: ") + svcState},

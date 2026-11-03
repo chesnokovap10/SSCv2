@@ -8,7 +8,7 @@ import (
 	"sscv2/internal/bt"
 )
 
-func (e *engine) switchCodec(ctx context.Context, caps bt.RemoteCaps, codec bt.Codec) (Encoder, int, bool, error) {
+func (e *engine) switchCodec(ctx context.Context, caps bt.RemoteCaps, codec bt.Codec, previous *Encoder) (Encoder, int, bool, error) {
 	rate, makeEncoder := e.srate, newAAC
 	if codec == bt.CodecSSC {
 		if !caps.SSC || !sscUHQ() && caps.SSCCap&0x04 == 0 {
@@ -28,13 +28,17 @@ func (e *engine) switchCodec(ctx context.Context, caps bt.RemoteCaps, codec bt.C
 		return nil, 0, false, fmt.Errorf("close old stream: %w", err)
 	}
 	e.pipe.set(nil, 0, false)
+	if *previous != nil {
+		(*previous).Close()
+		*previous = nil
+	}
 	enc, mtu, err := e.openCodec(ctx, codec, rate, makeEncoder)
 	if err != nil {
 		return nil, 0, true, err
 	}
 	if got := bt.ACLHandle(); got != handle {
 		enc.Close()
-		return nil, 0, false, fmt.Errorf("ACL changed from 0x%04x to 0x%04x", handle, got)
+		return nil, 0, true, fmt.Errorf("ACL changed from 0x%04x to 0x%04x", handle, got)
 	}
 	logf("codec switch: %s START accepted on ACL 0x%04x in %s", codec, handle, time.Since(start))
 	return enc, mtu, true, nil
@@ -47,10 +51,12 @@ func (e *engine) openCodec(ctx context.Context, codec bt.Codec, rate int, makeEn
 	}
 	enc, err := makeEncoder(e.srate, mtu)
 	if err != nil {
+		_ = bt.CloseStream(ctx)
 		return nil, 0, err
 	}
 	if err := bt.StartStream(ctx); err != nil {
 		enc.Close()
+		_ = bt.CloseStream(ctx)
 		return nil, 0, err
 	}
 	return enc, mtu, nil

@@ -27,12 +27,9 @@ func (t *Tray) menuAnchor() (x, y int32, alignment uintptr) {
 		monitorDefaultPrimary = 1
 		monitorDefaultNearest = 2
 	)
-	id := trayIconIdentifier{window: t.hwnd, id: t.nid(0).uID}
-	id.size = uint32(unsafe.Sizeof(id))
-	var icon menuRect
-	hr, _, _ := getTrayIconRect.Call(uintptr(unsafe.Pointer(&id)), uintptr(unsafe.Pointer(&icon)))
+	icon, found := t.iconBounds()
 	fallback := uintptr(monitorDefaultNearest)
-	if int32(hr) < 0 {
+	if !found {
 		icon = menuRect{}
 		fallback = monitorDefaultPrimary
 	}
@@ -60,4 +57,12 @@ func (t *Tray) menuAnchor() (x, y int32, alignment uintptr) {
 		}
 		return x, y, rightAlign | tpmBottomAlign
 	}
+}
+
+func (t *Tray) iconBounds() (menuRect, bool) {
+	id := trayIconIdentifier{window: t.hwnd, id: t.nid(0).uID}
+	id.size = uint32(unsafe.Sizeof(id))
+	var icon menuRect
+	hr, _, _ := getTrayIconRect.Call(uintptr(unsafe.Pointer(&id)), uintptr(unsafe.Pointer(&icon)))
+	return icon, int32(hr) >= 0
 }

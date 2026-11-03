@@ -386,6 +386,12 @@ func Ctl(args []string) (string, error) {
 }
 
 func (a *App) ctlMenu(args []string) string {
+	a.mu.Lock()
+	enabled := a.s.Debug
+	a.mu.Unlock()
+	if !enabled {
+		return "error: UI API disabled (enable Debug and UI API)"
+	}
 	const usage = "error: menu [open|close|check <id>|activate <id>|volume <0..127>|mute]"
 	if len(args) == 0 {
 		level, muted, available := a.sliderVolume()

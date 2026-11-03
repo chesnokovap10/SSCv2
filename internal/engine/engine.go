@@ -495,7 +495,11 @@ func (e *engine) session(addrStr string) error {
 	if err != nil {
 		return err
 	}
-	defer func() { enc.Close() }()
+	defer func() {
+		if enc != nil {
+			enc.Close()
+		}
+	}()
 	if err := bt.StartStream(ctx); err != nil {
 		return err
 	}
@@ -533,7 +537,7 @@ func (e *engine) session(addrStr string) error {
 				target = bt.CodecSSC
 			}
 			handle := bt.ACLHandle()
-			next, nextMTU, closed, err := e.switchCodec(ctx, caps, target)
+			next, nextMTU, closed, err := e.switchCodec(ctx, caps, target, &enc)
 			if err != nil {
 				logf("codec switch to %s: %v", target, err)
 				if !change.SSCUHQ {
@@ -554,7 +558,6 @@ func (e *engine) session(addrStr string) error {
 						var restoredMTU int
 						restored, restoredMTU, restoreErr = e.openCodec(ctx, codec, rate, mk)
 						if restoreErr == nil {
-							enc.Close()
 							enc = restored
 							e.installEncoder(enc, restoredMTU, codec)
 							continue
@@ -576,7 +579,6 @@ func (e *engine) session(addrStr string) error {
 			if codec == bt.CodecSSC {
 				mk = newSSC
 			}
-			enc.Close()
 			enc = next
 			e.installEncoder(enc, nextMTU, codec)
 			_ = e.out.Write(ipc.Event{Ev: "codec", Codec: &change})

@@ -1,7 +1,6 @@
 package tray
 
 import (
-	"reflect"
 	"unsafe"
 
 	"golang.org/x/sys/windows"
@@ -15,6 +14,8 @@ const (
 var (
 	insertMenu      = user32.NewProc("InsertMenuW")
 	setMenuItemInfo = user32.NewProc("SetMenuItemInfoW")
+	checkMenuItem   = user32.NewProc("CheckMenuItem")
+	enableMenuItem  = user32.NewProc("EnableMenuItem")
 	deleteMenu      = user32.NewProc("DeleteMenu")
 )
 
@@ -70,8 +71,7 @@ func (t *Tray) writeMenuItem(m *liveMenu, position int, it Item, sub *liveMenu, 
 		}
 	}
 	if replace {
-		info := menuItemInfo{mask: 0x141, typ: uint32(flags & (mfOwnerDraw | mfRadioChk | mfSeparator)),
-			state: uint32(flags & (mfChecked | mfGrayed)), text: label}
+		info := menuItemInfo{mask: 0x40, text: label} // MIIM_STRING preserves native selection state
 		info.size = uint32(unsafe.Sizeof(info))
 		setMenuItemInfo.Call(m.handle, uintptr(position), 1, uintptr(unsafe.Pointer(&info)))
 		t.redrawMenuItem(m.handle, position)
@@ -80,7 +80,55 @@ func (t *Tray) writeMenuItem(m *liveMenu, position int, it Item, sub *liveMenu, 
 	insertMenu.Call(m.handle, uintptr(position), flags, id, uintptr(unsafe.Pointer(label)))
 }
 
+func (t *Tray) updateMenuState(m *liveMenu, i int, item Item) {
+	old := &m.items[i]
+	if old.Checked != item.Checked {
+		flags := uintptr(mfByPosition)
+		if item.Checked {
+			flags |= mfChecked
+		}
+		checkMenuItem.Call(m.handle, uintptr(i), flags)
+		old.Checked = item.Checked
+		t.redrawMenuItem(m.handle, i)
+	}
+	if old.Disabled != item.Disabled {
+		flags := uintptr(mfByPosition)
+		if item.Disabled {
+			flags |= mfGrayed
+		}
+		enableMenuItem.Call(m.handle, uintptr(i), flags)
+		old.Disabled = item.Disabled
+		t.redrawMenuItem(m.handle, i)
+	}
+}
+
+func (t *Tray) hasOpenChild(m *liveMenu) bool {
+	for _, handle := range t.activeMenus {
+		if handle != m.handle && m.find(handle) != nil {
+			return true
+		}
+	}
+	return false
+}
+
 func (t *Tray) updateMenu(m *liveMenu, next []Item) {
+	if t.hasOpenChild(m) {
+		// Renaming or removing the parent row while its popup is open
+		// cancels native menu tracking. Refresh children in place and
+		// apply parent layout changes when the pointer returns to it.
+		for i, sub := range m.children {
+			if sub == nil {
+				continue
+			}
+			for _, item := range next {
+				if sameMenuSlot(m.items[i], item) {
+					t.updateMenu(sub, item.Sub)
+					break
+				}
+			}
+		}
+		return
+	}
 	for i, item := range next {
 		if i < len(m.items) && !sameMenuSlot(m.items[i], item) {
 			for j := i + 1; j < len(m.items); j++ {
@@ -98,8 +146,8 @@ func (t *Tray) updateMenu(m *liveMenu, next []Item) {
 			if sub != nil {
 				t.updateMenu(sub, item.Sub)
 			}
-			old.Sub = item.Sub
-			if !reflect.DeepEqual(old, item) {
+			t.updateMenuState(m, i, item)
+			if old.Text != item.Text && !item.Slider {
 				t.writeMenuItem(m, i, item, sub, true)
 			}
 			m.items[i] = item
@@ -146,39 +194,58 @@ func (t *Tray) removeMenuItem(m *liveMenu, i int) {
 	m.children = append(m.children[:i], m.children[i+1:]...)
 }
 
-func (t *Tray) selectedMenuAction(m *msgT) bool {
-	if t.selectedMenu == 0 || t.selectedID == 0 || t.selectedFlags&(mfPopup|mfGrayed|2|mfSeparator) != 0 ||
-		t.volumeRow != nil && t.selectedID == t.volumeRow.id {
-		return false
+func (m *liveMenu) find(handle uintptr) *liveMenu {
+	if m.handle == handle {
+		return m
 	}
-	switch m.message {
-	case wmLButtonUp, wmRButtonUp:
-		// Resolve the highlighted command's rectangle on the active submenu.
-		var r menuRect
-		position := uintptr(0)
-		for {
-			ok, _, _ := getMenuItemRect.Call(0, t.selectedMenu, position, uintptr(unsafe.Pointer(&r)))
-			if ok == 0 {
-				return false
+	for _, child := range m.children {
+		if child != nil {
+			if found := child.find(handle); found != nil {
+				return found
 			}
-			id, _, _ := getMenuItemID.Call(t.selectedMenu, position)
-			if int(id) == t.selectedID {
-				break
-			}
-			position++
 		}
-		if m.pt.x < r.left || m.pt.x >= r.right || m.pt.y < r.top || m.pt.y >= r.bottom {
-			return false
-		}
-	case 0x0100: // WM_KEYDOWN
-		if m.wParam != 0x0d && m.wParam != 0x20 {
-			return false
-		}
-	default:
-		return false
 	}
-	pPostMessageW.Call(t.hwnd, menuActionMsg, uintptr(t.selectedID), 0)
-	return true
+	return nil
 }
 
-var getMenuItemID = user32.NewProc("GetMenuItemID")
+func (t *Tray) menuCommandAt(x, y int32) int {
+	for i := len(t.activeMenus) - 1; i >= 0; i-- {
+		m := t.openMenu.find(t.activeMenus[i])
+		if m == nil {
+			continue
+		}
+		for pos, item := range m.items {
+			var r menuRect
+			ok, _, _ := getMenuItemRect.Call(0, m.handle, uintptr(pos), uintptr(unsafe.Pointer(&r)))
+			if ok == 0 || x < r.left || x >= r.right || y < r.top || y >= r.bottom {
+				continue
+			}
+			if item.Sub != nil || item.Disabled || item.Slider {
+				return 0
+			}
+			return item.ID
+		}
+	}
+	return 0
+}
+
+func (t *Tray) selectedMenuAction(m *msgT) bool {
+	var id int
+	switch m.message {
+	case 0x0201, 0x0204: // WM_LBUTTONDOWN, WM_RBUTTONDOWN
+		return t.menuCommandAt(m.pt.x, m.pt.y) != 0
+	case wmLButtonUp, wmRButtonUp:
+		id = t.menuCommandAt(m.pt.x, m.pt.y)
+	case 0x0100: // WM_KEYDOWN
+		if (m.wParam == 0x0d || m.wParam == 0x20) && t.selectedMenu != 0 &&
+			t.selectedFlags&(mfPopup|mfGrayed|2|mfSeparator) == 0 &&
+			(t.volumeRow == nil || t.selectedID != t.volumeRow.id) {
+			id = t.selectedID
+		}
+	}
+	if id == 0 {
+		return false
+	}
+	t.ActivateMenuItem(id)
+	return true
+}

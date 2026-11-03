@@ -191,7 +191,7 @@ ssc.exe ctl quit | uninstall
 ssc.exe ctl menu [open|close|check <id>|activate <id>|volume <0..127>|mute]
 ```
 
-Run `ctl menu` to read the menu tree, its open state and the current headphone volume as JSON. Use the item IDs with `check` to inspect availability and with `activate` to invoke enabled commands. Commands are dispatched asynchronously.
+Enable **Debug and UI API** in Settings, then run `ctl menu` to read the menu tree, its open state and the current headphone volume as JSON. Use the item IDs with `check` to inspect availability and with `activate` to invoke enabled commands. Commands are dispatched asynchronously.
 
 Diagnostics: `ctl aac frag` (AAC 256 frames split over two RFC 3016 packets — Samsung Galaxy Buds2 Pro do not
 reassemble them), `ctl ssccap auto|<hex>` (SSC configuration byte), `SSCV2_SSC_SHIFT=1..8`

@@ -171,6 +171,9 @@ func menuFilter(code, wparam, lparam uintptr) uintptr {
 	if int32(code) == 2 && t.openMenu != nil { // MSGF_MENU
 		s := t.volumeRow
 		m := (*msgT)(unsafe.Pointer(lparam))
+		if (s == nil || !s.dragging && !s.mutePressed) && t.handleIconClick(m) {
+			return 1
+		}
 		if s != nil {
 			switch m.message {
 			case 0x0201, wmLButtonUp, 0x0200: // button down, button up, mouse move
@@ -265,4 +268,22 @@ func (t *Tray) sliderMessage(msg, wp, lp uintptr) bool {
 		}
 	}
 	return false
+}
+
+// Handle the click before the menu loop passes it on to Explorer.
+func (t *Tray) handleIconClick(m *msgT) bool {
+	const wmLButtonDown, wmRButtonDown = 0x0201, 0x0204
+	switch m.message {
+	case wmLButtonDown, wmRButtonDown, wmLButtonUp, wmRButtonUp:
+	default:
+		return false
+	}
+	r := t.menuIconBounds
+	if m.pt.x < r.left || m.pt.x >= r.right || m.pt.y < r.top || m.pt.y >= r.bottom {
+		return false
+	}
+	if m.message == wmLButtonUp || m.message == wmRButtonUp {
+		endMenu.Call()
+	}
+	return true
 }
