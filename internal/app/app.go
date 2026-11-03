@@ -103,7 +103,7 @@ func Run() int {
 		logf("settings: %v", err)
 	}
 	i18n.Set(s.Lang)
-	if os.Getenv("SSCV2_CODEC_PROBE") != "1" && installOrUpdate() {
+	if installOrUpdate() {
 		return 0 // the installed copy runs now
 	}
 	name, _ := windows.UTF16PtrFromString(`Local\SSCv2Tray`)
@@ -297,14 +297,30 @@ func (a *App) enable(m config.Mode) {
 	defer a.setBusy("")
 
 	a.mu.Lock()
-	cur, eng := a.mode, a.eng
+	cur, eng, streaming := a.mode, a.eng, a.st.Streaming
 	a.mu.Unlock()
 	if cur == m && eng != nil && eng.running() {
 		return
 	}
 	a.mu.Lock()
 	blocked := a.noBitrate(m)
+	codec := ipc.CodecChange{
+		Codec:  m.EngineCodec(),
+		SSCUHQ: m == config.ModeSSCUHQ,
+	}
+	if m != config.ModeAAC {
+		codec.SSCBitrate = a.bitrateFor(m)
+	}
+	if m == config.ModeSSC {
+		codec.SSCMaxKbps, _ = a.workingMax(m)
+	}
 	a.mu.Unlock()
+	if !blocked && eng != nil && eng.running() && streaming {
+		if err := eng.in.Write(ipc.Command{Cmd: "codec", Codec: &codec}); err == nil {
+			a.setMode(m)
+			return
+		}
+	}
 	if eng != nil {
 		a.setBusy(T("остановка потока", "stopping the stream"))
 		a.stopForRestart(eng, !blocked)

@@ -42,13 +42,22 @@ type AudioCarry struct {
 	Virtual     bool   `json:"virtual,omitempty"`     // virtual headphones shown and default
 }
 
+// CodecChange selects the stream format on an active connection.
+type CodecChange struct {
+	Codec      string `json:"codec"`
+	SSCUHQ     bool   `json:"sscUhq,omitempty"`
+	SSCBitrate int    `json:"sscBitrate,omitempty"`
+	SSCMaxKbps int    `json:"sscMaxKbps,omitempty"`
+}
+
 // Command from tray to engine.
 type Command struct {
-	Cmd  string `json:"cmd"` // "stop" | "scan" | "connect" | "debug" | "lang"
-	Addr string `json:"addr,omitempty"`
-	On   bool   `json:"on,omitempty"`
-	Keep bool   `json:"keep,omitempty"` // stop: leave the audio routing for the next engine
-	Lang string `json:"lang,omitempty"`
+	Cmd   string       `json:"cmd"` // "stop" | "scan" | "connect" | "debug" | "lang"
+	Addr  string       `json:"addr,omitempty"`
+	On    bool         `json:"on,omitempty"`
+	Keep  bool         `json:"keep,omitempty"` // stop: leave the audio routing for the next engine
+	Lang  string       `json:"lang,omitempty"`
+	Codec *CodecChange `json:"codec,omitempty"`
 }
 
 // Found device from a scan.

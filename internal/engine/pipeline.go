@@ -50,10 +50,11 @@ type pipeline struct {
 }
 
 // set installs a new encoder (nil pauses the pipeline).
-func (p *pipeline) set(enc Encoder, mtu int) {
+func (p *pipeline) set(enc Encoder, mtu int, frag bool) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.enc = enc
+	p.frag = frag
 	// Payload budget: the media payload BTstack reports (L2CAP MTU minus
 	// the RTP header).
 	p.maxRaw = mtu

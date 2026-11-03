@@ -30,20 +30,20 @@ import (
 )
 
 type engine struct {
-	codecProbeRan bool
-	cfg           ipc.EngineConfig
-	out           *ipc.Writer
-	store         *keys.Store
+	cfg   ipc.EngineConfig
+	out   *ipc.Writer
+	store *keys.Store
 
 	mu     sync.Mutex
 	st     ipc.EngineStatus
 	target string // headphones address
 
-	ctx      context.Context
-	cancel   context.CancelFunc
-	retarget chan string
-	incoming chan incomingEv
-	disc     chan struct{}
+	ctx         context.Context
+	cancel      context.CancelFunc
+	retarget    chan string
+	changeCodec chan ipc.CodecChange
+	incoming    chan incomingEv
+	disc        chan struct{}
 
 	pipe     pipeline
 	cap      *audio.Capture
@@ -74,10 +74,11 @@ func Run(in io.Reader, stdout *os.File) int {
 		logf("dup stdout: %v", err)
 	}
 	e := &engine{
-		out:      ipc.NewWriter(out),
-		retarget: make(chan string, 4),
-		incoming: make(chan incomingEv, 8),
-		disc:     make(chan struct{}, 4),
+		out:         ipc.NewWriter(out),
+		retarget:    make(chan string, 4),
+		changeCodec: make(chan ipc.CodecChange, 1),
+		incoming:    make(chan incomingEv, 8),
+		disc:        make(chan struct{}, 4),
 	}
 	e.st.Volume = -1
 	r := ipc.NewReader(in)
@@ -139,6 +140,15 @@ func (e *engine) commands(r *ipc.Reader) {
 			e.cancel()
 		case "scan":
 			go e.scan()
+		case "codec":
+			if c.Codec != nil && (c.Codec.Codec == "aac" || c.Codec.Codec == "ssc") {
+				// Keep the latest request if the previous switch is still in progress.
+				select {
+				case <-e.changeCodec:
+				default:
+				}
+				e.changeCodec <- *c.Codec
+			}
 		case "connect":
 			select {
 			case e.retarget <- c.Addr:
@@ -189,7 +199,7 @@ func (e *engine) run() error {
 		logf("keys.json: %v", err)
 	}
 	opts := bt.Options{
-		EnableSSC:     e.cfg.Codec == "ssc" || codecProbeEnabled(),
+		EnableSSC:     true,
 		SSCCap:        uint8(e.cfg.SSCCap),
 		Keys:          e.store,
 		Logf:          logf,
@@ -451,7 +461,7 @@ func (e *engine) session(addrStr string) error {
 	if err != nil {
 		return err
 	}
-	defer enc.Close()
+	defer func() { enc.Close() }()
 	if err := bt.StartStream(ctx); err != nil {
 		return err
 	}
@@ -460,18 +470,55 @@ func (e *engine) session(addrStr string) error {
 	e.pipe.muted.Store(true)
 	e.unmuteAt.Store(time.Now().Add(4 * time.Second).UnixMilli())
 	go e.unmuteWhenSettled()
-	e.pipe.set(enc, mtu)
-	defer e.pipe.set(nil, mtu)
+	e.installEncoder(enc, mtu, codec)
+	defer e.pipe.set(nil, 0, false)
+	e.startVolumeSync()
+
+	for {
+		select {
+		case <-e.ctx.Done():
+			return nil
+		case <-e.disc:
+			return errLinkLost
+		case a := <-e.retarget:
+			e.target = a
+			return nil
+		case change := <-e.changeCodec:
+			if e.cfg.Codec == change.Codec && e.cfg.SSCUHQ == change.SSCUHQ {
+				continue
+			}
+			e.cfg.Codec, e.cfg.SSCUHQ = change.Codec, change.SSCUHQ
+			sscUHQMode = change.SSCUHQ
+			sscForced, sscWorking = change.SSCBitrate*1000, change.SSCMaxKbps*1000
+			if change.Codec == "ssc" {
+				codec = bt.CodecSSC
+			} else {
+				codec = bt.CodecAAC
+			}
+			next, mtu, err := e.switchCodec(ctx, caps, codec)
+			if err != nil {
+				logf("codec switch to %s: %v", codec, err)
+				return errReconnect
+			}
+			enc.Close()
+			enc = next
+			e.installEncoder(enc, mtu, codec)
+		}
+	}
+}
+
+func (e *engine) installEncoder(enc Encoder, mtu int, codec bt.Codec) {
+	frag := aacMode == "frag" && codec == bt.CodecAAC
+	e.pipe.set(enc, mtu, frag)
 	bw := ""
 	if b, ok := enc.(interface{ Bandwidth() int }); ok {
 		bw = fmt.Sprintf(", band %d Hz", b.Bandwidth())
 	}
-	e.pipe.frag = aacMode == "frag" && codec == bt.CodecAAC
 	label, rate := codec.String(), e.srate
 	if si, ok := enc.(interface{ streamInfo() (string, int) }); ok {
 		label, rate = si.streamInfo()
 	}
-	logf("streaming %s %d Hz, %d kbps%s, payload %d, packing %s", label, rate, enc.BitrateKbps(), bw, mtu, map[bool]string{true: "frag", false: "fit"}[e.pipe.frag])
+	logf("streaming %s %d Hz, %d kbps%s, payload %d, packing %s", label, rate, enc.BitrateKbps(), bw, mtu, map[bool]string{true: "frag", false: "fit"}[frag])
 	e.update(func(s *ipc.EngineStatus) {
 		s.Phase, s.Message = "streaming", ""
 		s.Streaming = true
@@ -479,26 +526,6 @@ func (e *engine) session(addrStr string) error {
 		s.BitrateKbps = enc.BitrateKbps()
 		s.SampleRate = rate
 	})
-	e.startVolumeSync()
-
-	if codecProbeEnabled() && !e.codecProbeRan && codec == bt.CodecAAC && !remoteCfg {
-		e.codecProbeRan = true
-		if err := e.probeCodecSwitch(ctx, caps); err != nil {
-			logf("codec probe failed: %v", err)
-			return err
-		}
-		return nil
-	}
-
-	select {
-	case <-e.ctx.Done():
-		return nil
-	case <-e.disc:
-		return errLinkLost
-	case a := <-e.retarget:
-		e.target = a
-		return nil
-	}
 }
 
 func (e *engine) unmuteWhenSettled() {
@@ -741,7 +768,7 @@ func (e *engine) onLinkLost() {
 // redoes them on the next connection.
 // stopAudio stops capture and volume sync only.
 func (e *engine) stopAudio() {
-	e.pipe.set(nil, 0)
+	e.pipe.set(nil, 0, false)
 	if v := e.vs(); v != nil {
 		v.Stop()
 		e.vsp.Store(nil)
@@ -755,7 +782,7 @@ func (e *engine) stopAudio() {
 
 func (e *engine) releaseAudio() {
 	e.carried = false
-	e.pipe.set(nil, 0)
+	e.pipe.set(nil, 0, false)
 	e.pipe.userMuted.Store(false)
 	if v := e.vs(); v != nil {
 		v.Stop()
