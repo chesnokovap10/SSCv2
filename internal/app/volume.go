@@ -35,9 +35,9 @@ func (a *App) adjustVolume(action int) {
 	muted := a.s.HeadphonesMuted
 	switch action {
 	case idVolDown:
-		level = max(0, level-6)
+		level = max(0, level-4)
 	case idVolUp:
-		level = min(127, level+6)
+		level = min(127, level+4)
 		muted = false
 	case idVolMute:
 		muted = !muted

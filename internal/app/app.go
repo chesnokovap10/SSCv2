@@ -92,7 +92,8 @@ type App struct {
 	driverVariant string
 	// volSettled: closed when the level carried to the headphones in
 	// Windows was applied (exit waits for it)
-	volSettled chan struct{}
+	volSettled        chan struct{}
+	stopVolumeRestore func() // guarded by opMu
 	// carry: audio routing left by an engine stopped for a restart
 	carry    *ipc.AudioCarry
 	menuText map[int]string
@@ -294,6 +295,10 @@ func (a *App) enable(m config.Mode) {
 	a.opMu.Lock()
 	defer a.opMu.Unlock()
 	defer a.setBusy("")
+	if a.stopVolumeRestore != nil {
+		a.stopVolumeRestore()
+		a.stopVolumeRestore = nil
+	}
 
 	a.mu.Lock()
 	cur, eng, streaming, pendingUHQ := a.mode, a.eng, a.st.Streaming, a.pendingUHQ
@@ -362,12 +367,14 @@ func (a *App) enable(m config.Mode) {
 		return
 	}
 	if st.Mode == driver.BthUSB {
-		if level, ok := audio.HeadphonesLevel(a.headphonesName()); ok && level < 0.99 {
+		if level, muted, ok := audio.HeadphonesVolume(a.headphonesName()); ok {
 			a.mu.Lock()
-			if a.s.HeadphonesVolume == nil {
+			// An unsolicited Buds reset to 100% must not replace a saved level.
+			if level < 0.99 {
 				value := audio.ScalarTo127(level)
 				a.s.HeadphonesVolume = &value
 			}
+			a.s.HeadphonesMuted = muted
 			a.mu.Unlock()
 		}
 	}
@@ -433,6 +440,9 @@ func (a *App) startEngineLocked() {
 	a.mu.Unlock()
 	p, err := startEngine(cfg, a.onEngineEvent, a.onEngineExit)
 	if err != nil {
+		if cfg.Carry != nil {
+			engine.RestoreAudio(ipc.EngineStatus{MuteEndpoint: cfg.Carry.MuteEndpoint})
+		}
 		logf("start engine: %v", err)
 		a.t.Balloon("SSCv2", T("Не удалось запустить движок: ", "Could not start the engine: ")+err.Error(), 2)
 		return
@@ -449,9 +459,15 @@ func (a *App) disable() {
 	a.opMu.Lock()
 	defer a.opMu.Unlock()
 	defer a.setBusy("")
+	if a.stopVolumeRestore != nil {
+		a.stopVolumeRestore()
+		a.stopVolumeRestore = nil
+	}
+
 	a.mu.Lock()
 	want := float32(a.volumeLocked()) / 127
-	eng := a.eng
+	muted := a.s.HeadphonesMuted
+	eng, last := a.eng, a.st
 	a.eng = nil
 	a.pendingUHQ = false
 	a.mode = config.ModeOff
@@ -460,7 +476,9 @@ func (a *App) disable() {
 	a.mu.Unlock()
 	if eng != nil {
 		a.setBusy(T("остановка потока", "stopping the stream"))
-		eng.stop(15*time.Second, false)
+		if eng.stop(15*time.Second, false) {
+			engine.RestoreAudio(last)
+		}
 	}
 	a.mu.Lock()
 	a.carry = nil
@@ -479,12 +497,14 @@ func (a *App) disable() {
 		a.mu.Unlock()
 		logx.Dbgf("mode", "returning the adapter to Windows; volume restore for %q (mode %q)", name, nz(restore, "default"))
 		if restore != "off" {
-			settled := make(chan struct{})
+			settled, cancel, done := make(chan struct{}), make(chan struct{}), make(chan struct{})
+			a.stopVolumeRestore = func() { close(cancel); <-done }
 			a.mu.Lock()
 			a.volSettled = settled
 			a.mu.Unlock()
 			go func() {
-				if !audio.RestoreHeadphonesVolume(name, want, 40*time.Second, logf, settled) {
+				defer close(done)
+				if !audio.RestoreHeadphonesVolume(name, want, muted, 40*time.Second, logf, settled, cancel) {
 					logf("volume: headphones %q did not come to Windows", name)
 				}
 			}()
@@ -588,7 +608,9 @@ func (a *App) onEngineExit(p *engineProc, err error) {
 		return
 	}
 	logf("engine exited unexpectedly: %v (phase %s: %s)", err, last.Phase, last.Message)
-	engine.RestoreAudio(last)
+	if current {
+		engine.RestoreAudio(last)
+	}
 	if !current || quitting || mode == config.ModeOff {
 		a.refresh()
 		return
@@ -643,7 +665,9 @@ func (a *App) stopForRestart(eng *engineProc, keep bool) {
 	a.mu.Lock()
 	st := a.st
 	a.mu.Unlock()
-	eng.stop(15*time.Second, keep)
+	if eng.stop(15*time.Second, keep) && !keep {
+		engine.RestoreAudio(st)
+	}
 	a.mu.Lock()
 	if a.eng == eng {
 		a.eng = nil
@@ -1318,8 +1342,7 @@ func (a *App) exit(keepMode bool) {
 			a.mu.Unlock()
 		}
 	}
-	// The level carried to the headphones in Windows is applied once they
-	// held 3 s there: wait for it, or quitting would leave their old level.
+	// Wait for the Windows endpoint to receive the carried volume and mute.
 	a.mu.Lock()
 	settled := a.volSettled
 	a.mu.Unlock()

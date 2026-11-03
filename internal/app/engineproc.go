@@ -71,14 +71,16 @@ func (p *engineProc) send(c ipc.Command) { _ = p.in.Write(c) }
 
 // stop asks the engine to release everything; kills it after timeout.
 // keep leaves the physical output muted for the next engine.
-func (p *engineProc) stop(timeout time.Duration, keep bool) {
+func (p *engineProc) stop(timeout time.Duration, keep bool) (forced bool) {
 	p.stopReq.Store(true)
 	p.send(ipc.Command{Cmd: "stop", Keep: keep})
 	select {
 	case <-p.done:
+		return false
 	case <-time.After(timeout):
 		_ = p.cmd.Process.Kill()
 		<-p.done
+		return true
 	}
 }
 

@@ -72,6 +72,59 @@ func SetMute(id string, mute bool) error {
 	return hr(vcall(vol, 14, m, 0))
 }
 
+// HoldMute mutes a render endpoint and reasserts mute after external changes.
+// Stop the guard before restoring the endpoint's original mute state.
+func HoldMute(id string) (stop func(), err error) {
+	vol, err := endpointVolume(id)
+	if err != nil {
+		return nil, err
+	}
+	wake := make(chan struct{}, 1)
+	cb := newVolCallback(func(_ windows.GUID, muted bool, _ float32) {
+		if !muted {
+			select {
+			case wake <- struct{}{}:
+			default:
+			}
+		}
+	})
+	if err := hr(vcall(vol, 3, uintptr(unsafe.Pointer(cb)))); err != nil {
+		liveCbs.Delete(cb)
+		release(vol)
+		return nil, err
+	}
+	closeVolume := func() {
+		cb.on.Store(nil)
+		if hr(vcall(vol, 4, uintptr(unsafe.Pointer(cb)))) == nil {
+			liveCbs.Delete(cb)
+		}
+		release(vol)
+	}
+	if err := hr(vcall(vol, 14, 1, 0)); err != nil {
+		closeVolume()
+		return nil, err
+	}
+	stopCh, done := make(chan struct{}), make(chan struct{})
+	go func() {
+		defer close(done)
+		for {
+			select {
+			case <-stopCh:
+				return
+			case <-wake:
+				if err := hr(vcall(vol, 14, 1, 0)); err != nil {
+					logx.Printf("restore output mute: %v", err)
+				}
+			}
+		}
+	}()
+	return func() {
+		close(stopCh)
+		<-done
+		closeVolume()
+	}, nil
+}
+
 func ScalarTo127(s float32) uint8 {
 	if s < 0 {
 		s = 0
@@ -172,23 +225,27 @@ func headphonesEndpoint(name string) (Endpoint, bool) {
 	return Endpoint{}, false
 }
 
-// HeadphonesLevel is the level Windows stores for the real headphones
-// (only while they are connected to Windows).
-func HeadphonesLevel(name string) (float32, bool) {
+// HeadphonesVolume reads the Windows stereo endpoint's level and mute state.
+func HeadphonesVolume(name string) (level float32, muted bool, ok bool) {
 	if name == "" {
-		return 0, false
+		return 0, false, false
 	}
 	e, ok := headphonesEndpoint(name)
 	if !ok {
-		return 0, false
+		return 0, false, false
 	}
 	vol, err := endpointVolume(e.ID)
 	if err != nil {
-		return 0, false
+		return 0, false, false
 	}
 	defer release(vol)
-	s, err := getScalar(vol)
-	return s, err == nil
+	level, err = getScalar(vol)
+	if err != nil {
+		return 0, false, false
+	}
+	var mute int32
+	err = hr(vcall(vol, 15, uintptr(unsafe.Pointer(&mute))))
+	return level, mute != 0, err == nil
 }
 
 // SetLevel sets an endpoint's master level (0..1).
@@ -225,102 +282,73 @@ func Muted(id string) (bool, error) {
 	return m != 0, err
 }
 
-// RestoreHeadphonesVolume runs after the adapter returned to Windows.
-// While the headphones connect, their endpoint can vanish and come back,
-// and Galaxy Buds jump to 100 %. Touching the volume needlessly in that
-// phase makes the output audibly bounce, so:
-//   - from the first moment, only a jump to ~100 % is answered (within
-//     ~0.1 s, one plain set back to the target, no wiggle);
-//   - once the endpoint has been present for 3 s, `want` (0..1; <0 = keep
-//     Windows' level) is applied once if it differs;
-//   - then 15 s more of the jump guard. Touches no other device.
-//
-// settled (may be nil) is closed once the level was applied (or the wait
-// ended): the tray waits for it before quitting.
-func RestoreHeadphonesVolume(name string, want float32, timeout time.Duration, logf func(string, ...any), settled chan struct{}) bool {
-	var once sync.Once
-	done := func() {
-		if settled != nil {
-			once.Do(func() { close(settled) })
+// RestoreHeadphonesVolume applies the carried state when Windows exposes the
+// stereo endpoint, then briefly guards against reconnect resets to 100%.
+func RestoreHeadphonesVolume(name string, want float32, muted bool, timeout time.Duration, logf func(string, ...any), settled chan struct{}, cancel <-chan struct{}) bool {
+	applied := false
+	defer func() {
+		if !applied {
+			close(settled)
 		}
-	}
-	defer done()
+	}()
 	if name == "" {
 		return false
 	}
-	var vol uintptr
+	tick := time.NewTicker(50 * time.Millisecond)
+	defer tick.Stop()
+	deadline := time.NewTimer(timeout)
+	defer deadline.Stop()
 	curID := ""
-	var stableSince, settledAt time.Time
-	appears, jumps := 0, 0
-	stored := float32(-1)
-	defer func() {
-		if vol != 0 {
-			release(vol)
-		}
-	}()
-	target := func() float32 { // level used against jumps before settling
-		if want >= 0 && want < 0.99 {
-			return want
-		}
-		if stored >= 0 && stored < 0.99 {
-			return stored
-		}
-		return FallbackLevel
-	}
-	deadline := time.Now().Add(timeout)
-	for time.Now().Before(deadline) {
-		if !settledAt.IsZero() && time.Since(settledAt) > 15*time.Second {
+	for {
+		select {
+		case <-cancel:
 			return true
+		case <-deadline.C:
+			return applied
+		case <-tick.C:
 		}
 		e, ok := headphonesEndpoint(name)
-		switch {
-		case !ok:
-			if vol != 0 {
-				release(vol)
-				vol = 0
-			}
-			curID, stableSince = "", time.Time{}
-		case e.ID != curID || vol == 0:
-			if vol != 0 {
-				release(vol)
-				vol = 0
-			}
-			if v, err := endpointVolume(e.ID); err == nil {
-				vol, curID, stableSince = v, e.ID, time.Now()
-				appears++
-				if stored < 0 {
-					if st, err := getScalar(vol); err == nil && st < 0.99 {
-						stored = st
-					}
-				}
-			}
+		if !ok {
+			curID = ""
+			continue
 		}
-		if vol != 0 {
-			cur, err := getScalar(vol)
-			if err == nil && cur >= 0.99 && target() < 0.95 {
-				jumps++
-				_ = setScalar(vol, target(), &trayContext) // Buds' jump: answer at once
-			} else if err == nil && settledAt.IsZero() && time.Since(stableSince) >= 3*time.Second {
-				settledAt = time.Now()
-				t := target()
-				if absf(cur-t) > 0.015 {
-					_ = setScalar(vol, t, &trayContext)
-				}
-				logf("volume: headphones settled in Windows (appeared %d time(s), 100%% jumps answered %d); level %.0f%% -> %.0f%%",
-					appears, jumps, cur*100, t*100)
-				done()
-			} else if err == nil && !settledAt.IsZero() && absf(cur-target()) > 0.015 && cur < 0.99 {
-				return true // the user changed it
-			}
+		vol, err := endpointVolume(e.ID)
+		if err != nil {
+			continue
 		}
-		time.Sleep(50 * time.Millisecond)
+		level, err := getScalar(vol)
+		if err != nil {
+			release(vol)
+			continue
+		}
+		if curID != e.ID {
+			if muted {
+				err = hr(vcall(vol, 14, 1, uintptr(unsafe.Pointer(&trayContext))))
+			}
+			if err == nil {
+				err = setScalar(vol, want, &trayContext)
+			}
+			if err == nil && !muted {
+				err = hr(vcall(vol, 14, 0, uintptr(unsafe.Pointer(&trayContext))))
+			}
+			release(vol)
+			if err == nil {
+				curID = e.ID
+				if !applied {
+					applied = true
+					close(settled)
+					deadline.Reset(5 * time.Second)
+				}
+				logf("volume: Windows headphones %.0f%% -> %.0f%% (mute=%v)", level*100, want*100, muted)
+			}
+			continue
+		}
+		if level >= 0.99 && want < 0.95 {
+			_ = setScalar(vol, want, &trayContext)
+		} else if math.Abs(float64(level-want)) > 0.015 {
+			release(vol)
+			return applied // the user changed the level
+		}
+		release(vol)
 	}
-	return !settledAt.IsZero()
-}
-
-func absf(f float32) float32 {
-	if f < 0 {
-		return -f
-	}
-	return f
 }

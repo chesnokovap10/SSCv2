@@ -83,7 +83,7 @@ func (s *menuSlider) draw(it *drawMenuItem) {
 		alignment uintptr
 	}{
 		{s.label, 0},
-		{fmt.Sprintf("%d%%", (int(s.level)*100+63)/127), 2},
+		{fmt.Sprintf("%d/127", s.level), 2},
 	} {
 		label, _ := windows.UTF16PtrFromString(entry.label)
 		drawText.Call(dc, uintptr(unsafe.Pointer(label)), ^uintptr(0), uintptr(unsafe.Pointer(&textRect)), 0x820|entry.alignment)
@@ -219,7 +219,7 @@ func menuFilter(code, wparam, lparam uintptr) uintptr {
 					return 1
 				}
 				if s.selected && s.available && (m.wParam == 0x25 || m.wParam == 0x27) {
-					step := 3
+					step := 4
 					if m.wParam == 0x25 {
 						step = -step
 					}

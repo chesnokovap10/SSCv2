@@ -45,9 +45,10 @@ type engine struct {
 	incoming    chan incomingEv
 	disc        chan struct{}
 
-	pipe     pipeline
-	cap      *audio.Capture
-	volume   atomic.Uint32
+	pipe          pipeline
+	cap           *audio.Capture
+	stopMuteGuard func()
+
 	srate    int
 	unmuteAt atomic.Int64 // unix ms when the pipeline may play again
 	keep     atomic.Bool  // stopped for a restart: leave the audio routing
@@ -99,8 +100,7 @@ func Run(in io.Reader, stdout *os.File) int {
 	logf("engine start %s: codec=%s uhq=%v bitrate aac=%d ssc=%d maxmtu=%v headphones=%q mouse=%q adapter=%04X:%04X debug=%v lang=%s",
 		ipc.Version, e.cfg.Codec, e.cfg.SSCUHQ, e.cfg.AACBitrate, e.cfg.SSCBitrate, e.cfg.MaxMTU, e.cfg.Headphones, e.cfg.Mouse,
 		e.cfg.VID, e.cfg.PID, e.cfg.Debug, i18n.Lang())
-	e.volume.Store(uint32(e.cfg.Volume))
-	e.pipe.userMuted.Store(e.cfg.HeadphonesMuted)
+	e.pipe.setVolume(e.cfg.Volume, e.cfg.HeadphonesMuted)
 	e.target = e.cfg.Headphones
 	if c := e.cfg.Carry; c != nil {
 		// the previous engine left the routing in place: own it from now on
@@ -142,9 +142,7 @@ func (e *engine) commands(r *ipc.Reader) {
 		case "scan":
 			go e.scan()
 		case "volume":
-			e.volume.Store(uint32(c.Volume))
-			e.pipe.userMuted.Store(c.On)
-			bt.SetVolume(c.Volume)
+			e.pipe.setVolume(c.Volume, c.On)
 		case "codec":
 			if c.Codec != nil && (c.Codec.Codec == "aac" || c.Codec.Codec == "ssc") {
 				// Keep the latest request if the previous switch is still in progress.
@@ -503,14 +501,14 @@ func (e *engine) session(addrStr string) error {
 	if err := bt.StartStream(ctx); err != nil {
 		return err
 	}
-	// Silence until the headphones settled on the Windows level (Galaxy Buds
+	// Silence until the headphones settled on the reference level (Galaxy Buds
 	// jump to their own, often 100 %, level right after connecting).
 	e.pipe.muted.Store(true)
 	e.unmuteAt.Store(time.Now().Add(4 * time.Second).UnixMilli())
 	go e.unmuteWhenSettled()
 	e.installEncoder(enc, mtu, codec)
 	defer e.pipe.set(nil, 0, false)
-	bt.SetVolume(uint8(e.volume.Load()))
+	bt.SetVolume(127)
 
 	for {
 		select {
@@ -657,11 +655,13 @@ func (e *engine) setupAudio() error {
 		cp.Close()
 		return err
 	}
-	if err := audio.SetMute(id, true); err != nil {
+	stopMuteGuard, err := audio.HoldMute(id)
+	if err != nil {
 		cp.Close()
 		return err
 	}
 	if err := cp.Start(func(samples []float32, frames int) { e.pipe.onCapture(samples, frames, cp.Format.Channels) }); err != nil {
+		stopMuteGuard()
 		if !muted {
 			_ = audio.SetMute(id, false)
 		}
@@ -669,6 +669,7 @@ func (e *engine) setupAudio() error {
 		return err
 	}
 	e.cap = cp
+	e.stopMuteGuard = stopMuteGuard
 	e.srate = cp.Format.SampleRate
 	e.carried = false
 	logf("capture: %s [%s]", cp.Device.Name, cp.Format)
@@ -694,9 +695,6 @@ func (e *engine) btEvents() {
 			case e.disc <- struct{}{}:
 			default:
 			}
-		case bt.EvVolume:
-			e.volume.Store(uint32(ev.Volume))
-			_ = e.out.Write(ipc.Event{Ev: "volume", Volume: &ev.Volume})
 		case bt.EvACLUp, bt.EvA2DPReady:
 			select {
 			case e.incoming <- incomingEv{kind: ev.Kind, addr: ev.Addr.String()}:
@@ -706,7 +704,7 @@ func (e *engine) btEvents() {
 			// Give the confirmed headphone volume time to settle.
 			e.unmuteAt.Store(time.Now().Add(250 * time.Millisecond).UnixMilli())
 		case bt.EvAVRCPConnected:
-			bt.SetVolume(uint8(e.volume.Load()))
+			bt.SetVolume(127)
 		case bt.EvLinkKey:
 			logf("new link key for %s", ev.Addr)
 			_ = e.out.Write(ipc.Event{Ev: "linkkey", Addr: ev.Addr.String(),
@@ -751,7 +749,7 @@ func (e *engine) ticker() {
 		bt.SetPlaying(bt.Streaming() && e.pipe.loudWithin(3*time.Second))
 		e.update(func(s *ipc.EngineStatus) {
 			s.Queue, s.Fails, s.Sent = q, fails, sent
-			s.Volume = int(bt.Volume())
+			s.Volume = int(e.pipe.volume.Load() & 127)
 			s.AVRCP = bt.AVRCPConnected()
 			s.Streaming = bt.Streaming()
 			s.Connected = bt.Connected()
@@ -779,6 +777,18 @@ func (e *engine) scan() {
 	_ = e.out.Write(ipc.Event{Ev: "scan", Devices: list})
 }
 
+func (e *engine) closeCapture() {
+	e.pipe.set(nil, 0, false)
+	if e.stopMuteGuard != nil {
+		e.stopMuteGuard()
+		e.stopMuteGuard = nil
+	}
+	if e.cap != nil {
+		e.cap.Close()
+		e.cap = nil
+	}
+}
+
 // teardown restores the audio setup and releases the adapter.
 var (
 	errLinkLost  = i18n.Error("связь с наушниками потеряна", "the link to the headphones was lost")
@@ -804,21 +814,13 @@ func (e *engine) onLinkLost() {
 // redoes them on the next connection.
 // stopAudio stops capture and volume sync only.
 func (e *engine) stopAudio() {
-	e.pipe.set(nil, 0, false)
-	if e.cap != nil {
-		e.cap.Close()
-		e.cap = nil
-	}
+	e.closeCapture()
 	logf("audio: routing left for the next engine")
 }
 
 func (e *engine) releaseAudio() {
 	e.carried = false
-	e.pipe.set(nil, 0, false)
-	if e.cap != nil {
-		e.cap.Close()
-		e.cap = nil
-	}
+	e.closeCapture()
 	e.mu.Lock()
 	st := e.st
 	e.mu.Unlock()

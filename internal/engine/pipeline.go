@@ -32,8 +32,8 @@ type pipeline struct {
 	active atomic.Bool
 	// muted: send silence (headphones' volume not settled yet)
 	muted atomic.Bool
-	// userMuted: the output is muted in Windows (send silence)
-	userMuted atomic.Bool
+	// volume holds the PCM level in bits 0..6 and mute in bit 7.
+	volume atomic.Uint32
 	// frag: split frames larger than one packet (RFC 3016)
 	frag bool
 	// perPacket: one frame per packet and the RTP timestamp counts packets,
@@ -96,10 +96,6 @@ func (p *pipeline) onCapture(s []float32, frames, ch int) {
 		return
 	}
 
-	if p.muted.Load() || p.userMuted.Load() {
-		clear(s[:frames*ch])
-	}
-
 	// Downmix to stereo (ITU-R BS.775, LFE at -6 dB) so centre/surround are
 	// mixed in rather than dropped.
 	var peak float32
@@ -147,7 +143,7 @@ func (p *pipeline) onCapture(s []float32, frames, ch int) {
 	firstTS := p.ts
 	nframes := 0
 	for off+block <= len(p.pcm) {
-		out, err := p.enc.Encode(p.pcm[off : off+block])
+		out, err := p.encode(p.pcm[off : off+block])
 		if err == nil && len(out) > 0 {
 			p.encBytes.Add(uint64(len(out)))
 			if int32(len(out)) > p.maxFrame.Load() {
@@ -194,10 +190,33 @@ func (p *pipeline) onCapture(s []float32, frames, ch int) {
 	p.pcm = p.pcm[:n]
 }
 
+func (p *pipeline) setVolume(level uint8, muted bool) {
+	state := uint32(min(level, 127))
+	if muted {
+		state |= 128
+	}
+	p.volume.Store(state)
+}
+
+func (p *pipeline) encode(pcm []float32) ([]byte, error) {
+	level := p.volume.Load()
+	switch {
+	case p.muted.Load() || level >= 128 || level == 0:
+		clear(pcm)
+	case level < 127:
+		gain := float32(level) / 127
+		gain *= gain
+		for i := range pcm {
+			pcm[i] *= gain
+		}
+	}
+	return p.enc.Encode(pcm)
+}
+
 // encodePerPacket: one frame per packet, the RTP timestamp counts packets.
 func (p *pipeline) encodePerPacket(block int, off *int) {
 	for *off+block <= len(p.pcm) {
-		out, err := p.enc.Encode(p.pcm[*off : *off+block])
+		out, err := p.encode(p.pcm[*off : *off+block])
 		*off += block
 		if err != nil || len(out) == 0 {
 			continue
