@@ -1017,8 +1017,10 @@ func (a *App) menu() []tray.Item {
 	} else if mode.Streaming() {
 		cur := a.bitrateFor(mode)
 		label := T("Битрейт: ", "Bitrate: ") + bitrateText(cur)
-		if a.st.Streaming && a.st.BitrateKbps > 0 && cur == 0 {
-			label += fmt.Sprintf(" (%d)", a.st.BitrateKbps)
+		autoRate := ""
+		if a.st.Streaming && a.st.Codec == modeName(mode) && a.st.BitrateKbps > 0 && cur == 0 {
+			autoRate = fmt.Sprintf(T("%d кбит/с", "%d kbps"), a.st.BitrateKbps)
+			label += " (" + autoRate + ")"
 		}
 		var sub []tray.Item
 		lim, model := a.workingMax(mode)
@@ -1028,13 +1030,17 @@ func (a *App) menu() []tray.Item {
 			}
 			t := bitrateText(b)
 			if b == 0 {
-				t += " (" + autoHint(mode, a.s.MaxMTU, lim, model) + ")"
+				hint := autoRate
+				if hint == "" {
+					hint = autoHint(mode, a.s.MaxMTU, lim, model)
+				}
+				t += " (" + hint + ")"
 			} else if lim > 0 && b > lim || lim < 0 {
 				t += T(" - не проверен", " - not checked")
 			}
 			sub = append(sub, tray.Item{Text: t, ID: idBitrateBase + b, Radio: true, Checked: b == cur, Disabled: busy})
 		}
-		items = append(items, tray.Item{Text: label, Sub: sub})
+		items = append(items, tray.Item{Text: label, Sub: sub, SubRevision: string(mode)})
 	} else {
 		items = append(items, tray.Item{Text: T("Битрейт: —", "Bitrate: -")})
 	}

@@ -102,6 +102,37 @@ func (t *Tray) updateMenuState(m *liveMenu, i int, item Item) {
 	}
 }
 
+// Refresh a submenu before Windows measures and paints its popup.
+func (t *Tray) prepareSubmenu(m *liveMenu, next []Item, handle uintptr) {
+	for i, sub := range m.children {
+		if sub == nil {
+			continue
+		}
+		for _, item := range next {
+			if !sameMenuSlot(m.items[i], item) {
+				continue
+			}
+			if sub.handle == handle {
+				t.syncBitratePopup(m, i, item)
+				t.updateMenu(sub, item.Sub)
+				return
+			}
+			if sub.find(handle) != nil {
+				t.prepareSubmenu(sub, item.Sub, handle)
+				return
+			}
+			break
+		}
+	}
+}
+
+func (t *Tray) syncBitratePopup(m *liveMenu, i int, item Item) {
+	if item.SubRevision != "" && m.items[i].Text != item.Text {
+		t.writeMenuItem(m, i, item, m.children[i], true)
+		m.items[i].Text = item.Text
+	}
+}
+
 func (t *Tray) hasOpenChild(m *liveMenu) bool {
 	for _, handle := range t.activeMenus {
 		if handle != m.handle && m.find(handle) != nil {
@@ -122,6 +153,14 @@ func (t *Tray) updateMenu(m *liveMenu, next []Item) {
 			}
 			for _, item := range next {
 				if sameMenuSlot(m.items[i], item) {
+					if item.SubRevision != "" {
+						for _, handle := range t.activeMenus {
+							if handle == sub.handle {
+								t.syncBitratePopup(m, i, item)
+								break
+							}
+						}
+					}
 					t.updateMenu(sub, item.Sub)
 					break
 				}

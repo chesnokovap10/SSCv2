@@ -15,14 +15,15 @@ import (
 
 // Item is one menu entry. ID 0 + no Sub + !Separator = disabled label.
 type Item struct {
-	Slider    bool
-	Text      string
-	ID        int
-	Checked   bool
-	Radio     bool
-	Disabled  bool
-	Separator bool
-	Sub       []Item
+	SubRevision string `json:"-"`
+	Slider      bool
+	Text        string
+	ID          int
+	Checked     bool
+	Radio       bool
+	Disabled    bool
+	Separator   bool
+	Sub         []Item
 }
 
 // Tray drives the icon. Menu is called on every click to build the
@@ -284,6 +285,7 @@ func wndProc(hwnd, msg, wparam, lparam uintptr) uintptr {
 	switch uint32(msg) {
 	case 0x0117: // WM_INITMENUPOPUP
 		if t.openMenu != nil && wparam != t.openMenu.handle {
+			t.prepareSubmenu(t.openMenu, t.Menu(), wparam)
 			t.activeMenus = append(t.activeMenus, wparam)
 		}
 	case 0x0125: // WM_UNINITMENUPOPUP
