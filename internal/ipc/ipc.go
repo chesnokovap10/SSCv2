@@ -14,22 +14,23 @@ import (
 
 // EngineConfig is the first line the tray writes to the engine.
 type EngineConfig struct {
-	Codec        string `json:"codec"` // "aac" | "ssc"
-	Headphones   string `json:"headphones,omitempty"`
-	Mouse        string `json:"mouse,omitempty"`
-	VID          uint16 `json:"vid"`
-	PID          uint16 `json:"pid"`
-	MuteSpeakers bool   `json:"muteSpeakers"`
-	Verbose      bool   `json:"verbose,omitempty"`
-	Debug        bool   `json:"debug,omitempty"`
-	Lang         string `json:"lang,omitempty"`       // "ru" | "en"
-	MaxMTU       bool   `json:"maxMTU,omitempty"`     // 1017-byte media packets (Samsung Galaxy Buds2 Pro)
-	AACMode      string `json:"aacMode,omitempty"`    // "fit" | "frag"
-	AACBitrate   int    `json:"aacBitrate,omitempty"` // kbps, 0 = as high as a packet allows
-	SSCBitrate   int    `json:"sscBitrate,omitempty"` // kbps, 0 = like the phone / UHQ: highest that fits
-	SSCUHQ       bool   `json:"sscUhq,omitempty"`     // SSC UHQ (96 kHz)
-	SSCMaxKbps   int    `json:"sscMaxKbps,omitempty"` // highest working SSC kbps on these headphones (Auto), 0 = not known
-	SSCCap       int    `json:"sscCap,omitempty"`     // SSC config byte, 0 = like the phone
+	Codec           string `json:"codec"` // "aac" | "ssc"
+	Headphones      string `json:"headphones,omitempty"`
+	Mouse           string `json:"mouse,omitempty"`
+	VID             uint16 `json:"vid"`
+	PID             uint16 `json:"pid"`
+	Volume          uint8  `json:"volume"`
+	HeadphonesMuted bool   `json:"headphonesMuted,omitempty"`
+	Verbose         bool   `json:"verbose,omitempty"`
+	Debug           bool   `json:"debug,omitempty"`
+	Lang            string `json:"lang,omitempty"`       // "ru" | "en"
+	MaxMTU          bool   `json:"maxMTU,omitempty"`     // 1017-byte media packets (Samsung Galaxy Buds2 Pro)
+	AACMode         string `json:"aacMode,omitempty"`    // "fit" | "frag"
+	AACBitrate      int    `json:"aacBitrate,omitempty"` // kbps, 0 = as high as a packet allows
+	SSCBitrate      int    `json:"sscBitrate,omitempty"` // kbps, 0 = like the phone / UHQ: highest that fits
+	SSCUHQ          bool   `json:"sscUhq,omitempty"`     // SSC UHQ (96 kHz)
+	SSCMaxKbps      int    `json:"sscMaxKbps,omitempty"` // highest working SSC kbps on these headphones (Auto), 0 = not known
+	SSCCap          int    `json:"sscCap,omitempty"`     // SSC config byte, 0 = like the phone
 	// Carry: the audio routing a previous engine left in place (it was
 	// stopped for a restart with Keep): this engine owns and undoes it.
 	Carry *AudioCarry `json:"carry,omitempty"`
@@ -37,9 +38,7 @@ type EngineConfig struct {
 
 // AudioCarry is what an engine changed in the Windows audio setup.
 type AudioCarry struct {
-	PrevDefault string `json:"prevDefault,omitempty"` // output to give back at "off"
-	Muted       bool   `json:"muted,omitempty"`       // speakers muted by us (loopback)
-	Virtual     bool   `json:"virtual,omitempty"`     // virtual headphones shown and default
+	MuteEndpoint string `json:"muteEndpoint,omitempty"`
 }
 
 // CodecChange selects the stream format on an active connection.
@@ -52,12 +51,13 @@ type CodecChange struct {
 
 // Command from tray to engine.
 type Command struct {
-	Cmd   string       `json:"cmd"` // "stop" | "scan" | "connect" | "debug" | "lang"
-	Addr  string       `json:"addr,omitempty"`
-	On    bool         `json:"on,omitempty"`
-	Keep  bool         `json:"keep,omitempty"` // stop: leave the audio routing for the next engine
-	Lang  string       `json:"lang,omitempty"`
-	Codec *CodecChange `json:"codec,omitempty"`
+	Volume uint8        `json:"volume,omitempty"`
+	Cmd    string       `json:"cmd"` // "stop" | "scan" | "connect" | "debug" | "lang"
+	Addr   string       `json:"addr,omitempty"`
+	On     bool         `json:"on,omitempty"`
+	Keep   bool         `json:"keep,omitempty"` // stop: leave the audio routing for the next engine
+	Lang   string       `json:"lang,omitempty"`
+	Codec  *CodecChange `json:"codec,omitempty"`
 }
 
 // Found device from a scan.
@@ -71,8 +71,9 @@ type Found struct {
 
 // EngineStatus is a full snapshot sent whenever something changes.
 type EngineStatus struct {
-	Phase   string `json:"phase"` // firmware|starting|connecting|streaming|waiting|idle|error|stopped
-	Message string `json:"message,omitempty"`
+	MuteEndpoint string `json:"muteEndpoint,omitempty"`
+	Phase        string `json:"phase"` // firmware|starting|connecting|streaming|waiting|idle|error|stopped
+	Message      string `json:"message,omitempty"`
 
 	AdapterAddr string `json:"adapterAddr,omitempty"`
 	Chip        string `json:"chip,omitempty"`
@@ -89,10 +90,8 @@ type EngineStatus struct {
 	AVRCP          bool   `json:"avrcp"`
 	CaptureDevice  string `json:"captureDevice,omitempty"`
 	CaptureFormat  string `json:"captureFormat,omitempty"`
-	Virtual        bool   `json:"virtual"`
 	// What to undo if the engine dies: previous default output, speakers muted.
-	PrevDefault string `json:"prevDefault,omitempty"`
-	Muted       bool   `json:"muted"`
+	Muted bool `json:"muted"`
 
 	Mouse        string `json:"mouse,omitempty"`
 	MouseState   string `json:"mouseState,omitempty"`
@@ -105,6 +104,7 @@ type EngineStatus struct {
 
 // Event from engine to tray.
 type Event struct {
+	Volume  *uint8        `json:"volume,omitempty"`
 	Ev      string        `json:"ev"` // status|scan|linkkey|log
 	Status  *EngineStatus `json:"status,omitempty"`
 	Devices []Found       `json:"devices,omitempty"`
@@ -119,7 +119,7 @@ type Event struct {
 
 // Request to the privileged helper.
 type Request struct {
-	Op      string `json:"op"` // ping|driver|keys-read|keys-write|virtual-install|virtual-uninstall
+	Op      string `json:"op"` // ping|driver|keys-read|keys-write
 	VID     uint16 `json:"vid,omitempty"`
 	PID     uint16 `json:"pid,omitempty"`
 	WinUSB  bool   `json:"winusb,omitempty"`

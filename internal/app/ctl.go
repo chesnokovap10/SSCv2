@@ -48,7 +48,7 @@ func tailFile(path string, n int) string {
 //	status | info | log [debug|tray|engine|helper] [N] | debug on|off | lang ru|en
 //	mode off|aac|ssc|ssc_uhq | bitrate auto|<kbps> (current codec) | maxmtu on|off | allbitrates on|off
 //	aac fit|frag|over | ssc auto|<kbps> | ssccap auto|<hex> | restore <mode> | variant <v>
-//	import windows | service install|remove | virtual install|remove
+//	import windows | service install|remove
 //	scan | connect <addr> | headphones <addr> | mouse <addr|none>
 //	quit [keep] | uninstall [yes]
 
@@ -301,16 +301,6 @@ func (a *App) ctl(args []string) string {
 			go a.removeService()
 		default:
 			return "error: service install|remove"
-		}
-		return "ok"
-	case "virtual":
-		switch arg(1) {
-		case "install":
-			go func() { a.ensureVirtual(); a.setBusy("") }()
-		case "remove":
-			go a.removeVirtual()
-		default:
-			return "error: virtual install|remove"
 		}
 		return "ok"
 	case "scan":

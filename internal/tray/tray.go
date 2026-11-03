@@ -5,10 +5,12 @@ package tray
 import (
 	"runtime"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"unsafe"
 
 	"golang.org/x/sys/windows"
+	"sscv2/internal/logx"
 )
 
 // Item is one menu entry. ID 0 + no Sub + !Separator = disabled label.
@@ -25,9 +27,11 @@ type Item struct {
 // Tray drives the icon. Menu is called on every right click to build the
 // menu; Command receives the chosen ID (on the UI thread - keep it short).
 type Tray struct {
-	Menu    func() []Item
-	Command func(id int)
-	Click   func() // left click
+	Menu       func() []Item
+	Command    func(id int)
+	Click      func() // left click
+	VolumeKey  func(uint32)
+	volumeKeys atomic.Bool
 
 	mu      sync.Mutex
 	hwnd    uintptr
@@ -73,6 +77,14 @@ func (t *Tray) Run(initial Color, tip string) error {
 	t.mu.Unlock()
 	t.addIcon()
 	close(t.ready)
+	if t.VolumeKey != nil {
+		hook, _, err := setWindowsHook.Call(13, volumeHookCallback, hinst, 0) // WH_KEYBOARD_LL
+		if hook != 0 {
+			defer unhookWindowsHook.Call(hook)
+		} else {
+			logx.Printf("volume keys: %v", err)
+		}
+	}
 
 	var m msgT
 	for {
@@ -218,6 +230,11 @@ func wndProc(hwnd, msg, wparam, lparam uintptr) uintptr {
 			if t.Click != nil {
 				t.Click()
 			}
+		}
+		return 0
+	case volumeKeyMsg:
+		if t.VolumeKey != nil && t.volumeKeys.Load() {
+			t.VolumeKey(uint32(wparam))
 		}
 		return 0
 	case wmClose:

@@ -21,7 +21,7 @@ and the new tray resumes the same codec. Nothing is added to "Apps & features".
 `SSCV2_PORTABLE=1` runs without installing (for debugging).
 
 **Uninstall:** "Settings → Uninstall…". Bluetooth goes back to Windows; the service, the
-virtual headphones, `Program Files\SSCv2`, `%ProgramData%\SSCv2`, settings, pairing keys, logs
+`Program Files\SSCv2`, `%ProgramData%\SSCv2`, settings, pairing keys, logs
 and the shortcut are removed. The file the program was installed from stays.
 
 ## Menu
@@ -105,23 +105,22 @@ ssc.exe            tray (user)  ── stdin/stdout JSON ──►  ssc.exe engi
    │ \\.\pipe\SSCv2Helper (SYSTEM, admins, owner)          BTstack: A2DP/AVDTP/AVRCP, LE HID
    ▼                                                       WASAPI → AAC (FDK) / SSC (libssc) → RTP
 ssc.exe service (LocalSystem)                              volume ⇄ AVRCP, buttons, mouse
-   driver switch, registry keys, VB-CABLE
+   driver switch, registry keys
 ```
 
 * **The engine is a separate process** per session: fresh BTstack state, a crash in C code
   does not take the tray down; the tray restarts the engine and undoes its audio changes.
 * **The service** is only for privileged work: the driver switch (a temporary certificate per
   switch), reading `BTHPORT\Parameters\Keys` (SYSTEM only), writing a new key back to
-  Windows, installing VB-CABLE. Without the service a UAC-elevated copy of `ssc.exe` does the
+  Windows. Without the service a UAC-elevated copy of `ssc.exe` does the
   same. The service runs from `Program Files\SSCv2`.
 * **Keys.** Pair headphones and mouse in Windows, then "Import devices paired in Windows"
   copies the keys — same controller address, no re-pairing, Windows keeps working with them.
   Headphones paired while a codec is on get their new key written to the Windows registry
   too (with the service running).
-* **Virtual headphones.** The VB-CABLE driver (VB-Audio, Microsoft-signed) is embedded in
-  `ssc.exe` (`internal/vbcable/files`). When a codec is switched on the program installs the
-  device, names it after the chosen headphones and makes it the default output — its slider
-  controls the headphones. It is removed with the service or the program.
+* **Audio output.** SSCv2 captures the default Windows output with WASAPI loopback.
+  The physical output is muted while streaming. Use the tray volume menu or the
+  laptop volume and mute keys to control the Bluetooth headphones.
 
 ### Why the driver is switched "in place"
 
@@ -149,11 +148,11 @@ per source (`internal/bt/zbt_*.c`, `internal/codec/aac/zfdk_*.cpp`,
 | `internal/engine` | streaming process: capture → codec → BT, reconnects, buttons, mute |
 | `internal/bt` | BTstack: bring-up, A2DP source (AAC/SSC), AVRCP, inquiry, mouse bridge (BLE and classic) |
 | `internal/codec/aac`, `internal/codec/ssc` | AAC-LC (LATM like Android), SSC through libssc |
-| `internal/audio` | WASAPI capture, volume and mute, virtual headphones |
+| `internal/audio` | WASAPI capture, volume and mute |
 | `internal/driver`, `internal/mtk` | WinUSB ↔ BTHUSB, MT79xx RAM firmware (from DriverStore `mtkbt*`) |
 | `internal/helper` | service, pipe, privileged operations, UAC |
 | `internal/install` | Program Files, shortcut, uninstall |
-| `internal/keys`, `internal/vbcable` | keys (keys.json, Windows registry), embedded VB-CABLE driver |
+| `internal/keys` | keys (keys.json, Windows registry) |
 | `internal/i18n`, `internal/config`, `internal/logx`, `internal/tray` | languages, settings, logs, icon |
 | `libssc/` | our SSC implementation: [README](libssc/README.md), [plan](libssc/PLAN.md) |
 
@@ -215,6 +214,4 @@ Pairing keys (link key, LTK) are masked. The file rotates at 64 MB.
 ## Licences
 
 BTstack — BlueKitchen licence (non-commercial use only), FDK-AAC — Fraunhofer licence, Opus
-(in libssc) — BSD; texts in `third_party/*` and `libssc/src/opus/COPYING`. VB-CABLE is
-donationware by VB-Audio: free for personal use, redistribution inside another program only
-with their permission. libssc and SSC — personal use only.
+(in libssc) — BSD; texts in `third_party/*` and `libssc/src/opus/COPYING`. libssc and SSC — personal use only.

@@ -9,9 +9,9 @@ import (
 
 // Data flow / roles / states (mmdeviceapi.h)
 const (
-	eRender  = 0
-	eCapture = 1
-	eConsole = 0
+	eRender     = 0
+	eCapture    = 1
+	eConsole    = 0
 	eMultimedia = 1
 
 	StateActive   = 0x1
@@ -125,62 +125,6 @@ func DefaultRender() (Endpoint, error) {
 	}
 	defer release(dev)
 	return describe(dev, false), nil
-}
-
-// ---- IPolicyConfig (undocumented, used by the Sound control panel) --------
-
-func policy() (uintptr, error) {
-	if err := InitCOM(); err != nil {
-		return 0, err
-	}
-	p, err := coCreate(&clsidPolicyConfigClient, &iidIPolicyConfig10)
-	if err != nil {
-		p, err = coCreate(&clsidPolicyConfigClient, &iidIPolicyConfig7)
-	}
-	return p, err
-}
-
-// SetDefault makes id the default output for the console and multimedia roles.
-func SetDefault(id string) error {
-	p, err := policy()
-	if err != nil {
-		return err
-	}
-	defer release(p)
-	s, _ := windows.UTF16PtrFromString(id)
-	if err := hr(vcall(p, 13, uintptr(unsafe.Pointer(s)), eConsole)); err != nil {
-		return err
-	}
-	return hr(vcall(p, 13, uintptr(unsafe.Pointer(s)), eMultimedia))
-}
-
-// SetVisible enables (shows) or disables (hides) an endpoint.
-func SetVisible(id string, visible bool) error {
-	p, err := policy()
-	if err != nil {
-		return err
-	}
-	defer release(p)
-	s, _ := windows.UTF16PtrFromString(id)
-	v := uintptr(0)
-	if visible {
-		v = 1
-	}
-	return hr(vcall(p, 14, uintptr(unsafe.Pointer(s)), v))
-}
-
-// Rename sets the endpoint's DeviceDesc like the Sound control panel does
-// (writing the property store directly makes Windows rebuild the endpoint).
-func Rename(id, name string) error {
-	p, err := policy()
-	if err != nil {
-		return err
-	}
-	defer release(p)
-	s, _ := windows.UTF16PtrFromString(id)
-	n, _ := windows.UTF16PtrFromString(name)
-	v := propVariant{vt: vtLPWSTR, val: uintptr(unsafe.Pointer(n))}
-	return hr(vcall(p, 12, uintptr(unsafe.Pointer(s)), 0, uintptr(unsafe.Pointer(&pkeyDeviceDesc)), uintptr(unsafe.Pointer(&v))))
 }
 
 func containsFold(s, sub string) bool {

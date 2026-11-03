@@ -297,8 +297,6 @@ func reqSummary(r ipc.Request) string {
 		return fmt.Sprintf("%04X:%04X winusb=%v", r.VID, r.PID, r.WinUSB)
 	case "keys-write":
 		return r.Adapter + " " + r.Device // never the key
-	case "virtual-install":
-		return fmt.Sprintf("%q", r.Name)
 	}
 	return ""
 }

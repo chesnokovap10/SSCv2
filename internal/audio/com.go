@@ -1,7 +1,5 @@
 // Package audio talks to the Windows audio stack through raw COM calls:
-// WASAPI loopback/capture, endpoint volume (with change notifications),
-// IPolicyConfig (default device, endpoint visibility, rename) and the
-// VB-CABLE based "virtual headphones" device.
+// WASAPI loopback and endpoint volume notifications.
 package audio
 
 import (
@@ -47,9 +45,6 @@ var (
 	iidIAudioEndpointVolumeCb = guid("{657804FA-D6AD-4496-8A60-352752AF4F89}")
 	iidIMMEndpoint            = guid("{1BE09788-6894-4089-8586-9A2A6C265AC5}")
 	iidIUnknown               = guid("{00000000-0000-0000-C000-000000000046}")
-	clsidPolicyConfigClient   = guid("{870af99c-171d-4f9e-af0d-e63df40c2bc9}")
-	iidIPolicyConfig10        = guid("{568b9108-44bf-40b4-92d0-968cf737f7d7}")
-	iidIPolicyConfig7         = guid("{f8679f50-850a-41cf-9c72-430f290290c8}")
 	subtypeFloat              = guid("{00000003-0000-0010-8000-00aa00389b71}")
 )
 

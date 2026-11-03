@@ -61,11 +61,10 @@ type Settings struct {
 	Headphones *Device `json:"headphones,omitempty"`
 	Mouse      *Device `json:"mouse,omitempty"`
 	// Adapter USB id; zero means "first known MediaTek adapter found".
-	VID uint16 `json:"vid,omitempty"`
-	PID uint16 `json:"pid,omitempty"`
-	// Mute the laptop speakers while streaming from the default output
-	// (only used when the virtual headphones device is not installed).
-	MuteSpeakers *bool `json:"muteSpeakers,omitempty"`
+	VID              uint16 `json:"vid,omitempty"`
+	PID              uint16 `json:"pid,omitempty"`
+	HeadphonesVolume *uint8 `json:"headphonesVolume,omitempty"`
+	HeadphonesMuted  bool   `json:"headphonesMuted,omitempty"`
 	// Debug: detailed journal (logs\debug.log) of switches, device
 	// exchanges and volume.
 	Debug bool `json:"debug,omitempty"`
@@ -140,10 +139,6 @@ func (s *Settings) migrate() {
 	default:
 		s.Mode = ModeOff
 	}
-}
-
-func (s *Settings) MuteSpeakersOrDefault() bool {
-	return s.MuteSpeakers == nil || *s.MuteSpeakers
 }
 
 // UserDir is %APPDATA%\SSCv2 (created on demand).

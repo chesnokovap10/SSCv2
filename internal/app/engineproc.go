@@ -70,8 +70,7 @@ func startEngine(cfg ipc.EngineConfig, onEvent func(*engineProc, ipc.Event), onE
 func (p *engineProc) send(c ipc.Command) { _ = p.in.Write(c) }
 
 // stop asks the engine to release everything; kills it after timeout.
-// keep: a restart follows - the engine leaves the default output and the
-// virtual device as they are (no flip to the speakers and back).
+// keep leaves the physical output muted for the next engine.
 func (p *engineProc) stop(timeout time.Duration, keep bool) {
 	p.stopReq.Store(true)
 	p.send(ipc.Command{Cmd: "stop", Keep: keep})

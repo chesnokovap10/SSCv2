@@ -143,7 +143,7 @@ func newVolCallback(on func(ctx windows.GUID, muted bool, level float32)) *volCa
 }
 
 // trayContext tags the levels the tray sets (restore after a mode switch,
-// level carried to the virtual device) - visible in the debug journal.
+// level carried between modes) - visible in the debug journal.
 var trayContext = guid("{3c0f5e8a-77d2-4b0e-9f43-1d6a2b8e5c11}")
 
 // WhoChanged names the origin of a volume change for the debug journal.
@@ -159,191 +159,13 @@ func WhoChanged(ctx windows.GUID) string {
 	return "app " + ctx.String()
 }
 
-// VolumeSync keeps a render endpoint's volume and the headphones' AVRCP
-// absolute volume in step. Audio is captured before the endpoint volume is
-// applied, so the Windows volume keys would otherwise do nothing for the
-// headphones.
-type VolumeSync struct {
-	mu       sync.Mutex
-	vol      uintptr
-	cb       *volCallback
-	id       string
-	send     func(uint8) bool
-	onMute   func(bool)
-	lastSent atomic.Int32
-	pending  atomic.Bool
-	muted    atomic.Int32 // -1 unknown, 0, 1
-}
-
-// FallbackLevel is used when a device has no stored volume.
 const FallbackLevel = 0.15
 
-// StartVolumeSync attaches to endpoint id ("" = default output). send pushes
-// a 0..127 volume to the headphones; the current level is sent at once.
-// onMute (may be nil) gets the endpoint's mute state now and on every change:
-// the captured audio is taken before mute is applied, so the engine has to
-// silence the stream itself.
-func StartVolumeSync(id string, send func(uint8) bool, onMute func(bool)) (*VolumeSync, error) {
-	vol, err := endpointVolume(id)
-	if err != nil {
-		return nil, err
-	}
-	vs := &VolumeSync{vol: vol, send: send, id: id, onMute: onMute}
-	vs.lastSent.Store(-1)
-	vs.muted.Store(-1)
-	vs.cb = newVolCallback(func(ctx windows.GUID, muted bool, level float32) {
-		vs.setMuted(muted)
-		if ctx == selfContext {
-			return // our own echo
-		}
-		vs.onLocal(level)
-	})
-	if err := hr(vcall(vol, 3, uintptr(unsafe.Pointer(vs.cb)))); err != nil {
-		release(vol)
-		liveCbs.Delete(vs.cb)
-		return nil, err
-	}
-	s, err := getScalar(vol)
-	if err != nil {
-		s = FallbackLevel
-		_ = setScalar(vol, s, &selfContext)
-	}
-	var m int32
-	if hr(vcall(vol, 15, uintptr(unsafe.Pointer(&m)))) == nil {
-		vs.setMuted(m != 0)
-	}
-	v := ScalarTo127(s)
-	vs.lastSent.Store(int32(v))
-	ok := send(v)
-	vs.pending.Store(!ok)
-	logx.Dbgf("vol", "sync start: endpoint %s level %.1f%% -> headphones %d/127 (AVRCP up: %v)", nzs(id, "default"), s*100, v, ok)
-	return vs, nil
-}
-
-// setMuted reports a mute change (only changes) to onMute.
-func (vs *VolumeSync) setMuted(m bool) {
-	n := int32(0)
-	if m {
-		n = 1
-	}
-	if vs.muted.Swap(n) == n || vs.onMute == nil {
-		return
-	}
-	logx.Dbgf("vol", "endpoint %s mute %v", nzs(vs.id, "default"), m)
-	vs.onMute(m)
-}
-
-func (vs *VolumeSync) onLocal(level float32) {
-	v := ScalarTo127(level)
-	if int32(v) == vs.lastSent.Load() {
-		logx.Dbgf("vol", "Windows level %.1f%% = %d/127 already sent", level*100, v)
-		return // mute toggles etc.
-	}
-	logx.Dbgf("vol", "Windows level %.1f%% -> headphones %d/127", level*100, v)
-	vs.lastSent.Store(int32(v))
-	if vs.send != nil {
-		vs.send(v)
-	}
-}
-
-// Resync delivers the initial level if it could not be sent yet (AVRCP was
-// not up). Cheap no-op afterwards.
-func (vs *VolumeSync) Resync() {
-	if vs == nil || !vs.pending.Load() {
-		return
-	}
-	vs.mu.Lock()
-	defer vs.mu.Unlock()
-	if vs.vol == 0 {
-		return
-	}
-	s, err := getScalar(vs.vol)
-	if err != nil {
-		return
-	}
-	v := ScalarTo127(s)
-	if vs.send(v) {
-		logx.Dbgf("vol", "resync: initial level %d/127 delivered", v)
-		vs.pending.Store(false)
-		vs.lastSent.Store(int32(v))
-	}
-}
-
-// Push sends the endpoint's current level to the headphones again (after
-// every AVRCP (re)connect - they come back at their own level).
-func (vs *VolumeSync) Push() (float32, bool) {
-	if vs == nil {
-		return 0, false
-	}
-	vs.mu.Lock()
-	defer vs.mu.Unlock()
-	if vs.vol == 0 {
-		return 0, false
-	}
-	s, err := getScalar(vs.vol)
-	if err != nil {
-		return 0, false
-	}
-	v := ScalarTo127(s)
-	vs.lastSent.Store(int32(v))
-	ok := vs.send(v)
-	vs.pending.Store(!ok)
-	logx.Dbgf("vol", "push: Windows level %.1f%% -> headphones %d/127 (sent: %v)", s*100, v, ok)
-	return s, ok
-}
-
-// OnRemote applies a volume reported by the headphones to the endpoint.
-func (vs *VolumeSync) OnRemote(v uint8) {
-	if vs == nil {
-		return
-	}
-	if v > 127 {
-		v = 127
-	}
-	vs.mu.Lock()
-	defer vs.mu.Unlock()
-	if vs.vol == 0 {
-		return
-	}
-	vs.lastSent.Store(int32(v))
-	err := setScalar(vs.vol, float32(v)/127, &selfContext)
-	logx.Dbgf("vol", "headphones %d/127 -> Windows level %.1f%%: %v", v, float32(v)/127*100, err)
-}
-
-// Level returns the endpoint level 0..1.
-func (vs *VolumeSync) Level() float32 {
-	if vs == nil {
-		return 0
-	}
-	vs.mu.Lock()
-	defer vs.mu.Unlock()
-	s, _ := getScalar(vs.vol)
-	return s
-}
-
-// Stop detaches the callback.
-func (vs *VolumeSync) Stop() {
-	if vs == nil {
-		return
-	}
-	vs.mu.Lock()
-	defer vs.mu.Unlock()
-	if vs.vol != 0 {
-		vcall(vs.vol, 4, uintptr(unsafe.Pointer(vs.cb)))
-		release(vs.vol)
-		vs.vol = 0
-	}
-	vs.cb.on.Store(nil)
-	logx.Dbgf("vol", "sync stopped")
-	// keep vs.cb in liveCbs: the audio service may still hold a reference
-}
-
 // headphonesEndpoint finds the active A2DP render endpoint of the named
-// headphones (adapter name contains name; not hands-free, not the cable).
+// headphones (adapter name contains name; excluding hands-free).
 func headphonesEndpoint(name string) (Endpoint, bool) {
 	for _, e := range List(false, StateActive) {
-		if containsFold(e.AdapterName, name) && !containsFold(e.AdapterName, "Hands-Free") &&
-			!containsFold(e.AdapterName, "VB-Audio") {
+		if containsFold(e.AdapterName, name) && !containsFold(e.AdapterName, "Hands-Free") {
 			return e, true
 		}
 	}
@@ -501,11 +323,4 @@ func absf(f float32) float32 {
 		return -f
 	}
 	return f
-}
-
-func nzs(a, b string) string {
-	if a != "" {
-		return a
-	}
-	return b
 }

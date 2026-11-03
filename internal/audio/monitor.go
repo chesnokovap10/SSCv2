@@ -337,7 +337,7 @@ func (m *monitor) handle(e monEvent) {
 		}
 		m.logf("dev: DEFAULT output -> %q", n)
 	case "prop":
-		// Name changes matter (rename of the virtual device); the rest is noise.
+		// Name changes matter; the rest is noise.
 		if e.key == pkeyDeviceFriendlyName || e.key == pkeyDeviceDesc {
 			m.mu.Lock()
 			delete(m.names, e.id)

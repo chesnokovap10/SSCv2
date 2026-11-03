@@ -20,7 +20,7 @@ Bluetooth MediaTek MT79xx** (MT7921/MT7922/MT7902) в обход стека Wind
 `SSCV2_PORTABLE=1` — запуск без установки (для отладки).
 
 **Удаление:** «Настройки → Удалить программу…». Bluetooth возвращается Windows, удаляются
-служба, виртуальные наушники, `Program Files\SSCv2`, `%ProgramData%\SSCv2`, настройки, ключи
+служба, `Program Files\SSCv2`, `%ProgramData%\SSCv2`, настройки, ключи
 сопряжения, журналы и ярлык. Файл, из которого программа была установлена, остаётся.
 
 ## Меню
@@ -103,23 +103,22 @@ ssc.exe            трей (пользователь)  ── stdin/stdout JSON
    │ \\.\pipe\SSCv2Helper (доступ: SYSTEM, админы, владелец)       BTstack: A2DP/AVDTP/AVRCP, LE HID
    ▼                                                               WASAPI → AAC (FDK) / SSC (libssc) → RTP
 ssc.exe service (LocalSystem)                                      громкость ⇄ AVRCP, кнопки, мышь
-   переключение драйвера, ключи из реестра, VB-CABLE
+   переключение драйвера, ключи из реестра
 ```
 
 * **Движок — отдельный процесс** на каждый сеанс: свежее состояние BTstack, падение C-кода не
   роняет трей; трей перезапускает движок и откатывает изменения звука.
 * **Служба** нужна только для привилегированного: смена драйвера (временный сертификат на
   каждое переключение), чтение `BTHPORT\Parameters\Keys` (доступно только SYSTEM), запись
-  нового ключа обратно в Windows, установка VB-CABLE. Без службы те же операции выполняет
+  нового ключа обратно в Windows. Без службы те же операции выполняет
   копия `ssc.exe` с запросом UAC. Служба запускается из `Program Files\SSCv2`.
 * **Ключи.** Наушники и мышь сопрягаются в Windows, затем «Импорт сопряжённых в Windows»
   переносит ключи — тот же адрес контроллера, повторное сопряжение не нужно и связь с
   Windows не ломается. Если наушники сопрячь при включённом кодеке, новый ключ при запущенной
   службе записывается и в реестр Windows.
-* **Виртуальные наушники.** Драйвер VB-CABLE (VB-Audio, подписан Microsoft) встроен в
-  `ssc.exe` (`internal/vbcable/files`). При включении кодека программа сама ставит устройство
-  и называет его по выбранным наушникам; оно становится выводом по умолчанию, его ползунок
-  управляет наушниками. Удаляется вместе со службой или программой.
+* **Вывод звука.** SSCv2 захватывает выход Windows по умолчанию через WASAPI loopback.
+  Во время потока физический выход заглушён. Клавиши громкости и Mute на ноутбуке
+  и меню громкости в трее управляют Bluetooth-наушниками.
 
 ### Почему драйвер меняется «на месте»
 
@@ -146,11 +145,11 @@ IPolicyConfig (COM напрямую), логика BT (события, A2DP, AVR
 | `internal/engine` | процесс потока: захват → кодек → BT, переподключение, кнопки, mute |
 | `internal/bt` | BTstack: запуск, A2DP-источник (AAC/SSC), AVRCP, поиск, мост мыши (BLE и классической) |
 | `internal/codec/aac`, `internal/codec/ssc` | AAC-LC (LATM как у Android), SSC через libssc |
-| `internal/audio` | WASAPI-захват, громкость и mute, виртуальные наушники |
+| `internal/audio` | WASAPI-захват, громкость и mute |
 | `internal/driver`, `internal/mtk` | WinUSB ↔ BTHUSB, RAM-прошивка MT79xx (из DriverStore `mtkbt*`) |
 | `internal/helper` | служба, канал, привилегированные операции, UAC |
 | `internal/install` | Program Files, ярлык, удаление |
-| `internal/keys`, `internal/vbcable` | ключи (keys.json, реестр Windows), встроенный драйвер VB-CABLE |
+| `internal/keys` | ключи (keys.json, реестр Windows) |
 | `internal/i18n`, `internal/config`, `internal/logx`, `internal/tray` | языки, настройки, журналы, значок |
 | `libssc/` | своя реализация SSC: [README](libssc/README.ru.md), [план](libssc/PLAN.ru.md) |
 
@@ -213,6 +212,4 @@ ssc.exe ctl quit | uninstall
 
 BTstack — лицензия BlueKitchen (только некоммерческое использование), FDK-AAC — лицензия
 Fraunhofer, Opus (в libssc) — BSD; тексты в `third_party/*` и `libssc/src/opus/COPYING`.
-VB-CABLE — donationware от VB-Audio: для личного использования бесплатно, распространение в
-составе другой программы — только с их разрешения. libssc и SSC — только для личного
-использования.
+libssc и SSC — только для личного использования.

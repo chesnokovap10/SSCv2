@@ -49,6 +49,9 @@ const (
 	idUninstall
 	idAllBitrates
 	idExit
+	idVolDown
+	idVolUp
+	idVolMute
 
 	idBitrateBase    = 500 // + kbps (0 = auto)
 	idFoundBase      = 2000
@@ -119,7 +122,7 @@ func Run() int {
 	if a.s.Debug {
 		logx.SetDebug(true)
 	}
-	a.t = &tray.Tray{Menu: a.menu, Command: a.command, Click: func() { go a.showInfo() }}
+	a.t = &tray.Tray{Menu: a.menu, Command: a.command, Click: func() { go a.showInfo() }, VolumeKey: a.volumeKey}
 	go a.startup()
 	go a.serveCtl()
 	if err := a.t.Run(tray.Gray, "SSCv2"); err != nil {
@@ -171,12 +174,6 @@ func (a *App) startup() {
 	}
 	st := a.refreshAdapter()
 	_, svcRunning := helper.ServiceState()
-	if svcRunning {
-		// stale virtual-cable endpoints of earlier installs (no UAC via the service)
-		if resp, err := helper.Call(ipc.Request{Op: "virtual-cleanup"}); err == nil {
-			logf("virtual-cleanup: %s", resp.Message)
-		}
-	}
 	a.mu.Lock()
 	want := a.s.Mode
 	a.mu.Unlock()
@@ -346,7 +343,16 @@ func (a *App) enable(m config.Mode) {
 		a.setMode(config.ModeOff)
 		return
 	}
-	a.ensureVirtual() // before the switch: the headphones are still visible to Windows
+	if st.Mode == driver.BthUSB {
+		if level, ok := audio.HeadphonesLevel(a.headphonesName()); ok && level < 0.99 {
+			a.mu.Lock()
+			if a.s.HeadphonesVolume == nil {
+				value := audio.ScalarTo127(level)
+				a.s.HeadphonesVolume = &value
+			}
+			a.mu.Unlock()
+		}
+	}
 	if st.Mode != driver.WinUSB {
 		a.setBusy(T("переключение адаптера в WinUSB", "switching the adapter to WinUSB"))
 		_, err := helper.Call(ipc.Request{Op: "driver", VID: st.ID.VID, PID: st.ID.PID, WinUSB: true})
@@ -376,18 +382,19 @@ func (a *App) startEngineLocked() {
 		return
 	}
 	cfg := ipc.EngineConfig{
-		Codec:        a.mode.EngineCodec(),
-		VID:          a.adapter.ID.VID,
-		PID:          a.adapter.ID.PID,
-		MuteSpeakers: a.s.MuteSpeakersOrDefault(),
-		Debug:        a.s.Debug,
-		Lang:         i18n.Lang(),
-		MaxMTU:       a.s.MaxMTU,
-		AACMode:      a.s.AACMode,
-		AACBitrate:   a.s.AACBitrate,
-		SSCUHQ:       a.mode == config.ModeSSCUHQ,
-		SSCCap:       a.s.SSCCap,
-		Carry:        a.carry,
+		Codec:           a.mode.EngineCodec(),
+		VID:             a.adapter.ID.VID,
+		PID:             a.adapter.ID.PID,
+		Volume:          a.volumeLocked(),
+		HeadphonesMuted: a.s.HeadphonesMuted,
+		Debug:           a.s.Debug,
+		Lang:            i18n.Lang(),
+		MaxMTU:          a.s.MaxMTU,
+		AACMode:         a.s.AACMode,
+		AACBitrate:      a.s.AACBitrate,
+		SSCUHQ:          a.mode == config.ModeSSCUHQ,
+		SSCCap:          a.s.SSCCap,
+		Carry:           a.carry,
 	}
 	a.carry = nil
 	cfg.AACBitrate = a.bitrateFor(config.ModeAAC)
@@ -423,19 +430,12 @@ func (a *App) disable() {
 	a.opMu.Lock()
 	defer a.opMu.Unlock()
 	defer a.setBusy("")
-	// One volume for both modes: the level used while streaming (virtual
-	// device) goes to the real headphones in Windows mode.
-	want := float32(-1)
-	if r, ok := audio.VirtualRender(); ok {
-		if l, err := audio.Level(r.ID); err == nil {
-			want = l
-		}
-	}
-	logf("mode off: carrying level %.1f%% to the headphones in Windows", want*100)
 	a.mu.Lock()
+	want := float32(a.volumeLocked()) / 127
 	eng := a.eng
 	a.eng = nil
 	a.mode = config.ModeOff
+	a.t.SetVolumeKeys(false)
 	restore := a.restoreMode
 	a.mu.Unlock()
 	if eng != nil {
@@ -453,11 +453,8 @@ func (a *App) disable() {
 		// Buds: 100 %) as soon as the radio is back - often before the
 		// switch script has finished. Watch for them from now on, so the
 		// jump is answered within ~50 ms.
-		name := audio.HeadphonesName()
+		name := a.headphonesName()
 		a.mu.Lock()
-		if name == "" && a.s.Headphones != nil {
-			name = a.s.Headphones.Name
-		}
 		variant := a.driverVariant
 		a.mu.Unlock()
 		logx.Dbgf("mode", "returning the adapter to Windows; volume restore for %q (mode %q)", name, nz(restore, "default"))
@@ -487,6 +484,15 @@ func (a *App) onEngineEvent(p *engineProc, ev ipc.Event) {
 		logx.Dbgf("ipc", "engine -> tray: %s %s %s", ev.Ev, ev.Addr, ev.Msg)
 	}
 	switch ev.Ev {
+	case "volume":
+		if ev.Volume != nil {
+			a.mu.Lock()
+			if a.eng == p && a.volumeLocked() != *ev.Volume {
+				a.s.HeadphonesVolume = ev.Volume
+				_ = config.Save(a.s)
+			}
+			a.mu.Unlock()
+		}
 	case "status":
 		a.mu.Lock()
 		if a.eng != p {
@@ -495,6 +501,7 @@ func (a *App) onEngineEvent(p *engineProc, ev ipc.Event) {
 		}
 		prev := a.st
 		a.st = *ev.Status
+		a.t.SetVolumeKeys(ev.Status.CaptureDevice != "")
 		a.mu.Unlock()
 		if ev.Status.Phase == "streaming" && prev.Phase != "streaming" {
 			a.t.Balloon("SSCv2", fmt.Sprintf(T("%s: %s, %d кбит/с", "%s: %s, %d kbps"), nz(ev.Status.HeadphonesName, ev.Status.Headphones),
@@ -534,6 +541,7 @@ func (a *App) onEngineExit(p *engineProc, err error) {
 	current := a.eng == p
 	if current {
 		a.eng = nil
+		a.t.SetVolumeKeys(false)
 	}
 	mode, quitting := a.mode, a.quitting
 	a.mu.Unlock()
@@ -542,7 +550,7 @@ func (a *App) onEngineExit(p *engineProc, err error) {
 		return
 	}
 	logf("engine exited unexpectedly: %v (phase %s: %s)", err, last.Phase, last.Message)
-	engine.RestoreAudio(last) // undo default-device / mute changes it made
+	engine.RestoreAudio(last)
 	if !current || quitting || mode == config.ModeOff {
 		a.refresh()
 		return
@@ -591,7 +599,7 @@ func nz(a, b string) string {
 }
 
 // stopForRestart stops the engine; keep: another engine starts right away,
-// so the audio routing (virtual device as default output, speaker mute)
+// so the physical output mute
 // stays and is handed over (no flip to the speakers and back).
 func (a *App) stopForRestart(eng *engineProc, keep bool) {
 	a.mu.Lock()
@@ -603,8 +611,8 @@ func (a *App) stopForRestart(eng *engineProc, keep bool) {
 		a.eng = nil
 	}
 	a.carry = nil
-	if keep && (st.Virtual || st.Muted || st.PrevDefault != "") {
-		a.carry = &ipc.AudioCarry{PrevDefault: st.PrevDefault, Muted: st.Muted, Virtual: st.Virtual}
+	if keep && (st.MuteEndpoint != "") {
+		a.carry = &ipc.AudioCarry{MuteEndpoint: st.MuteEndpoint}
 	}
 	a.mu.Unlock()
 	if !keep {
@@ -780,7 +788,7 @@ func (a *App) afterImport(store *keys.Store, msg string) {
 	}
 }
 
-// ---- service / virtual device ----------------------------------------------
+// ---- helper service ----------------------------------------------
 
 func (a *App) installService() {
 	a.setBusy(T("установка службы", "installing the service"))
@@ -798,16 +806,13 @@ func (a *App) installService() {
 }
 
 func (a *App) removeService() {
-	// Removing the service = cleaning up: give Bluetooth back to Windows and
-	// remove the virtual headphones while the service can still do it.
+	// Give Bluetooth back to Windows while the helper can still do it.
 	a.mu.Lock()
 	mode := a.mode
 	a.mu.Unlock()
 	if mode != config.ModeOff {
 		a.disable()
 	}
-	a.setBusy(T("удаление виртуальных наушников", "removing the virtual headphones"))
-	a.removeVirtual()
 	a.setBusy(T("удаление службы", "removing the service"))
 	defer a.setBusy("")
 	code, err := helper.RunElevated("service-uninstall")
@@ -821,7 +826,7 @@ func (a *App) removeService() {
 	a.t.Balloon("SSCv2", T("Служба удалена.", "Service removed."), 0)
 }
 
-// headphonesName is the name the virtual device should carry.
+// headphonesName returns the selected headphones name.
 func (a *App) headphonesName() string {
 	a.mu.Lock()
 	h := a.s.Headphones
@@ -840,58 +845,6 @@ func (a *App) headphonesName() string {
 	return "Bluetooth Headphones"
 }
 
-// ensureVirtual silently installs the embedded virtual headphones device
-// (or renames it after the current headphones). Failure is not fatal: the
-// engine then captures the speakers via loopback.
-// Call it while the adapter is still in Windows mode: the virtual device
-// takes the level Windows keeps for the real headphones (one volume for both
-// modes; a fresh device would otherwise start at Windows' 100 %).
-func (a *App) ensureVirtual() {
-	name := a.headphonesName()
-	fresh := !audio.VirtualInstalled()
-	level, known := audio.HeadphonesLevel(name)
-	if known && level >= 0.99 {
-		known = false // most likely the Buds' own jump, not a chosen level
-	}
-	if fresh || audio.HeadphonesName() != name {
-		a.setBusy(T("подготовка виртуальных наушников", "preparing the virtual headphones"))
-		resp, err := helper.Call(ipc.Request{Op: "virtual-install", Name: name})
-		if err != nil {
-			logf("virtual-install: %v", err)
-			a.t.Balloon(T("Виртуальные наушники", "Virtual headphones"), fmt.Sprintf(T("Не удалось установить: %v. Звук пойдёт с динамиков.",
-				"Could not install: %v. The speakers' sound is used instead."), err), 1)
-			return
-		}
-		logf("virtual-install: %s", resp.Message)
-	}
-	if !known && !fresh {
-		return // keep the virtual device's own level
-	}
-	if !known {
-		level = audio.FallbackLevel
-	}
-	_ = audio.SetVirtualVisible(true)
-	if r, ok := audio.VirtualRender(); ok {
-		err := audio.SetLevel(r.ID, level)
-		logf("volume: virtual device set to %.0f%% (from headphones in Windows: %v): %v", level*100, known, err)
-	}
-	_ = audio.SetVirtualVisible(false)
-}
-
-func (a *App) removeVirtual() {
-	if !audio.VirtualInstalled() {
-		return
-	}
-	if resp, err := helper.Call(ipc.Request{Op: "virtual-uninstall"}); err != nil {
-		logf("virtual-uninstall: %v", err)
-	} else {
-		logf("virtual-uninstall: %s", resp.Message)
-	}
-}
-
-// ---- menu --------------------------------------------------------------------
-
-// bitrateText: "Auto" / "192 kbps".
 func bitrateText(kbps int) string {
 	if kbps == 0 {
 		return T("Авто", "Auto")
@@ -1003,6 +956,14 @@ func (a *App) menu() []tray.Item {
 		{Separator: true},
 	}
 
+	if mode.Streaming() {
+		level := int(a.volumeLocked()) * 100 / 127
+		items = append(items, tray.Item{Text: fmt.Sprintf(T("Громкость наушников %d%%", "Headphone volume %d%%"), level), Sub: []tray.Item{
+			{Text: T("Тише", "Volume down"), ID: idVolDown, Disabled: !engineUp},
+			{Text: T("Громче", "Volume up"), ID: idVolUp, Disabled: !engineUp},
+			{Text: T("Без звука", "Mute"), ID: idVolMute, Checked: a.s.HeadphonesMuted, Disabled: !engineUp},
+		}})
+	}
 	// codec + bitrate
 	codecs := []tray.Item{
 		{Text: T("Выкл (Bluetooth Windows)", "Off (Windows Bluetooth)"), ID: idModeOff, Radio: true, Checked: mode == config.ModeOff, Disabled: busy},
@@ -1174,6 +1135,8 @@ func (a *App) command(id int) {
 	a.mu.Unlock()
 	logx.Dbgf("ui", "menu: %q (id %d)", strings.TrimSpace(label), id)
 	switch {
+	case id == idVolDown || id == idVolUp || id == idVolMute:
+		a.adjustVolume(id)
 	case id == idModeOff:
 		go a.disable()
 	case id == idModeAAC:
@@ -1422,11 +1385,6 @@ func (a *App) infoText() string {
 	}
 	w(T("Служба: %s", "Service: %s"), svc)
 	w(T("Ключи: устройств %d, мышей %d", "Keys: %d device(s), %d mouse/mice"), len(snap.Classic), len(snap.LE))
-	if hn := audio.HeadphonesName(); hn != "" {
-		w(T("Виртуальные наушники: %s", "Virtual headphones: %s"), hn)
-	} else if audio.VirtualInstalled() {
-		w(T("Виртуальные наушники: установлены", "Virtual headphones: installed"))
-	}
 	w(T("Журналы: %s", "Logs: %s"), config.LogDir())
 	return b.String()
 }

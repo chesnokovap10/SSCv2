@@ -47,7 +47,7 @@ type engine struct {
 
 	pipe     pipeline
 	cap      *audio.Capture
-	vsp      atomic.Pointer[audio.VolumeSync]
+	volume   atomic.Uint32
 	srate    int
 	unmuteAt atomic.Int64 // unix ms when the pipeline may play again
 	keep     atomic.Bool  // stopped for a restart: leave the audio routing
@@ -99,12 +99,13 @@ func Run(in io.Reader, stdout *os.File) int {
 	logf("engine start %s: codec=%s uhq=%v bitrate aac=%d ssc=%d maxmtu=%v headphones=%q mouse=%q adapter=%04X:%04X debug=%v lang=%s",
 		ipc.Version, e.cfg.Codec, e.cfg.SSCUHQ, e.cfg.AACBitrate, e.cfg.SSCBitrate, e.cfg.MaxMTU, e.cfg.Headphones, e.cfg.Mouse,
 		e.cfg.VID, e.cfg.PID, e.cfg.Debug, i18n.Lang())
+	e.volume.Store(uint32(e.cfg.Volume))
+	e.pipe.userMuted.Store(e.cfg.HeadphonesMuted)
 	e.target = e.cfg.Headphones
 	if c := e.cfg.Carry; c != nil {
 		// the previous engine left the routing in place: own it from now on
-		e.st.PrevDefault, e.st.Muted, e.st.Virtual = c.PrevDefault, c.Muted, c.Virtual
+		e.st.MuteEndpoint = c.MuteEndpoint
 		e.carried = true
-		logf("audio: routing handed over (virtual %v, muted %v, give back %q)", c.Virtual, c.Muted, c.PrevDefault)
 	}
 	e.ctx, e.cancel = context.WithCancel(context.Background())
 	go e.commands(r)
@@ -140,6 +141,10 @@ func (e *engine) commands(r *ipc.Reader) {
 			e.cancel()
 		case "scan":
 			go e.scan()
+		case "volume":
+			e.volume.Store(uint32(c.Volume))
+			e.pipe.userMuted.Store(c.On)
+			bt.SetVolume(c.Volume)
 		case "codec":
 			if c.Codec != nil && (c.Codec.Codec == "aac" || c.Codec.Codec == "ssc") {
 				// Keep the latest request if the previous switch is still in progress.
@@ -472,7 +477,7 @@ func (e *engine) session(addrStr string) error {
 	go e.unmuteWhenSettled()
 	e.installEncoder(enc, mtu, codec)
 	defer e.pipe.set(nil, 0, false)
-	e.startVolumeSync()
+	bt.SetVolume(uint8(e.volume.Load()))
 
 	for {
 		select {
@@ -544,107 +549,57 @@ func (e *engine) unmuteWhenSettled() {
 	}
 }
 
-// setupAudio picks the capture source once per engine lifetime. With the
-// virtual headphones device installed it becomes the default output and is
-// captured on its recording side; otherwise the default output is captured
-// via loopback and the speakers are muted (loopback is pre-volume).
+// setupAudio captures the default render endpoint before its physical mute.
 func (e *engine) setupAudio() error {
 	if e.cap != nil {
 		return nil
 	}
-	captureID := ""
-	if audio.VirtualInstalled() {
-		_, shown := audio.VirtualRender()
-		_, shownC := audio.VirtualCapture()
-		if !shown || !shownC {
-			if err := audio.SetVirtualVisible(true); err != nil {
-				logf("virtual device: show: %v", err)
-			}
-		}
-		r, okR := audio.VirtualRender()
-		c, okC := audio.VirtualCapture()
-		if okR && okC {
-			prev, _ := audio.DefaultRender()
-			if prev.ID != r.ID {
-				err := audio.SetDefault(r.ID)
-				logf("default output: %q -> %q: %v", prev.Name, r.Name, err)
-			} else {
-				logf("default output: already %q", r.Name)
-			}
-			captureID = c.ID
-			e.update(func(s *ipc.EngineStatus) {
-				s.Virtual = true
-				if prev.ID != r.ID {
-					s.PrevDefault = prev.ID
-				} // else: kept from the previous engine (carry)
-			})
-		}
-	}
-	e.carried = false
-	cp, err := audio.OpenCapture(captureID)
-	if err != nil && captureID != "" {
-		logf("virtual capture failed (%v), falling back to loopback", err)
-		captureID = ""
-		cp, err = audio.OpenCapture("")
-	}
+	cp, err := audio.OpenCapture("")
 	if err != nil {
-		return fmt.Errorf(i18n.T("захват звука: %w", "audio capture: %w"), err)
+		return err
 	}
 	if cp.Format.SampleRate != 44100 && cp.Format.SampleRate != 48000 {
 		cp.Close()
-		return fmt.Errorf(i18n.T("частота вывода %d Гц не поддерживается, выберите 48000 Гц в настройках звука", "an output rate of %d Hz is not supported, choose 48000 Hz in the Sound settings"), cp.Format.SampleRate)
+		return fmt.Errorf(i18n.T("частота вывода %d Гц не поддерживается", "unsupported output rate %d Hz"), cp.Format.SampleRate)
+	}
+	id := cp.Device.ID
+	e.mu.Lock()
+	previous := e.st.MuteEndpoint
+	e.mu.Unlock()
+	if previous != "" && previous != id {
+		if err := audio.SetMute(previous, false); err != nil {
+			cp.Close()
+			return err
+		}
+		e.update(func(s *ipc.EngineStatus) { s.MuteEndpoint = "" })
+	}
+	muted, err := audio.Muted(id)
+	if err != nil {
+		cp.Close()
+		return err
+	}
+	if err := audio.SetMute(id, true); err != nil {
+		cp.Close()
+		return err
+	}
+	if err := cp.Start(func(samples []float32, frames int) { e.pipe.onCapture(samples, frames, cp.Format.Channels) }); err != nil {
+		if !muted {
+			_ = audio.SetMute(id, false)
+		}
+		cp.Close()
+		return err
 	}
 	e.cap = cp
 	e.srate = cp.Format.SampleRate
+	e.carried = false
 	logf("capture: %s [%s]", cp.Device.Name, cp.Format)
-	e.mu.Lock()
-	muted := e.st.Muted
-	e.mu.Unlock()
-	if captureID == "" && e.cfg.MuteSpeakers {
-		muted = audio.SetMute("", true) == nil || muted
-	}
 	e.update(func(s *ipc.EngineStatus) {
-		s.CaptureDevice = cp.Device.Name
-		s.CaptureFormat = cp.Format.String()
-		s.Muted = muted
-	})
-	ch := cp.Format.Channels
-	return cp.Start(func(samples []float32, frames int) { e.pipe.onCapture(samples, frames, ch) })
-}
-
-func (e *engine) vs() *audio.VolumeSync { return e.vsp.Load() }
-
-func (e *engine) startVolumeSync() {
-	if v := e.vs(); v != nil {
-		v.Resync()
-		return
-	}
-	e.mu.Lock()
-	virtual := e.st.Virtual
-	e.mu.Unlock()
-	id := ""
-	if r, ok := audio.VirtualRender(); ok && virtual {
-		id = r.ID
-	}
-	vs, err := audio.StartVolumeSync(id, bt.SetVolume, func(m bool) {
-		// Mute in Windows (key, mixer): the capture is taken before mute is
-		// applied, so silence the stream. Our own speaker mute (loopback
-		// without the virtual device) is not the user's choice: ignore it.
-		e.mu.Lock()
-		ours := e.st.Muted && id == ""
-		e.mu.Unlock()
-		if ours {
-			return
+		if !muted {
+			s.MuteEndpoint = id
 		}
-		e.pipe.userMuted.Store(m)
-		logf("volume: Windows mute %v -> headphones %s", m, map[bool]string{true: "silent", false: "on"}[m])
+		s.CaptureDevice, s.CaptureFormat, s.Muted = cp.Device.Name, cp.Format.String(), true
 	})
-	if err != nil {
-		logf("volume sync: %v", err)
-		return
-	}
-	logf("volume: following endpoint %q, level %.0f%%", nz(id, "default output"), vs.Level()*100)
-	e.vsp.Store(vs)
+	return nil
 }
 
 var evNames = map[bt.EventKind]string{bt.EvDisconnected: "disconnected", bt.EvVolume: "volume", bt.EvLinkKey: "link key",
@@ -661,7 +616,8 @@ func (e *engine) btEvents() {
 			default:
 			}
 		case bt.EvVolume:
-			e.vs().OnRemote(ev.Volume)
+			e.volume.Store(uint32(ev.Volume))
+			_ = e.out.Write(ipc.Event{Ev: "volume", Volume: &ev.Volume})
 		case bt.EvACLUp, bt.EvA2DPReady:
 			select {
 			case e.incoming <- incomingEv{kind: ev.Kind, addr: ev.Addr.String()}:
@@ -671,9 +627,7 @@ func (e *engine) btEvents() {
 			// Give the confirmed headphone volume time to settle.
 			e.unmuteAt.Store(time.Now().Add(250 * time.Millisecond).UnixMilli())
 		case bt.EvAVRCPConnected:
-			if lvl, ok := e.vs().Push(); ok {
-				logf("volume: Windows level %.0f%% -> headphones", lvl*100)
-			}
+			bt.SetVolume(uint8(e.volume.Load()))
 		case bt.EvLinkKey:
 			logf("new link key for %s", ev.Addr)
 			_ = e.out.Write(ipc.Event{Ev: "linkkey", Addr: ev.Addr.String(),
@@ -702,7 +656,6 @@ func (e *engine) ticker() {
 			return
 		case <-t.C:
 		}
-		e.vs().Resync()
 		q, fails, sent := bt.Stats()
 		_, mstate, mrep := bt.MouseStatus()
 		eb, fr := e.pipe.encBytes.Load(), e.pipe.frames.Load()
@@ -764,15 +717,11 @@ func (e *engine) onLinkLost() {
 }
 
 // releaseAudio stops capture and volume sync and undoes the output changes
-// (default device, speaker mute, virtual device visibility). setupAudio
+// (physical endpoint mute). setupAudio
 // redoes them on the next connection.
 // stopAudio stops capture and volume sync only.
 func (e *engine) stopAudio() {
 	e.pipe.set(nil, 0, false)
-	if v := e.vs(); v != nil {
-		v.Stop()
-		e.vsp.Store(nil)
-	}
 	if e.cap != nil {
 		e.cap.Close()
 		e.cap = nil
@@ -783,11 +732,6 @@ func (e *engine) stopAudio() {
 func (e *engine) releaseAudio() {
 	e.carried = false
 	e.pipe.set(nil, 0, false)
-	e.pipe.userMuted.Store(false)
-	if v := e.vs(); v != nil {
-		v.Stop()
-		e.vsp.Store(nil)
-	}
 	if e.cap != nil {
 		e.cap.Close()
 		e.cap = nil
@@ -797,7 +741,7 @@ func (e *engine) releaseAudio() {
 	e.mu.Unlock()
 	RestoreAudio(st)
 	e.update(func(s *ipc.EngineStatus) {
-		s.PrevDefault, s.Muted, s.Virtual = "", false, false
+		s.MuteEndpoint, s.Muted = "", false
 		s.CaptureDevice, s.CaptureFormat = "", ""
 	})
 }
@@ -815,21 +759,13 @@ func (e *engine) teardown() {
 }
 
 // RestoreAudio undoes what an engine changed (also used by the tray when an
-// engine died): default output, speaker mute, virtual device visibility.
+// engine died).
 func RestoreAudio(st ipc.EngineStatus) {
 	if err := audio.InitCOM(); err != nil {
 		return
 	}
-	if st.PrevDefault != "" {
-		err := audio.SetDefault(st.PrevDefault)
-		logf("restore default output %s: %v", st.PrevDefault, err)
-	}
-	if st.Muted {
-		_ = audio.SetMute("", false)
-	}
-	if st.Virtual {
-		err := audio.SetVirtualVisible(false)
-		logx.Dbgf("audio", "virtual device hidden: %v", err)
+	if st.MuteEndpoint != "" {
+		_ = audio.SetMute(st.MuteEndpoint, false)
 	}
 }
 

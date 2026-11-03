@@ -107,13 +107,13 @@ func stopLegacyTray() {
 }
 
 // uninstall removes the program: gives Bluetooth back to Windows, removes
-// the virtual headphones, the service, Program Files\SSCv2, ProgramData,
+// the service, Program Files\SSCv2, ProgramData,
 // the user's settings, keys and logs and the desktop shortcut. The file the
 // program was first started from (the "installer") is left alone.
 func (a *App) uninstall(confirmed bool) {
 	if !confirmed && !tray.Ask(T("Удаление SSCv2", "Uninstall SSCv2"), T(
-		"Удалить SSCv2?\n\nBluetooth вернётся Windows, будут удалены служба, виртуальные наушники, папка в Program Files, настройки, ключи сопряжения и журналы, ярлык на рабочем столе.\nФайл, из которого программа была установлена, останется.",
-		"Uninstall SSCv2?\n\nBluetooth goes back to Windows; the service, the virtual headphones, the Program Files folder, settings, pairing keys, logs and the desktop shortcut are removed.\nThe file the program was installed from stays.")) {
+		"Удалить SSCv2?\n\nBluetooth вернётся Windows, будут удалены служба, папка в Program Files, настройки, ключи сопряжения и журналы, ярлык на рабочем столе.\nФайл, из которого программа была установлена, останется.",
+		"Uninstall SSCv2?\n\nBluetooth goes back to Windows; the service, the Program Files folder, settings, pairing keys, logs and the desktop shortcut are removed.\nThe file the program was installed from stays.")) {
 		return
 	}
 	logf("uninstall: start")
@@ -124,8 +124,6 @@ func (a *App) uninstall(confirmed bool) {
 	if mode != config.ModeOff {
 		a.disable()
 	}
-	a.setBusy(T("удаление виртуальных наушников", "removing the virtual headphones"))
-	a.removeVirtual()
 	a.setBusy(T("удаление программы", "uninstalling"))
 	code, err := helper.RunElevated(fmt.Sprintf("uninstall-system --pid %d", os.Getpid()))
 	if err == nil && code != 0 {
@@ -153,7 +151,6 @@ func UninstallSystem(pid int) int {
 	if err := helper.UninstallService(); err != nil {
 		logf("uninstall: service: %v", err)
 	}
-	helper.Handle(ipc.Request{Op: "virtual-uninstall"})
 	if err := install.UninstallSystem(pid); err != nil {
 		logf("uninstall: %v", err)
 		return 1
