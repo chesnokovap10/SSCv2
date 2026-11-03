@@ -668,8 +668,8 @@ func (e *engine) btEvents() {
 			default:
 			}
 		case bt.EvVolumeApplied:
-			// keep quiet until the level held for 700 ms
-			e.unmuteAt.Store(time.Now().Add(700 * time.Millisecond).UnixMilli())
+			// Give the confirmed headphone volume time to settle.
+			e.unmuteAt.Store(time.Now().Add(250 * time.Millisecond).UnixMilli())
 		case bt.EvAVRCPConnected:
 			if lvl, ok := e.vs().Push(); ok {
 				logf("volume: Windows level %.0f%% -> headphones", lvl*100)
