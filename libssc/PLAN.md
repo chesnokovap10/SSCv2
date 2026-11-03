@@ -2,7 +2,7 @@
 
 **English** · [Русский](PLAN.ru.md)
 
-Our own Samsung Scalable Codec library for SSCv2: the encoder (bit-exact) and a decoder
+Our own Samsung Scalable Codec library for SSCv2: the encoder (byte-for-byte agreement with the reference on tested inputs at all 14 bitrates) and a decoder
 (exact parse, float synthesis). Started 2026-10-24. The detailed step-by-step journal is in git history
 (`libssc/PLAN.md` before 2026-10-25).
 
@@ -23,7 +23,7 @@ Our own Samsung Scalable Codec library for SSCv2: the encoder (bit-exact) and a 
 | Question | Decision |
 |---|---|
 | Goal | Bit-exact output with `libScalable_Encoder.so` from the **current phone firmware** (clang 14, NDK r25) on all 14 bitrates. The older build (clang 8, from a third-party program) is no longer the reference and was removed in 3g |
-| Distribution | Private only, for our own hardware (Samsung Galaxy Buds2 Pro / Buds3 FE). No public release |
+| Distribution | The encoder ships in the public [SSCv2 0.2 release](https://github.com/chesnokovap10/SSCv2/releases/tag/v0.2). libssc has no standalone release |
 | Location | `libssc/` in SSCv2; in the app — cgo package `internal/codec/ssc`, entry `internal/engine/codecs.go` → `newSSC` |
 | Pace | One phase at a time; review after each, then the next |
 
@@ -110,10 +110,9 @@ process); `go test` checks the frames' sha256 against the blob on all 14 bitrate
 offers the SSC and SSC UHQ codecs and a bitrate choice.
 
 **On Samsung Galaxy Buds2 Pro (cap 0x3C, configuration 0x0C):** 192k and 229k sound fine, 256k and 328k bad:
-these are the "wide" bitrates the phone never sends at 48 kHz, and our frames are bit-exact, so
-the headphones' decoder handles them poorly. The practical maximum is 229k.
-**Forced UHQ:** the 48 kHz capture upsampled 2× (half-band FIR, `engine/upsample.go`), the
-encoder at 96 kHz; Samsung Galaxy Buds2 Pro accept configuration 0x0A, 584k runs without errors.
+the phone does not use these wide bitrates at 48 kHz. The cause of the artifacts is unknown. The profile caps SSC at 229 kbps.
+**Forced UHQ experiment:** the 48 kHz capture upsampled 2× (half-band FIR, `engine/upsample.go`), the
+encoder at 96 kHz; Samsung Galaxy Buds2 Pro accept configuration 0x0A, the 584 kbps stream ran without transport errors. Audio quality remains unverified. The standard menu marks UHQ unavailable for this model.
 
 ### 6 — Decoder
 
@@ -141,10 +140,7 @@ encoder at 96 kHz; Samsung Galaxy Buds2 Pro accept configuration 0x0A, 584k runs
   328k 29/36/49, UHQ 584k 39/41/54, 886k 41/44/56. Noise 0–8 dB (CELT keeps band energies, not
   the waveform), the sweep at 88–128k 16 dB (cut above the last band).
 
-**About 256k/328k:** our decoder reconstructs them as well as 229k (328k even better), so the
-frames are valid. The "choking" on Samsung Galaxy Buds2 Pro is their decoder's: the phone never
-sends these "wide" 48 kHz rates, and the headphones apparently handle them differently. The
-229k maximum in the headphone profile stays.
+**About 256k/328k:** the bench decoder reconstructs the tested signals with SNR comparable to or better than 229 kbps. This verifies decoding on the bench. The cause of the artifacts on Buds2 Pro remains unknown.
 
 **Not reproduced** (the stream does not show how the headphones do it): folding into bands
 without pulses (we use noise), anti-collapse (the flag is read, not applied).
