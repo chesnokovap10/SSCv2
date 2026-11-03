@@ -125,7 +125,14 @@ func Run() int {
 	if a.s.Debug {
 		logx.SetDebug(true)
 	}
-	a.t = &tray.Tray{Menu: a.menu, Command: a.command, DismissBefore: func(id int) bool { return id == idInfo || id == idLangRU || id == idLangEN }, VolumeKey: a.volumeKey, Volume: a.sliderVolume, SetVolume: a.setSliderVolume, ToggleMute: func() { a.adjustVolume(idVolMute) }}
+	a.t = &tray.Tray{Menu: a.menu, Command: a.command, DismissBefore: func(id int) bool {
+		switch id {
+		case idExit, idInfo, idLangRU, idLangEN, idModeOff, idModeAAC, idModeSSC, idModeUHQ:
+			return true
+		default:
+			return false
+		}
+	}, VolumeKey: a.volumeKey, Volume: a.sliderVolume, SetVolume: a.setSliderVolume, ToggleMute: func() { a.adjustVolume(idVolMute) }}
 	go a.startup()
 	go a.serveCtl()
 	if err := a.t.Run(tray.Gray, "SSCv2"); err != nil {
@@ -867,6 +874,7 @@ func (a *App) removeService() {
 	a.mu.Lock()
 	mode := a.mode
 	a.mu.Unlock()
+	a.t.CloseMenu()
 	if mode != config.ModeOff {
 		a.disable()
 	}
@@ -1023,10 +1031,7 @@ func (a *App) menu() []tray.Item {
 	items := []tray.Item{
 		{Text: "SSCv2 " + ipc.Version + " — " + s},
 		{Separator: true},
-	}
-
-	if mode.Streaming() {
-		items = append(items, tray.Item{Text: T("Громкость наушников", "Headphone volume"), ID: idVolume, Slider: true})
+		{Text: T("Громкость наушников", "Headphone volume"), ID: idVolume, Slider: true},
 	}
 	// codec + bitrate
 	codecs := []tray.Item{
@@ -1330,9 +1335,14 @@ func (a *App) command(id int) {
 // as usual, but the saved codec stays so the new version resumes it.
 func (a *App) exit(keepMode bool) {
 	a.mu.Lock()
+	if a.quitting {
+		a.mu.Unlock()
+		return
+	}
 	a.quitting = true
 	mode := a.mode
 	a.mu.Unlock()
+	a.t.CloseMenu()
 	if mode != config.ModeOff {
 		a.disable()
 		if keepMode {
