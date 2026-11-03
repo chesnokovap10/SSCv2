@@ -35,6 +35,17 @@ func installOrUpdate() bool {
 		return true
 	}
 	update := install.Installed()
+	if update {
+		current := installedVersion()
+		if current == "" {
+			current = T("неизвестна", "unknown")
+		}
+		if !tray.Ask(T("Обновление SSCv2", "SSCv2 update"), fmt.Sprintf(
+			T("Текущая версия: %s\nНовая версия: %s\n\nУстановить обновление?",
+				"Installed version: %s\nNew version: %s\n\nInstall the update?"), current, ipc.Version)) {
+			return true
+		}
+	}
 	logf("setup: %s %s -> %s (version %s)", map[bool]string{true: "updating", false: "installing"}[update], selfPath(), install.Exe(), ipc.Version)
 	// A running tray (old version) hands the adapter back and quits first;
 	// it keeps the chosen codec so the new version resumes it.
@@ -72,6 +83,22 @@ func installOrUpdate() bool {
 		return true
 	}
 	return true
+}
+
+// Query the installed executable so the version is available with the tray closed.
+func installedVersion() string {
+	cmd := exec.Command(install.Exe(), "status")
+	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true, CreationFlags: 0x08000000}
+	out, err := cmd.Output()
+	if err != nil {
+		return ""
+	}
+	for _, line := range strings.Split(string(out), "\n") {
+		if version, ok := strings.CutPrefix(line, "version "); ok {
+			return strings.TrimSpace(version)
+		}
+	}
+	return ""
 }
 
 // stopLegacyTray closes a running tray of a version that has no "quit"

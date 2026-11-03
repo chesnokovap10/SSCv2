@@ -2,219 +2,70 @@
 
 **English** · [Русский](README.ru.md)
 
-A Windows tray program that streams audio to Samsung Galaxy Buds over the laptop's
-**built-in MediaTek MT79xx Bluetooth** (MT7921/MT7922/MT7902), bypassing the Windows stack,
-with **AAC**, **SSC** (Samsung Scalable Codec, 24 bit / 48 kHz) or **SSC UHQ** (96 kHz) —
-while a **BLE mouse** keeps working. There is no main window: just an icon and a right-click
-menu.
-
-Version: `0.2 #<commit hash>` (e.g. `0.2 #67cd8794`), shown in the menu and in "Device info".
+SSCv2 streams Windows audio to Bluetooth headphones through a supported MediaTek MT7921, MT7922 or MT7902 adapter. Choose AAC, Samsung Scalable Codec (SSC, 24-bit / 48 kHz), or SSC UHQ (96 kHz) from the tray. A paired Bluetooth mouse can continue working through SSCv2 while the codec is active.
 
 ## Install and update
 
-Run `ssc.exe` from any folder. On the first run it (after a UAC prompt) copies itself to
-`C:\Program Files\SSCv2`, puts an **SSCv2** shortcut on the desktop and starts from there.
-If the program is already installed and a different file is started, the installed copy is
-**updated**: the running tray gives Bluetooth back to Windows and quits, the file is replaced
-and the new tray resumes the same codec. Nothing is added to "Apps & features".
+Download `ssc.exe` from [Releases](https://github.com/chesnokovap10/SSCv2/releases) and run it. On first launch, approve the Windows UAC prompt. SSCv2 installs to `C:\Program Files\SSCv2` and creates a desktop shortcut.
 
-`SSCV2_PORTABLE=1` runs without installing (for debugging).
+To update, run the new `ssc.exe`. The update window shows the installed and incoming builds, including their commit hashes. Choose **Yes** to close the running tray, install the update and resume the selected codec. Choose **No** to keep the current installation running. Windows may ask for administrator approval separately.
 
-**Uninstall:** "Settings → Uninstall…". Bluetooth goes back to Windows; the service, the
-`Program Files\SSCv2`, `%ProgramData%\SSCv2`, settings, pairing keys, logs
-and the shortcut are removed. The file the program was installed from stays.
+Use **Settings → Uninstall…** to return the adapter to Windows and remove the installed program, helper service, shortcut and saved SSCv2 data. For portable debugging, set `SSCV2_PORTABLE=1` before launching.
 
-## Menu
+## Get sound in the headphones
 
-| Item | What it does |
-|---|---|
-| **Codec ▸** Off / AAC / SSC / SSC UHQ | "Off": the adapter belongs to the Windows driver (BTHUSB), headphones and mouse work as usual. Otherwise: adapter in WinUSB, MT79xx firmware, BTstack, the headphones on the chosen codec, mouse bridge. |
-| **Bitrate ▸** | The list for the current codec; "Auto" — see below. |
-| Pair a device ▸ | Import keys from Windows, search nearby (codec on), choose headphones and mouse. |
-| Device info… | Adapter, chip/firmware, headphones (codec, bitrate, volume), mouse, service. Same text on a left click on the icon. |
-| **Settings ▸** Language | Русский / English (default: the Windows language). |
-| Settings ▸ Max MTU for Samsung Galaxy Buds2 Pro | Packets of up to 1017 bytes instead of the 679 the headphones announce: AAC 256 kbps in whole frames. Samsung Galaxy Buds2 Pro play them cleanly; other headphones may drop them — hence an option. |
-| Settings ▸ All bitrates | Also offer bitrates above the highest one checked to work on these headphones (see "Headphone profiles"). |
-| Settings ▸ Debug journal | Detailed shared journal of all processes (`debug.log`, see below). |
-| Settings ▸ Open the log folder | `%LOCALAPPDATA%\SSCv2\logs`. |
-| Settings ▸ Start / Remove the service | Helper service (LocalSystem): with it, switching and key import need no UAC prompts. |
-| Settings ▸ Uninstall… | Full removal (see above). |
+1. Pair the headphones and mouse in Windows.
+2. Open the SSCv2 tray menu and select **Pair a device → Import devices paired in Windows**. Choose the headphones and, optionally, the mouse.
+3. Select **AAC** or **SSC** under **Codec**. Start with **Auto** under **Bitrate**.
+4. Select **Off (Windows Bluetooth)** to return the adapter to Windows. **Exit** also returns it to Windows before the tray closes.
 
-Icon colour: grey — off, amber — switching/connecting, blue — waiting for the headphones,
-green — streaming, red — error.
+SSCv2 uses the MediaTek adapter in WinUSB mode while a codec is active. Windows Bluetooth devices on that adapter may disappear and reappear during the switch. **Device info…** shows the adapter, codec, actual bitrate, audio source and connection status.
+
+### Volume and mute
+
+- Use the **Headphone volume** slider, its mute button or the keyboard volume keys in codec mode. The scale is **0–127**, with a keyboard step of **4**. The slider stays visible while the stream starts and in **Off** mode.
+- SSCv2 applies volume and mute before encoding. The headphones' hardware volume is initialized to 127. Volume changes made on the headphones are independent of the SSCv2 slider.
+- SSCv2 captures the default Windows output through WASAPI loopback and keeps that output muted while it is in use. If Windows unmutes it, SSCv2 reasserts mute. When SSCv2 releases the output, it restores the mute state it took ownership of.
+- SSCv2 carries the headphone level and mute between codec mode and Windows when the Windows stereo endpoint is available. On reconnect, Windows may briefly expose the endpoint before SSCv2 can apply the saved level.
+- If the headphone link drops during playback, SSCv2 sends Play/Pause and releases the physical output while waiting for the headphones. Headphone media controls are forwarded to Windows.
 
 ### Codecs and bitrates
 
-| Codec | Bitrates, kbps | "Auto" |
-|---|---|---|
-| AAC | 128, 160, 192, 224, 256 | as much as the headphones' packet holds: `(MTU − 12) × 8 × rate / 1024`, at most 256 (Samsung Galaxy Buds2 Pro: 250 at 48 kHz; 256 with "Max MTU") |
-| SSC | 88, 96, 128, 192, 229, 256, 328 | the headphones' highest working rate if known (Samsung Galaxy Buds2 Pro: 229), otherwise the highest one packet holds: 256, 328 with "Max MTU" (128 if the headphones announce a limit) |
-| SSC UHQ | 152, 250, 291, 308, 442, 584, 886 | the highest one packet holds (584; 886 with "Max MTU") |
-
-* SSC is our `libssc`, a bit-exact twin of the encoder in the phone firmware. Windows output
-  must run at 48000 Hz. The phone sends at most 192 at 48 kHz; 256 and 328 are the encoder's
-  "wide" modes.
-
-### Headphone profiles
-
-`internal/engine/profiles.go` holds the highest bitrate checked by ear per model. The model is
-matched by its Bluetooth Device ID (vendor/product id, as Windows recorded it on pairing:
-`BTHPORT\Parameters\Devices\<mac>` `VID`/`PID`); by the Bluetooth name only when Windows does
-not know the device. Only **Samsung Galaxy Buds2 Pro** (SM-R510, Samsung `0x0075` / `0xA013`)
-are checked: SSC 229 kbps (256/328 sound
-choked), SSC UHQ not supported (they do not announce it). For them "Auto" is 229, higher rates
-appear only with "Settings ▸ All bitrates"; SSC UHQ can be chosen, but its bitrate list stays
-empty and nothing streams until "All bitrates" is on.
-Headphones without a profile always see every bitrate.
-* SSC UHQ: the 48 kHz capture is upsampled 2× to 96 kHz, 9 ms frames. Samsung Galaxy Buds2 Pro accept it
-  although they do not announce it.
-* Bitrates whose frames do not fit the headphones' packet (AAC 256, SSC 328, UHQ 886) are
-  offered only with "Max MTU". The SSC configuration byte (`ctl ssccap`) is not saved — it lasts
-  until the tray restarts.
-
-### Buttons and volume
-
-* Taps on the headphones → Windows media keys: single — play/pause, double — next track,
-  triple — restart / previous track (the player decides). The headphones are told whether
-  something plays, so a tap sends the right command.
-* Windows volume ⇄ headphone volume (AVRCP), both ways.
-* **Mute** in Windows (key, mixer) silences the stream to the headphones.
-* When the link is lost (headphones in the case) playback is paused and the sound goes back
-  to the speakers until the headphones return.
-
-### Mouse
-
-While a codec is on, Windows Bluetooth is off, so the program serves the mouse itself
-("Pair a device ▸ Mouse"):
-
-* **BLE mice** (HID over GATT) — the program connects to the mouse with the keys from Windows;
-* **classic mice** (Bluetooth BR/EDR HID, "(classic)" in the list) — the mouse connects by itself
-  when moved; the program accepts it with the key from Windows. The report layout comes from the
-  mouse's SDP record, the standard boot format otherwise.
-
-Pair the mouse in Windows first, then "Import devices paired in Windows". Movement, wheel,
-horizontal scroll and buttons 1–5 are passed on; one mouse at a time, no keyboards.
-
-## How it works
-
-One `ssc.exe`, several roles:
-
-```
-ssc.exe            tray (user)  ── stdin/stdout JSON ──►  ssc.exe engine (user)
-   │                                                       MT79xx firmware (WinUSB)
-   │ \\.\pipe\SSCv2Helper (SYSTEM, admins, owner)          BTstack: A2DP/AVDTP/AVRCP, LE HID
-   ▼                                                       WASAPI → AAC (FDK) / SSC (libssc) → RTP
-ssc.exe service (LocalSystem)                              volume ⇄ AVRCP, buttons, mouse
-   driver switch, registry keys
-```
-
-* **The engine is a separate process** per session: fresh BTstack state, a crash in C code
-  does not take the tray down; the tray restarts the engine and undoes its audio changes.
-* **The service** is only for privileged work: the driver switch (a temporary certificate per
-  switch), reading `BTHPORT\Parameters\Keys` (SYSTEM only), writing a new key back to
-  Windows. Without the service a UAC-elevated copy of `ssc.exe` does the
-  same. The service runs from `Program Files\SSCv2`.
-* **Keys.** Pair headphones and mouse in Windows, then "Import devices paired in Windows"
-  copies the keys — same controller address, no re-pairing, Windows keeps working with them.
-  Headphones paired while a codec is on get their new key written to the Windows registry
-  too (with the service running).
-* **Audio output.** SSCv2 captures the default Windows output with WASAPI loopback.
-  The physical output is muted while streaming. Use the tray volume menu or the
-  laptop volume and mute keys to control the Bluetooth headphones.
-
-### Why the driver is switched "in place"
-
-The adapter is switched by disabling the device → adding/removing the WinUSB package →
-enabling it (`pnputil /disable-device`, `/add-driver /install` or `/delete-driver
-/uninstall`, `/enable-device`). Removing the node (`/remove-device /subtree`) is not an option:
-it deletes the Bluetooth registry entries, and after every switch back Windows saw the
-headphones as a *new* device (100 % volume, audio jumping, ghost devices). The old way remains
-as a fallback, used automatically when Windows refuses to stop the adapter.
-
-### Go and C
-
-Everything of our own is Go: the driver switch (SetupAPI), the MT79xx firmware loader
-(WinUSB), WASAPI/volume/IPolicyConfig (raw COM), the BT logic (events, A2DP, AVRCP, mouse
-bridge), the service, the tray, installation. The C/C++ libraries build through cgo with
-plain `go build` (no CMake): **BTstack** (`third_party/btstack`), **FDK-AAC**
-(`third_party/fdk-aac`) and our **libssc** (`libssc/src`). `tools/genwrap` writes one wrapper
-per source (`internal/bt/zbt_*.c`, `internal/codec/aac/zfdk_*.cpp`,
-`internal/codec/ssc/zssc_*.c`).
-
-| Package | Purpose |
+| Codec | Available candidates, kbps |
 |---|---|
-| `cmd/ssc` | entry point, process roles, icon |
-| `internal/app` | tray: menu, codecs, install/uninstall, `ctl` commands |
-| `internal/engine` | streaming process: capture → codec → BT, reconnects, buttons, mute |
-| `internal/bt` | BTstack: bring-up, A2DP source (AAC/SSC), AVRCP, inquiry, mouse bridge (BLE and classic) |
-| `internal/codec/aac`, `internal/codec/ssc` | AAC-LC (LATM like Android), SSC through libssc |
-| `internal/audio` | WASAPI capture, volume and mute |
-| `internal/driver`, `internal/mtk` | WinUSB ↔ BTHUSB, MT79xx RAM firmware (from DriverStore `mtkbt*`) |
-| `internal/helper` | service, pipe, privileged operations, UAC |
-| `internal/install` | Program Files, shortcut, uninstall |
-| `internal/keys` | keys (keys.json, Windows registry) |
-| `internal/i18n`, `internal/config`, `internal/logx`, `internal/tray` | languages, settings, logs, icon |
-| `libssc/` | our SSC implementation: [README](libssc/README.md), [plan](libssc/PLAN.md) |
+| AAC | 128, 160, 192, 224, 256 |
+| SSC | 88, 96, 128, 192, 229, 256, 328 |
+| SSC UHQ | 152, 250, 291, 308, 442, 584, 886 |
 
-## Build
+The menu filters these candidates by packet size and the known profile of the headphones. **Auto** selects a rate using those limits. The actual rate is shown once streaming starts. Bitrate changes first try to reopen the audio stream on the same Bluetooth connection. A short pause is possible, and the engine can reconnect if reopening fails.
 
-Needs Go 1.24+ and MinGW-w64 (gcc/g++) in `PATH`.
+- **Galaxy Buds2 Pro** have a checked SSC limit of **229 kbps**. SSC UHQ is not advertised by this model and may be unavailable in the standard menu.
+- **Settings → All bitrates** exposes experimental rates above the checked limit. Rates that do not fit the packet are still filtered.
+- **Settings → Max MTU for Samsung Galaxy Buds2 Pro** allows packets up to 1017 bytes for rates such as AAC 256 kbps. Other headphones may drop these larger packets.
 
-```bat
-build.cmd
-```
+### Mouse and Bluetooth
 
-The result is `bin\ssc.exe` with version `0.2 #<hash>` from git. The first build compiles
-BTstack, FDK-AAC and libssc (~1–2 min), later builds are cached. Switching to WinUSB needs the
-Windows 10+ SDK (`makecat.exe`, `signtool.exe`).
+SSCv2 can bridge one paired BLE HID or classic Bluetooth HID mouse, including movement, scrolling and buttons 1–5. Import its pairing from Windows and select it in the tray. A classic mouse may need movement to initiate the connection.
 
-```bat
-go test ./...
-```
+The optional helper service handles driver switching and access to Windows pairing keys. With the service running, routine switches and imports do not require a UAC prompt. The tray and audio engine run separately from the helper.
 
-## Files
+## Diagnostics and build
 
-* `%APPDATA%\SSCv2\settings.json` — codec, bitrates, language, "Max MTU", headphones/mouse,
-  debug. Every load and save is logged in `tray.log` (with the caller).
-* `%APPDATA%\SSCv2\keys.json` — pairing keys (secrets, this user only).
-* `%LOCALAPPDATA%\SSCv2\logs\` — `tray.log`, `engine.log`, `engine-c.log`, `helper.log`,
-  `debug.log`; the service log is `%ProgramData%\SSCv2\service.log`.
-
-## Command line
+Use **Settings → Open the log folder** for `%LOCALAPPDATA%\SSCv2\logs`. Enable **Debug and UI API** for detailed logging and menu commands. Settings and pairing keys are stored in `%APPDATA%\SSCv2`. The helper service log is in `%ProgramData%\SSCv2`.
 
 ```bat
 ssc.exe status
-ssc.exe ctl status | info | version | log [debug|tray|engine|helper] [N]
-ssc.exe ctl mode off|aac|ssc|ssc_uhq | bitrate auto|<kbps> | maxmtu on|off | lang ru|en
-ssc.exe ctl debug on|off | import windows | service install|remove | scan | connect <addr>
-ssc.exe ctl quit | uninstall
-ssc.exe ctl menu [open|close|check <id>|activate <id>|volume <0..127>|mute]
+ssc.exe ctl status
+ssc.exe ctl mode aac
+ssc.exe ctl bitrate auto
+ssc.exe ctl menu
 ```
 
-Enable **Debug and UI API** in Settings, then run `ctl menu` to read the menu tree, its open state and the current headphone volume as JSON. Use the item IDs with `check` to inspect availability and with `activate` to invoke enabled commands. Commands are dispatched asynchronously.
+The build requires Go 1.27 and MinGW-w64 (`gcc` and `g++` in `PATH`). Switching drivers also requires Windows SDK tools `makecat.exe` and `signtool.exe`.
 
-Diagnostics: `ctl aac frag` (AAC 256 frames split over two RFC 3016 packets — Samsung Galaxy Buds2 Pro do not
-reassemble them), `ctl ssccap auto|<hex>` (SSC configuration byte), `SSCV2_SSC_SHIFT=1..8`
-(feed the SSC encoder extra headroom bits).
+```bat
+build.cmd
+go test ./...
+```
 
-### Debug journal
-
-Switched on in "Settings", with `ssc.exe ctl debug on` or `SSCV2_DEBUG=1`. The tray, engine
-and service write to one time-ordered file, `%LOCALAPPDATA%\SSCv2\logs\debug.log`; each line
-has a category (`findstr " vol:" debug.log`):
-
-| Category | Content |
-|---|---|
-| `mode`, `ui`, `helper` | switches, menu items, service requests and the driver switch script log |
-| `dev`, `vol` | audio device events and every volume/mute change — with its origin |
-| `hci`, `l2cap`, `sdp` | HCI commands and events, L2CAP channels |
-| `avdtp`, `avrcp` | A2DP signalling, AVRCP (volume, headphone buttons) |
-| `att`, `smp` | BLE mouse: GATT and pairing |
-| `media` | every 5 s — summary of audio packets, mouse reports and advertising |
-
-Pairing keys (link key, LTK) are masked. The file rotates at 64 MB.
-
-## Licences
-
-BTstack — BlueKitchen licence (non-commercial use only), FDK-AAC — Fraunhofer licence, Opus
-(in libssc) — BSD; texts in `third_party/*` and `libssc/src/opus/COPYING`. libssc and SSC — personal use only.
+`build.cmd` builds `bin\ssc.exe` using BTstack, FDK-AAC and [libssc](libssc/README.md) through cgo. The tray menu and **Device info…** display the build version and commit hash.
