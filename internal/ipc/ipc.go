@@ -28,6 +28,7 @@ type EngineConfig struct {
 	AACMode         string `json:"aacMode,omitempty"`    // "fit" | "frag"
 	AACBitrate      int    `json:"aacBitrate,omitempty"` // kbps, 0 = as high as a packet allows
 	SSCBitrate      int    `json:"sscBitrate,omitempty"` // kbps, 0 = like the phone / UHQ: highest that fits
+	TryUHQ          bool   `json:"tryUhq,omitempty"`
 	SSCUHQ          bool   `json:"sscUhq,omitempty"`     // SSC UHQ (96 kHz)
 	SSCMaxKbps      int    `json:"sscMaxKbps,omitempty"` // highest working SSC kbps on these headphones (Auto), 0 = not known
 	SSCCap          int    `json:"sscCap,omitempty"`     // SSC config byte, 0 = like the phone
@@ -43,6 +44,7 @@ type AudioCarry struct {
 
 // CodecChange selects the stream format on an active connection.
 type CodecChange struct {
+	TryUHQ     bool   `json:"tryUhq,omitempty"`
 	Codec      string `json:"codec"`
 	SSCUHQ     bool   `json:"sscUhq,omitempty"`
 	SSCBitrate int    `json:"sscBitrate,omitempty"`
@@ -79,17 +81,18 @@ type EngineStatus struct {
 	Chip        string `json:"chip,omitempty"`
 	Firmware    string `json:"firmware,omitempty"`
 
-	Headphones     string `json:"headphones,omitempty"`
-	HeadphonesName string `json:"headphonesName,omitempty"`
-	Connected      bool   `json:"connected"`
-	Streaming      bool   `json:"streaming"`
-	Codec          string `json:"codec,omitempty"`
-	BitrateKbps    int    `json:"bitrateKbps,omitempty"`
-	SampleRate     int    `json:"sampleRate,omitempty"`
-	Volume         int    `json:"volume"` // 0..127, -1 unknown
-	AVRCP          bool   `json:"avrcp"`
-	CaptureDevice  string `json:"captureDevice,omitempty"`
-	CaptureFormat  string `json:"captureFormat,omitempty"`
+	Headphones      string `json:"headphones,omitempty"`
+	HeadphonesName  string `json:"headphonesName,omitempty"`
+	SSCUHQSupported *bool  `json:"sscUhqSupported,omitempty"`
+	Connected       bool   `json:"connected"`
+	Streaming       bool   `json:"streaming"`
+	Codec           string `json:"codec,omitempty"`
+	BitrateKbps     int    `json:"bitrateKbps,omitempty"`
+	SampleRate      int    `json:"sampleRate,omitempty"`
+	Volume          int    `json:"volume"` // 0..127, -1 unknown
+	AVRCP           bool   `json:"avrcp"`
+	CaptureDevice   string `json:"captureDevice,omitempty"`
+	CaptureFormat   string `json:"captureFormat,omitempty"`
 	// What to undo if the engine dies: previous default output, speakers muted.
 	Muted bool `json:"muted"`
 
@@ -104,6 +107,7 @@ type EngineStatus struct {
 
 // Event from engine to tray.
 type Event struct {
+	Codec   *CodecChange  `json:"codec,omitempty"`
 	Volume  *uint8        `json:"volume,omitempty"`
 	Ev      string        `json:"ev"` // status|scan|linkkey|log
 	Status  *EngineStatus `json:"status,omitempty"`

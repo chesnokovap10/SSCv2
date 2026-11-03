@@ -594,6 +594,21 @@ func CloseStream(ctx context.Context) error {
 	return nil
 }
 
+// PrepareStreamRetry reuses discovered endpoints after a rejected configuration.
+func PrepareStreamRetry() error {
+	s := stack
+	var rc C.uint8_t
+	if err := s.callSync(func() {
+		rc = C.ssc_prepare_stream_switch(C.uint16_t(s.a2dpCid))
+	}); err != nil {
+		return err
+	}
+	if rc != 0 {
+		return fmt.Errorf("prepare AVDTP retry: 0x%02X", uint8(rc))
+	}
+	return nil
+}
+
 func ACLHandle() uint32 { return stack.aclHandle.Load() }
 
 // Disconnect closes the A2DP (and AVRCP) connection.

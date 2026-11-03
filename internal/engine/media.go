@@ -23,8 +23,6 @@ type keyInput struct {
 
 // Windows media keys (VK_MEDIA_*).
 const (
-	vkMediaNext      = 0xB0
-	vkMediaPrev      = 0xB1
 	vkMediaStop      = 0xB2
 	vkMediaPlayPause = 0xB3
 )

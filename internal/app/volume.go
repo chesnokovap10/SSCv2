@@ -42,7 +42,24 @@ func (a *App) adjustVolume(action int) {
 	case idVolMute:
 		muted = !muted
 	}
-	value := uint8(level)
+	a.setVolumeLocked(uint8(level), muted)
+}
+
+func (a *App) sliderVolume() (uint8, bool, bool) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.volumeLocked(), a.s.HeadphonesMuted, a.eng != nil && a.mode.Streaming()
+}
+
+func (a *App) setSliderVolume(value uint8) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.eng != nil && a.mode.Streaming() && (a.volumeLocked() != value || a.s.HeadphonesMuted) {
+		a.setVolumeLocked(value, false)
+	}
+}
+
+func (a *App) setVolumeLocked(value uint8, muted bool) {
 	if err := a.eng.in.Write(ipc.Command{Cmd: "volume", Volume: value, On: muted}); err != nil {
 		logf("headphone volume: %v", err)
 		return

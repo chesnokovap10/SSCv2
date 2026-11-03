@@ -185,7 +185,10 @@ ssc.exe ctl status | info | version | log [debug|tray|engine|helper] [N]
 ssc.exe ctl mode off|aac|ssc|ssc_uhq | bitrate auto|<кбит/с> | maxmtu on|off | lang ru|en
 ssc.exe ctl debug on|off | import windows | service install|remove | scan | connect <адрес>
 ssc.exe ctl quit | uninstall
+ssc.exe ctl menu [open|close|check <id>|activate <id>|volume <0..127>|mute]
 ```
+
+Команда `ctl menu` возвращает дерево меню, состояние открытия и громкость наушников в JSON. Команда `check` проверяет доступность пункта по его ID, а `activate` запускает доступную команду асинхронно.
 
 Диагностика: `ctl aac frag` (кадры AAC 256 по двум пакетам RFC 3016 — Samsung Galaxy Buds2 Pro их не
 собирают), `ctl ssccap auto|<hex>` (байт конфигурации SSC), `SSCV2_SSC_SHIFT=1..8`

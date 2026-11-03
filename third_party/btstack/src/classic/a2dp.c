@@ -449,7 +449,7 @@ uint8_t ssc_prepare_stream_switch(uint16_t cid){
         return ERROR_CODE_COMMAND_DISALLOWED;
     }
     a2dp_config_process_t * process = a2dp_config_process_for_role(AVDTP_ROLE_SOURCE, connection);
-    if (process->state != A2DP_CONFIGURED){
+    if (process->state != A2DP_CONFIGURED && process->state != A2DP_CONNECTED && process->state != A2DP_DISCOVERY_DONE){
         return ERROR_CODE_COMMAND_DISALLOWED;
     }
     process->state = A2DP_DISCOVERY_DONE;

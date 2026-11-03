@@ -21,6 +21,7 @@ import (
 	"sscv2/internal/ipc"
 	"sscv2/internal/keys"
 	"sscv2/internal/logx"
+	"sscv2/internal/tray"
 )
 
 // tailFile returns the last n lines of a text file.
@@ -50,7 +51,7 @@ func tailFile(path string, n int) string {
 //	aac fit|frag|over | ssc auto|<kbps> | ssccap auto|<hex> | restore <mode> | variant <v>
 //	import windows | service install|remove
 //	scan | connect <addr> | headphones <addr> | mouse <addr|none>
-//	quit [keep] | uninstall [yes]
+//	menu [open|close|check <id>|activate <id>|volume <0..127>|mute] | quit [keep] | uninstall [yes]
 
 func ctlPipeName() string { return `\\.\pipe\SSCv2Tray-` + helper.CurrentUserSID() }
 
@@ -112,6 +113,8 @@ func (a *App) ctl(args []string) string {
 	}
 	logf("ctl: %s", strings.Join(args, " "))
 	switch args[0] {
+	case "menu":
+		return a.ctlMenu(args[1:])
 	case "status":
 		st := a.refreshAdapter()
 		inst, run := helper.ServiceState()
@@ -380,4 +383,84 @@ func Ctl(args []string) (string, error) {
 		}
 	}
 	return strings.TrimRight(sb.String(), "\n"), nil
+}
+
+func (a *App) ctlMenu(args []string) string {
+	const usage = "error: menu [open|close|check <id>|activate <id>|volume <0..127>|mute]"
+	if len(args) == 0 {
+		level, muted, available := a.sliderVolume()
+		items := a.t.RenderedMenu()
+		open := items != nil
+		if !open {
+			items = a.menu()
+		}
+		state := struct {
+			Open            bool        `json:"open"`
+			Items           []tray.Item `json:"items"`
+			Volume          uint8       `json:"volume"`
+			Muted           bool        `json:"muted"`
+			VolumeAvailable bool        `json:"volumeAvailable"`
+		}{open, items, level, muted, available}
+		out, _ := json.MarshalIndent(state, "", "  ")
+		return string(out)
+	}
+	switch args[0] {
+	case "open":
+		a.t.OpenMenu()
+	case "close":
+		a.t.CloseMenu()
+	case "volume":
+		if len(args) != 2 {
+			return usage
+		}
+		level, err := strconv.ParseUint(args[1], 10, 7)
+		if err != nil {
+			return usage
+		}
+		if _, _, available := a.sliderVolume(); !available {
+			return "error: volume unavailable"
+		}
+		a.setSliderVolume(uint8(level))
+	case "mute":
+		if _, _, available := a.sliderVolume(); !available {
+			return "error: volume unavailable"
+		}
+		a.adjustVolume(idVolMute)
+	case "check", "activate":
+		if len(args) != 2 {
+			return usage
+		}
+		id, err := strconv.Atoi(args[1])
+		if err != nil || id <= 0 {
+			return usage
+		}
+		item, found := findMenuItem(a.menu(), id)
+		if !found || item.Slider {
+			return "error: menu action unavailable"
+		}
+		if args[0] == "check" {
+			out, _ := json.Marshal(item)
+			return string(out)
+		}
+		if item.Disabled {
+			return "error: menu action disabled"
+		}
+		a.t.ActivateMenuItem(id)
+	default:
+		return usage
+	}
+	return "ok"
+}
+
+func findMenuItem(items []tray.Item, id int) (tray.Item, bool) {
+	for _, item := range items {
+		if item.ID == id {
+			return item, true
+		}
+		if found, ok := findMenuItem(item.Sub, id); ok {
+			found.Disabled = found.Disabled || item.Disabled
+			return found, true
+		}
+	}
+	return tray.Item{}, false
 }

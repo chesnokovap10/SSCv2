@@ -15,6 +15,7 @@ import (
 
 // Item is one menu entry. ID 0 + no Sub + !Separator = disabled label.
 type Item struct {
+	Slider    bool
 	Text      string
 	ID        int
 	Checked   bool
@@ -24,14 +25,22 @@ type Item struct {
 	Sub       []Item
 }
 
-// Tray drives the icon. Menu is called on every right click to build the
+// Tray drives the icon. Menu is called on every click to build the
 // menu; Command receives the chosen ID (on the UI thread - keep it short).
 type Tray struct {
-	Menu       func() []Item
-	Command    func(id int)
-	Click      func() // left click
-	VolumeKey  func(uint32)
-	volumeKeys atomic.Bool
+	Menu                        func() []Item
+	Command                     func(id int)
+	Volume                      func() (uint8, bool, bool)
+	SetVolume                   func(uint8)
+	ToggleMute                  func()
+	volumeRow                   *menuSlider
+	openMenu                    *liveMenu
+	selectedMenu, selectedFlags uintptr
+	selectedID                  int
+	VolumeKey                   func(uint32)
+	volumeKeys                  atomic.Bool
+	menuOpen                    atomic.Bool
+	rendered                    atomic.Pointer[[]Item]
 
 	mu      sync.Mutex
 	hwnd    uintptr
@@ -174,62 +183,106 @@ func (t *Tray) Quit() {
 	}
 }
 
-func buildMenu(items []Item) uintptr {
-	h, _, _ := pCreatePopupMenu.Call()
-	for _, it := range items {
-		if it.Separator {
-			pAppendMenuW.Call(h, mfSeparator, 0, 0)
-			continue
-		}
-		text, _ := windows.UTF16PtrFromString(it.Text)
-		flags := uintptr(mfString)
-		if it.Checked {
-			flags |= mfChecked
-		}
-		if it.Radio {
-			flags |= mfRadioChk
-		}
-		if it.Disabled || (it.ID == 0 && it.Sub == nil) {
-			flags |= mfGrayed
-		}
-		if it.Sub != nil {
-			sub := buildMenu(it.Sub)
-			pAppendMenuW.Call(h, flags|mfPopup, sub, uintptr(unsafe.Pointer(text)))
-			continue
-		}
-		pAppendMenuW.Call(h, flags, uintptr(it.ID), uintptr(unsafe.Pointer(text)))
+const (
+	menuOpenMsg  = wmApp + 4
+	menuCloseMsg = wmApp + 5
+)
+
+var endMenu = user32.NewProc("EndMenu")
+
+func (t *Tray) RenderedMenu() []Item {
+	if items := t.rendered.Load(); items != nil {
+		return *items
 	}
-	return h
+	return nil
+}
+func (t *Tray) OpenMenu()               { t.postMenuMessage(menuOpenMsg, 0) }
+func (t *Tray) CloseMenu()              { t.postMenuMessage(menuCloseMsg, 0) }
+func (t *Tray) ActivateMenuItem(id int) { t.postMenuMessage(menuActionMsg, uintptr(id)) }
+
+func (t *Tray) postMenuMessage(msg, arg uintptr) {
+	t.mu.Lock()
+	h := t.hwnd
+	t.mu.Unlock()
+	if h != 0 {
+		pPostMessageW.Call(h, msg, arg, 0)
+	}
+}
+
+func (t *Tray) buildMenu(items []Item) *liveMenu {
+	h, _, _ := pCreatePopupMenu.Call()
+	m := &liveMenu{handle: h}
+	t.updateMenu(m, items)
+	return m
 }
 
 func (t *Tray) showMenu() {
-	if t.Menu == nil {
+	if t.Menu == nil || !t.menuOpen.CompareAndSwap(false, true) {
 		return
 	}
-	h := buildMenu(t.Menu())
-	defer pDestroyMenu.Call(h)
-	var pt struct{ x, y int32 }
-	pGetCursorPos.Call(uintptr(unsafe.Pointer(&pt)))
+	defer t.menuOpen.Store(false)
+	items := t.Menu()
+	m := t.buildMenu(items)
+	t.rendered.Store(&items)
+	t.openMenu = m
+	defer func() {
+		t.rendered.Store(nil)
+		t.openMenu, t.volumeRow = nil, nil
+		t.selectedMenu, t.selectedID = 0, 0
+		pDestroyMenu.Call(m.handle)
+	}()
+	thread := windows.GetCurrentThreadId()
+	hook, _, err := setWindowsHook.Call(0xffffffff, menuFilterCallback, 0, uintptr(thread)) // WH_MSGFILTER
+	if hook != 0 {
+		defer unhookWindowsHook.Call(hook)
+	} else {
+		logx.Printf("menu input: %v", err)
+	}
+	setTimer.Call(t.hwnd, 1, 75, 0)
+	defer killTimer.Call(t.hwnd, 1)
+	setTimer.Call(t.hwnd, 2, 300, 0)
+	defer killTimer.Call(t.hwnd, 2)
+
+	x, y, alignment := t.menuAnchor()
 	pSetForegroundWindow.Call(t.hwnd)
-	id, _, _ := pTrackPopupMenu.Call(h, tpmReturnCmd|tpmRightButton|tpmBottomAlign,
-		uintptr(pt.x), uintptr(pt.y), 0, t.hwnd, 0)
+	id, _, _ := pTrackPopupMenu.Call(m.handle, tpmReturnCmd|tpmRightButton|alignment,
+		uintptr(x), uintptr(y), 0, t.hwnd, 0)
 	pPostMessageW.Call(t.hwnd, wmNull, 0, 0)
-	if id != 0 && t.Command != nil {
+	if id != 0 && t.Command != nil && (t.volumeRow == nil || int(id) != t.volumeRow.id) {
 		t.Command(int(id))
 	}
 }
 
 func wndProc(hwnd, msg, wparam, lparam uintptr) uintptr {
 	t := current
+	if t != nil && t.sliderMessage(msg, wparam, lparam) {
+		return 1
+	}
 	switch uint32(msg) {
+	case wmMenuSelect:
+		t.selectedMenu, t.selectedFlags, t.selectedID = lparam, wparam>>16, int(wparam&0xffff)
+	case menuOpenMsg:
+		t.showMenu()
+		return 0
+	case menuCloseMsg:
+		endMenu.Call()
+		return 0
+	case menuActionMsg:
+		if t.Command != nil {
+			t.Command(int(wparam))
+		}
+		return 0
+	case wmTimer:
+		if wparam == 2 && t.openMenu != nil {
+			items := t.Menu()
+			t.updateMenu(t.openMenu, items)
+			t.rendered.Store(&items)
+			return 0
+		}
 	case callbackMsg:
 		switch uint32(lparam & 0xFFFF) { // NOTIFYICON_VERSION_4: event in LOWORD
-		case wmContextMenu: // v4 sends this for right click / keyboard menu
+		case wmContextMenu, wmLButtonUp, 0x0401: // NIN_KEYSELECT
 			t.showMenu()
-		case wmLButtonUp:
-			if t.Click != nil {
-				t.Click()
-			}
 		}
 		return 0
 	case volumeKeyMsg:

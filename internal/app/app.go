@@ -49,6 +49,7 @@ const (
 	idUninstall
 	idAllBitrates
 	idExit
+	idVolume
 	idVolDown
 	idVolUp
 	idVolMute
@@ -73,17 +74,18 @@ type App struct {
 
 	opMu sync.Mutex // one mode switch / privileged op at a time
 
-	mu       sync.Mutex
-	s        *config.Settings
-	mode     config.Mode // effective mode
-	busy     string
-	eng      *engineProc
-	st       ipc.EngineStatus
-	scan     []ipc.Found
-	scanning bool
-	adapter  driver.Status
-	crashes  []time.Time
-	quitting bool
+	mu         sync.Mutex
+	s          *config.Settings
+	mode       config.Mode // effective mode
+	busy       string
+	pendingUHQ bool
+	eng        *engineProc
+	st         ipc.EngineStatus
+	scan       []ipc.Found
+	scanning   bool
+	adapter    driver.Status
+	crashes    []time.Time
+	quitting   bool
 	// restoreMode: how the headphones' level is restored after "Off"
 	// (ctl "restore <mode>", for diagnostics; not persisted).
 	restoreMode   string
@@ -122,7 +124,7 @@ func Run() int {
 	if a.s.Debug {
 		logx.SetDebug(true)
 	}
-	a.t = &tray.Tray{Menu: a.menu, Command: a.command, Click: func() { go a.showInfo() }, VolumeKey: a.volumeKey}
+	a.t = &tray.Tray{Menu: a.menu, Command: a.command, VolumeKey: a.volumeKey, Volume: a.sliderVolume, SetVolume: a.setSliderVolume, ToggleMute: func() { a.adjustVolume(idVolMute) }}
 	go a.startup()
 	go a.serveCtl()
 	if err := a.t.Run(tray.Gray, "SSCv2"); err != nil {
@@ -294,16 +296,22 @@ func (a *App) enable(m config.Mode) {
 	defer a.setBusy("")
 
 	a.mu.Lock()
-	cur, eng, streaming := a.mode, a.eng, a.st.Streaming
+	cur, eng, streaming, pendingUHQ := a.mode, a.eng, a.st.Streaming, a.pendingUHQ
 	a.mu.Unlock()
-	if cur == m && eng != nil && eng.running() {
+	if pendingUHQ || cur == m && eng != nil && eng.running() {
 		return
 	}
 	a.mu.Lock()
 	blocked := a.noBitrate(m)
+	if m == config.ModeSSCUHQ && a.uhqUnavailable() {
+		a.mu.Unlock()
+		a.t.Balloon("SSCv2", T("Наушники не поддерживают SSC UHQ", "SSC UHQ is unavailable on these headphones"), 1)
+		return
+	}
 	codec := ipc.CodecChange{
 		Codec:  m.EngineCodec(),
 		SSCUHQ: m == config.ModeSSCUHQ,
+		TryUHQ: m == config.ModeSSCUHQ && a.s.AllBitrates,
 	}
 	if m != config.ModeAAC {
 		codec.SSCBitrate = a.bitrateFor(m)
@@ -313,10 +321,20 @@ func (a *App) enable(m config.Mode) {
 	}
 	a.mu.Unlock()
 	if !blocked && eng != nil && eng.running() && streaming {
+		if m == config.ModeSSCUHQ {
+			a.mu.Lock()
+			a.pendingUHQ = true
+			a.mu.Unlock()
+		}
 		if err := eng.in.Write(ipc.Command{Cmd: "codec", Codec: &codec}); err == nil {
-			a.setMode(m)
+			if m != config.ModeSSCUHQ {
+				a.setMode(m)
+			}
 			return
 		}
+		a.mu.Lock()
+		a.pendingUHQ = false
+		a.mu.Unlock()
 	}
 	if eng != nil {
 		a.setBusy(T("остановка потока", "stopping the stream"))
@@ -393,6 +411,7 @@ func (a *App) startEngineLocked() {
 		AACMode:         a.s.AACMode,
 		AACBitrate:      a.s.AACBitrate,
 		SSCUHQ:          a.mode == config.ModeSSCUHQ,
+		TryUHQ:          a.mode == config.ModeSSCUHQ && a.s.AllBitrates,
 		SSCCap:          a.s.SSCCap,
 		Carry:           a.carry,
 	}
@@ -434,6 +453,7 @@ func (a *App) disable() {
 	want := float32(a.volumeLocked()) / 127
 	eng := a.eng
 	a.eng = nil
+	a.pendingUHQ = false
 	a.mode = config.ModeOff
 	a.t.SetVolumeKeys(false)
 	restore := a.restoreMode
@@ -484,6 +504,20 @@ func (a *App) onEngineEvent(p *engineProc, ev ipc.Event) {
 		logx.Dbgf("ipc", "engine -> tray: %s %s %s", ev.Ev, ev.Addr, ev.Msg)
 	}
 	switch ev.Ev {
+	case "codec", "codecRejected":
+		a.mu.Lock()
+		current := a.eng == p && a.pendingUHQ
+		if current {
+			a.pendingUHQ = false
+			if ev.Codec != nil && ev.Codec.SSCUHQ {
+				a.mode, a.s.Mode = config.ModeSSCUHQ, config.ModeSSCUHQ
+				_ = config.Save(a.s)
+			}
+		}
+		a.mu.Unlock()
+		if current && ev.Ev == "codecRejected" {
+			a.t.Balloon("SSCv2", ev.Msg, 1)
+		}
 	case "volume":
 		if ev.Volume != nil {
 			a.mu.Lock()
@@ -501,6 +535,9 @@ func (a *App) onEngineEvent(p *engineProc, ev ipc.Event) {
 		}
 		prev := a.st
 		a.st = *ev.Status
+		if !ev.Status.Connected {
+			a.pendingUHQ = false
+		}
 		a.t.SetVolumeKeys(ev.Status.CaptureDevice != "")
 		a.mu.Unlock()
 		if ev.Status.Phase == "streaming" && prev.Phase != "streaming" {
@@ -541,6 +578,7 @@ func (a *App) onEngineExit(p *engineProc, err error) {
 	current := a.eng == p
 	if current {
 		a.eng = nil
+		a.pendingUHQ = false
 		a.t.SetVolumeKeys(false)
 	}
 	mode, quitting := a.mode, a.quitting
@@ -609,6 +647,7 @@ func (a *App) stopForRestart(eng *engineProc, keep bool) {
 	a.mu.Lock()
 	if a.eng == eng {
 		a.eng = nil
+		a.pendingUHQ = false
 	}
 	a.carry = nil
 	if keep && (st.MuteEndpoint != "") {
@@ -670,19 +709,13 @@ func (a *App) setMaxMTU(on bool) {
 func (a *App) setAllBitrates(on bool) {
 	a.mu.Lock()
 	m := a.mode
-	before := a.bitrateFor(m)
 	a.s.AllBitrates = on
 	_ = config.Save(a.s)
-	after := a.bitrateFor(m)
 	blocked, eng := a.noBitrate(m), a.eng
 	a.mu.Unlock()
 	switch {
-	case blocked && eng != nil:
-		a.restartEngine() // stops it: the codec is not supported here
 	case !blocked && eng == nil && m.Streaming():
 		a.enable(m) // the codec was waiting for "All bitrates"
-	case before != after:
-		a.restartEngine() // the saved bitrate is (no longer) hidden
 	}
 }
 
@@ -912,6 +945,18 @@ func (a *App) offered(m config.Mode, kbps int) bool {
 	return a.s.AllBitrates || lim == 0 || lim > 0 && kbps <= lim
 }
 
+// uhqUnavailable requires a.mu.
+func (a *App) uhqUnavailable() bool {
+	if a.s.AllBitrates {
+		return false
+	}
+	if a.st.Connected && a.st.SSCUHQSupported != nil {
+		return !*a.st.SSCUHQSupported
+	}
+	limit, _ := a.workingMax(config.ModeSSCUHQ)
+	return limit == engine.Unsupported
+}
+
 // noBitrate: nothing can be offered for the codec on these headphones (not
 // supported by their profile, Settings > All bitrates off). a.mu held.
 func (a *App) noBitrate(m config.Mode) bool {
@@ -947,7 +992,7 @@ func (a *App) menu() []tray.Item {
 
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	busy := a.busy != ""
+	busy := a.busy != "" || a.pendingUHQ
 	mode := a.mode
 	engineUp := a.eng != nil
 
@@ -957,19 +1002,14 @@ func (a *App) menu() []tray.Item {
 	}
 
 	if mode.Streaming() {
-		level := int(a.volumeLocked()) * 100 / 127
-		items = append(items, tray.Item{Text: fmt.Sprintf(T("Громкость наушников %d%%", "Headphone volume %d%%"), level), Sub: []tray.Item{
-			{Text: T("Тише", "Volume down"), ID: idVolDown, Disabled: !engineUp},
-			{Text: T("Громче", "Volume up"), ID: idVolUp, Disabled: !engineUp},
-			{Text: T("Без звука", "Mute"), ID: idVolMute, Checked: a.s.HeadphonesMuted, Disabled: !engineUp},
-		}})
+		items = append(items, tray.Item{Text: T("Громкость наушников", "Headphone volume"), ID: idVolume, Slider: true})
 	}
 	// codec + bitrate
 	codecs := []tray.Item{
 		{Text: T("Выкл (Bluetooth Windows)", "Off (Windows Bluetooth)"), ID: idModeOff, Radio: true, Checked: mode == config.ModeOff, Disabled: busy},
 		{Text: "AAC", ID: idModeAAC, Radio: true, Checked: mode == config.ModeAAC, Disabled: busy},
 		{Text: T("SSC (24 бит / 48 кГц)", "SSC (24 bit / 48 kHz)"), ID: idModeSSC, Radio: true, Checked: mode == config.ModeSSC, Disabled: busy},
-		{Text: T("SSC UHQ (96 кГц)", "SSC UHQ (96 kHz)"), ID: idModeUHQ, Radio: true, Checked: mode == config.ModeSSCUHQ, Disabled: busy},
+		{Text: T("SSC UHQ (96 кГц)", "SSC UHQ (96 kHz)"), ID: idModeUHQ, Radio: true, Checked: mode == config.ModeSSCUHQ, Disabled: busy || a.uhqUnavailable()},
 	}
 	items = append(items, tray.Item{Text: T("Кодек: ", "Codec: ") + modeName(mode), Sub: codecs})
 	if a.noBitrate(mode) {
@@ -1135,7 +1175,7 @@ func (a *App) command(id int) {
 	a.mu.Unlock()
 	logx.Dbgf("ui", "menu: %q (id %d)", strings.TrimSpace(label), id)
 	switch {
-	case id == idVolDown || id == idVolUp || id == idVolMute:
+	case id == idVolMute:
 		a.adjustVolume(id)
 	case id == idModeOff:
 		go a.disable()

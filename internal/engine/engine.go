@@ -404,7 +404,17 @@ func (e *engine) session(addrStr string) error {
 		return err
 	}
 	defer bt.Disconnect()
-	e.update(func(s *ipc.EngineStatus) { s.Connected = true })
+	remoteCodec, _, remoteCfg := bt.RemoteConfigured()
+	uhqSupported := caps.SSCUHQ || remoteCfg && bt.SSCConfig()&0x02 != 0
+	e.update(func(s *ipc.EngineStatus) {
+		s.Connected, s.SSCUHQSupported = true, &uhqSupported
+	})
+	sscUHQMode, sscForced = e.cfg.SSCUHQ, e.cfg.SSCBitrate*1000
+	tryUHQ := e.cfg.TryUHQ && caps.SSC && !remoteCfg && !uhqSupported
+	if sscUHQ() && !uhqSupported && !tryUHQ {
+		logf("SSC UHQ unavailable on %s, using the supported codec", name)
+		sscUHQMode, sscForced = false, 0
+	}
 
 	if err := e.setupAudio(); err != nil {
 		return err
@@ -414,13 +424,22 @@ func (e *engine) session(addrStr string) error {
 	var mk func(int, int) (Encoder, error)
 	// A stream the headphones configured themselves carries no codec list
 	// (no discovery): judge it below, before the capability checks.
-	_, _, remoteCfg := bt.RemoteConfigured()
-	switch e.cfg.Codec {
+	requestedCodec := e.cfg.Codec
+	if e.cfg.SSCUHQ && !sscUHQ() && !remoteCfg && (!caps.SSC || caps.SSCCap&0x04 == 0) && caps.AAC {
+		requestedCodec = "aac"
+	}
+	if e.cfg.SSCUHQ && !uhqSupported && remoteCfg {
+		requestedCodec = "aac"
+		if remoteCodec == bt.CodecSSC {
+			requestedCodec = "ssc"
+		}
+	}
+	switch requestedCodec {
 	case "ssc":
 		if !caps.SSC && !remoteCfg {
 			return errors.New(i18n.T("наушники не поддерживают SSC", "the headphones do not support SSC"))
 		}
-		if caps.SSC && caps.SSCCap&0x04 == 0 {
+		if !sscUHQ() && caps.SSC && caps.SSCCap&0x04 == 0 {
 			// the phone would go 16-bit 44.1 kHz here; we only do 24-bit 48 kHz
 			return fmt.Errorf(i18n.T("наушники не поддерживают 24-битный SSC (cap 0x%02X) - выберите AAC", "the headphones do not support 24-bit SSC (cap 0x%02X) - choose AAC"), caps.SSCCap)
 		}
@@ -458,6 +477,16 @@ func (e *engine) session(addrStr string) error {
 			rate = sscEncodeRate(e.srate)
 		}
 		mtu, err = bt.Configure(ctx, codec, uint32(rate), 2, 256000)
+		if err != nil && tryUHQ && codec == bt.CodecSSC {
+			logf("initial SSC UHQ rejected: %v", err)
+			if retryErr := bt.PrepareStreamRetry(); retryErr == nil {
+				sscUHQMode, sscForced = false, 0
+				if caps.SSCCap&0x04 == 0 && caps.AAC {
+					codec, mk = bt.CodecAAC, newAAC
+				}
+				mtu, err = bt.Configure(ctx, codec, uint32(e.srate), 2, 256000)
+			}
+		}
 		if err != nil {
 			return err
 		}
@@ -489,27 +518,75 @@ func (e *engine) session(addrStr string) error {
 			e.target = a
 			return nil
 		case change := <-e.changeCodec:
-			if e.cfg.Codec == change.Codec && e.cfg.SSCUHQ == change.SSCUHQ {
+			if change.SSCUHQ && !uhqSupported && !change.TryUHQ {
+				e.rejectUHQ(bt.ErrNoCodec)
 				continue
 			}
-			e.cfg.Codec, e.cfg.SSCUHQ = change.Codec, change.SSCUHQ
+			if e.cfg.Codec == change.Codec && e.cfg.SSCUHQ == change.SSCUHQ && (!change.SSCUHQ || sscUHQ()) {
+				continue
+			}
+			oldMode, oldForced, oldWorking := sscUHQMode, sscForced, sscWorking
 			sscUHQMode = change.SSCUHQ
 			sscForced, sscWorking = change.SSCBitrate*1000, change.SSCMaxKbps*1000
+			target := bt.CodecAAC
 			if change.Codec == "ssc" {
-				codec = bt.CodecSSC
-			} else {
-				codec = bt.CodecAAC
+				target = bt.CodecSSC
 			}
-			next, mtu, err := e.switchCodec(ctx, caps, codec)
+			handle := bt.ACLHandle()
+			next, nextMTU, closed, err := e.switchCodec(ctx, caps, target)
 			if err != nil {
-				logf("codec switch to %s: %v", codec, err)
-				return errReconnect
+				logf("codec switch to %s: %v", target, err)
+				if !change.SSCUHQ {
+					e.cfg.Codec, e.cfg.SSCUHQ, e.cfg.TryUHQ = change.Codec, change.SSCUHQ, change.TryUHQ
+					e.cfg.SSCBitrate, e.cfg.SSCMaxKbps = change.SSCBitrate, change.SSCMaxKbps
+					return errReconnect
+				}
+				sscUHQMode, sscForced, sscWorking = oldMode, oldForced, oldWorking
+				e.rejectUHQ(err)
+				if closed && bt.ACLHandle() == handle {
+					rate := e.srate
+					if codec == bt.CodecSSC {
+						rate = sscEncodeRate(rate)
+					}
+					restoreErr := bt.PrepareStreamRetry()
+					if restoreErr == nil {
+						var restored Encoder
+						var restoredMTU int
+						restored, restoredMTU, restoreErr = e.openCodec(ctx, codec, rate, mk)
+						if restoreErr == nil {
+							enc.Close()
+							enc = restored
+							e.installEncoder(enc, restoredMTU, codec)
+							continue
+						}
+					}
+					logf("could not restore %s on ACL 0x%04x: %v", codec, handle, restoreErr)
+				}
+				if closed || bt.ACLHandle() != handle {
+					e.update(func(s *ipc.EngineStatus) {
+						s.Phase, s.Message, s.Streaming = "error", err.Error(), false
+					})
+				}
+				continue
+			}
+			e.cfg.Codec, e.cfg.SSCUHQ, e.cfg.TryUHQ = change.Codec, change.SSCUHQ, change.TryUHQ
+			e.cfg.SSCBitrate, e.cfg.SSCMaxKbps = change.SSCBitrate, change.SSCMaxKbps
+			codec = target
+			mk = newAAC
+			if codec == bt.CodecSSC {
+				mk = newSSC
 			}
 			enc.Close()
 			enc = next
-			e.installEncoder(enc, mtu, codec)
+			e.installEncoder(enc, nextMTU, codec)
+			_ = e.out.Write(ipc.Event{Ev: "codec", Codec: &change})
 		}
 	}
+}
+
+func (e *engine) rejectUHQ(err error) {
+	message := i18n.T("Не удалось включить SSC UHQ: ", "Could not enable SSC UHQ: ") + err.Error()
+	_ = e.out.Write(ipc.Event{Ev: "codecRejected", Msg: message})
 }
 
 func (e *engine) installEncoder(enc Encoder, mtu int, codec bt.Codec) {
@@ -635,11 +712,15 @@ func (e *engine) btEvents() {
 		case bt.EvMouse:
 			e.update(func(s *ipc.EngineStatus) { s.MouseState = ev.Mouse })
 		case bt.EvMediaKey:
-			// taps on the headphones -> Windows media keys
-			vk := map[int]uint16{bt.MediaPlayPause: vkMediaPlayPause, bt.MediaNext: vkMediaNext,
-				bt.MediaPrev: vkMediaPrev, bt.MediaStop: vkMediaStop}[ev.Media]
-			if vk != 0 {
-				pressKey(vk)
+			switch ev.Media {
+			case bt.MediaNext:
+				mediaTrackCommand(mediaNextTrack)
+			case bt.MediaPrev:
+				mediaTrackCommand(mediaPreviousTrack)
+			case bt.MediaPlayPause:
+				mediaPlayPause()
+			case bt.MediaStop:
+				pressKey(vkMediaStop)
 			}
 		}
 	}
