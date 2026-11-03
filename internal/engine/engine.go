@@ -524,10 +524,13 @@ func (e *engine) session(addrStr string) error {
 				e.rejectUHQ(bt.ErrNoCodec)
 				continue
 			}
-			if e.cfg.Codec == change.Codec && e.cfg.SSCUHQ == change.SSCUHQ && (!change.SSCUHQ || sscUHQ()) {
+			sameMode := e.cfg.Codec == change.Codec && e.cfg.SSCUHQ == change.SSCUHQ
+			if sameMode && e.cfg.AACBitrate == change.AACBitrate && e.cfg.SSCBitrate == change.SSCBitrate &&
+				e.cfg.SSCMaxKbps == change.SSCMaxKbps && (!change.SSCUHQ || sscUHQ()) {
 				continue
 			}
-			oldMode, oldForced, oldWorking := sscUHQMode, sscForced, sscWorking
+			oldMode, oldForced, oldWorking, oldAAC := sscUHQMode, sscForced, sscWorking, aacForced
+			aacForced = change.AACBitrate * 1000
 			sscUHQMode = change.SSCUHQ
 			sscForced, sscWorking = change.SSCBitrate*1000, change.SSCMaxKbps*1000
 			target := bt.CodecAAC
@@ -538,12 +541,12 @@ func (e *engine) session(addrStr string) error {
 			next, nextMTU, closed, err := e.switchCodec(ctx, caps, target, &enc)
 			if err != nil {
 				logf("codec switch to %s: %v", target, err)
-				if !change.SSCUHQ {
+				if !change.SSCUHQ || sameMode {
 					e.cfg.Codec, e.cfg.SSCUHQ, e.cfg.TryUHQ = change.Codec, change.SSCUHQ, change.TryUHQ
-					e.cfg.SSCBitrate, e.cfg.SSCMaxKbps = change.SSCBitrate, change.SSCMaxKbps
+					e.cfg.AACBitrate, e.cfg.SSCBitrate, e.cfg.SSCMaxKbps = change.AACBitrate, change.SSCBitrate, change.SSCMaxKbps
 					return errReconnect
 				}
-				sscUHQMode, sscForced, sscWorking = oldMode, oldForced, oldWorking
+				sscUHQMode, sscForced, sscWorking, aacForced = oldMode, oldForced, oldWorking, oldAAC
 				e.rejectUHQ(err)
 				if closed && bt.ACLHandle() == handle {
 					rate := e.srate
@@ -571,7 +574,7 @@ func (e *engine) session(addrStr string) error {
 				continue
 			}
 			e.cfg.Codec, e.cfg.SSCUHQ, e.cfg.TryUHQ = change.Codec, change.SSCUHQ, change.TryUHQ
-			e.cfg.SSCBitrate, e.cfg.SSCMaxKbps = change.SSCBitrate, change.SSCMaxKbps
+			e.cfg.AACBitrate, e.cfg.SSCBitrate, e.cfg.SSCMaxKbps = change.AACBitrate, change.SSCBitrate, change.SSCMaxKbps
 			codec = target
 			mk = newAAC
 			if codec == bt.CodecSSC {

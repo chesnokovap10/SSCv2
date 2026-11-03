@@ -44,6 +44,7 @@ type AudioCarry struct {
 
 // CodecChange selects the stream format on an active connection.
 type CodecChange struct {
+	AACBitrate int    `json:"aacBitrate,omitempty"`
 	TryUHQ     bool   `json:"tryUhq,omitempty"`
 	Codec      string `json:"codec"`
 	SSCUHQ     bool   `json:"sscUhq,omitempty"`
@@ -188,6 +189,6 @@ func (r *Reader) Read(v any) error {
 	return json.Unmarshal(r.s.Bytes(), v)
 }
 
-// Version of the program: "0.1 #<commit hash, 8 chars>", set by build.cmd
+// Version of the program: "0.2 #<commit hash, 8 chars>", set by build.cmd
 // through -ldflags "-X 'sscv2/internal/ipc.Version=...'".
-var Version = "0.1 #dev"
+var Version = "0.2 #dev"

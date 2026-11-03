@@ -8,7 +8,7 @@ with **AAC**, **SSC** (Samsung Scalable Codec, 24 bit / 48 kHz) or **SSC UHQ** (
 while a **BLE mouse** keeps working. There is no main window: just an icon and a right-click
 menu.
 
-Version: `0.1 #<commit hash>` (e.g. `0.1 #67cd8794`), shown in the menu and in "Device info".
+Version: `0.2 #<commit hash>` (e.g. `0.2 #67cd8794`), shown in the menu and in "Device info".
 
 ## Install and update
 
@@ -164,7 +164,7 @@ Needs Go 1.24+ and MinGW-w64 (gcc/g++) in `PATH`.
 build.cmd
 ```
 
-The result is `bin\ssc.exe` with version `0.1 #<hash>` from git. The first build compiles
+The result is `bin\ssc.exe` with version `0.2 #<hash>` from git. The first build compiles
 BTstack, FDK-AAC and libssc (~1–2 min), later builds are cached. Switching to WinUSB needs the
 Windows 10+ SDK (`makecat.exe`, `signtool.exe`).
 

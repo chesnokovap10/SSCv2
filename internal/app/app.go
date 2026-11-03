@@ -127,7 +127,7 @@ func Run() int {
 	}
 	a.t = &tray.Tray{Menu: a.menu, Command: a.command, DismissBefore: func(id int) bool {
 		switch id {
-		case idExit, idInfo, idLangRU, idLangEN, idModeOff, idModeAAC, idModeSSC, idModeUHQ:
+		case idExit, idInfo, idLangRU, idLangEN:
 			return true
 		default:
 			return false
@@ -320,17 +320,7 @@ func (a *App) enable(m config.Mode) {
 		a.t.Balloon("SSCv2", T("Наушники не поддерживают SSC UHQ", "SSC UHQ is unavailable on these headphones"), 1)
 		return
 	}
-	codec := ipc.CodecChange{
-		Codec:  m.EngineCodec(),
-		SSCUHQ: m == config.ModeSSCUHQ,
-		TryUHQ: m == config.ModeSSCUHQ && a.s.AllBitrates,
-	}
-	if m != config.ModeAAC {
-		codec.SSCBitrate = a.bitrateFor(m)
-	}
-	if m == config.ModeSSC {
-		codec.SSCMaxKbps, _ = a.workingMax(m)
-	}
+	codec := a.codecChange(m)
 	a.mu.Unlock()
 	if !blocked && eng != nil && eng.running() && streaming {
 		if m == config.ModeSSCUHQ {
@@ -713,15 +703,40 @@ func (a *App) restartEngine() {
 }
 
 // setBitrate stores kbps (0 = auto) for the current codec and applies it.
+// codecChange requires a.mu.
+func (a *App) codecChange(m config.Mode) ipc.CodecChange {
+	codec := ipc.CodecChange{
+		Codec:  m.EngineCodec(),
+		SSCUHQ: m == config.ModeSSCUHQ,
+		TryUHQ: m == config.ModeSSCUHQ && a.s.AllBitrates,
+	}
+	if m == config.ModeAAC {
+		codec.AACBitrate = a.bitrateFor(m)
+	} else {
+		codec.SSCBitrate = a.bitrateFor(m)
+	}
+	if m == config.ModeSSC {
+		codec.SSCMaxKbps, _ = a.workingMax(m)
+	}
+	return codec
+}
+
 func (a *App) setBitrate(kbps int) {
 	a.mu.Lock()
 	m := a.mode
-	if !m.Streaming() {
+	if !m.Streaming() || !a.offered(m, kbps) || a.s.Bitrate(m) == kbps {
 		a.mu.Unlock()
 		return
 	}
 	a.s.SetBitrate(m, kbps)
 	_ = config.Save(a.s)
+	codec, eng, streaming := a.codecChange(m), a.eng, a.st.Streaming
+	if eng != nil && eng.running() && streaming {
+		if err := eng.in.Write(ipc.Command{Cmd: "codec", Codec: &codec}); err == nil {
+			a.mu.Unlock()
+			return
+		}
+	}
 	a.mu.Unlock()
 	a.restartEngine()
 }
@@ -918,11 +933,14 @@ func bitrateText(kbps int) string {
 }
 
 // autoHint explains what "Auto" means for a codec.
-func autoHint(m config.Mode, maxMTU bool, limit int, model string) string {
+func autoHint(m config.Mode, maxMTU bool, limit int, model string, showLimit bool) string {
 	if limit < 0 {
 		return fmt.Sprintf(T("не проверен на %s", "not checked on %s"), model)
 	}
 	if limit > 0 {
+		if !showLimit {
+			return fmt.Sprintf(T("%d кбит/с", "%d kbps"), limit)
+		}
 		return fmt.Sprintf(T("%d кбит/с - макс. рабочий для %s", "%d kbps - the highest working on %s"), limit, model)
 	}
 	switch m {
@@ -1053,6 +1071,13 @@ func (a *App) menu() []tray.Item {
 		}
 		var sub []tray.Item
 		lim, model := a.workingMax(mode)
+		showLimit := false
+		for _, b := range bitrates[mode] {
+			if lim > 0 && b > lim && a.offered(mode, b) {
+				showLimit = true
+				break
+			}
+		}
 		for _, b := range bitrates[mode] {
 			if !a.offered(mode, b) {
 				continue // needs Max MTU / above the working maximum
@@ -1061,7 +1086,7 @@ func (a *App) menu() []tray.Item {
 			if b == 0 {
 				hint := autoRate
 				if hint == "" {
-					hint = autoHint(mode, a.s.MaxMTU, lim, model)
+					hint = autoHint(mode, a.s.MaxMTU, lim, model, showLimit)
 				}
 				t += " (" + hint + ")"
 			} else if lim > 0 && b > lim || lim < 0 {
