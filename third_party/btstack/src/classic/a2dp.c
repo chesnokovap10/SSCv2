@@ -71,6 +71,7 @@ static btstack_packet_handler_t a2dp_sink_callback;
 // config process - singletons using sep_discovery_cid is used as mutex
 static avdtp_role_t             a2dp_config_process_role;
 static uint16_t                 a2dp_config_process_sep_discovery_cid;
+static uint16_t                 ssc_discovered_cid;
 static uint16_t                 a2dp_config_process_sep_discovery_count;
 static uint16_t                 a2dp_config_process_sep_discovery_index;
 static avdtp_sep_t              a2dp_config_process_sep_discovery_seps[AVDTP_MAX_SEP_NUM];
@@ -331,6 +332,7 @@ static void a2dp_config_process_start_discovering_seps(avdtp_role_t role, avdtp_
     a2dp_config_process_sep_discovery_count = 0;
     memset(a2dp_config_process_sep_discovery_seps, 0, sizeof(avdtp_sep_t) * AVDTP_MAX_SEP_NUM);
     a2dp_config_process_sep_discovery_cid = connection->avdtp_cid;
+    ssc_discovered_cid = connection->avdtp_cid;
 
     // if we initiated the connection, start config right away, else wait a bit to give remote a chance to do it first
     if (config_process->outgoing_active){
@@ -437,6 +439,21 @@ a2dp_config_process_handle_media_capability(avdtp_role_t role, uint16_t cid, uin
     a2dp_config_process_t * config_process = a2dp_config_process_for_role(role, connection);
     if (config_process->state != A2DP_W4_GET_ALL_CAPABILITIES) return;
     a2dp_replace_subevent_id_and_emit_for_role(role, packet, size, a2dp_subevent_id);
+}
+
+// SSCv2 diagnostic: reuse the remote SEP discovery after releasing media.
+uint8_t ssc_prepare_stream_switch(uint16_t cid){
+    avdtp_connection_t * connection = avdtp_get_connection_for_avdtp_cid(cid);
+    if (connection == NULL || cid != ssc_discovered_cid ||
+        a2dp_config_process_sep_discovery_cid != 0){
+        return ERROR_CODE_COMMAND_DISALLOWED;
+    }
+    a2dp_config_process_t * process = a2dp_config_process_for_role(AVDTP_ROLE_SOURCE, connection);
+    if (process->state != A2DP_CONFIGURED){
+        return ERROR_CODE_COMMAND_DISALLOWED;
+    }
+    process->state = A2DP_DISCOVERY_DONE;
+    return ERROR_CODE_SUCCESS;
 }
 
 uint8_t a2dp_config_process_config_init(avdtp_role_t role, avdtp_connection_t *connection, uint8_t local_seid, uint8_t remote_seid,

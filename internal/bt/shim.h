@@ -33,6 +33,7 @@ void ssc_use_go_link_key_db(void);
 
 /* Stream endpoints: returns local SEIDs (0 = not registered). */
 void ssc_register_endpoints(uint8_t *sbc_seid, uint8_t *aac_seid, uint8_t *ssc_seid, int with_ssc);
+uint8_t ssc_prepare_stream_switch(uint16_t cid);
 uint8_t ssc_set_config_aac(uint16_t cid, uint8_t local, uint8_t remote,
                            uint32_t sample_rate, uint8_t channels, uint32_t bitrate);
 uint8_t ssc_set_config_sbc(uint16_t cid, uint8_t local, uint8_t remote,

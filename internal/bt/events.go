@@ -309,6 +309,7 @@ func (s *stackT) onA2DP(cp *C.uint8_t, p []byte) {
 	case C.A2DP_SUBEVENT_STREAM_RELEASED:
 		s.logf("bt: stream released")
 		s.streaming.Store(false)
+		sig(s.releaseCh, nil)
 
 	case C.A2DP_SUBEVENT_SIGNALING_CONNECTION_RELEASED:
 		s.logf("bt: A2DP signalling released")
@@ -323,6 +324,7 @@ func (s *stackT) onA2DP(cp *C.uint8_t, p []byte) {
 			s.avrcpCid = 0
 			s.avrcpUp.Store(false)
 		}
+		sig(s.releaseCh, ErrNotReady)
 		sig(s.discCh, nil)
 		sig(s.connectCh, ErrTimeout)
 		s.streamCh = nil
@@ -333,6 +335,7 @@ func (s *stackT) onA2DP(cp *C.uint8_t, p []byte) {
 
 	case C.A2DP_SUBEVENT_COMMAND_REJECTED:
 		s.logf("bt: A2DP command rejected")
+		sig(s.releaseCh, errRejected)
 		sig(s.streamCh, errRejected)
 		sig(s.startCh, errRejected)
 	}

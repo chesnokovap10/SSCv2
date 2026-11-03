@@ -30,9 +30,10 @@ import (
 )
 
 type engine struct {
-	cfg   ipc.EngineConfig
-	out   *ipc.Writer
-	store *keys.Store
+	codecProbeRan bool
+	cfg           ipc.EngineConfig
+	out           *ipc.Writer
+	store         *keys.Store
 
 	mu     sync.Mutex
 	st     ipc.EngineStatus
@@ -188,14 +189,14 @@ func (e *engine) run() error {
 		logf("keys.json: %v", err)
 	}
 	opts := bt.Options{
-		EnableSSC: e.cfg.Codec == "ssc",
-		SSCCap:    uint8(e.cfg.SSCCap),
-		Keys:      e.store,
-		Logf:      logf,
-		Verbose:   e.cfg.Verbose,
-		Debug:     e.cfg.Debug,
+		EnableSSC:     e.cfg.Codec == "ssc" || codecProbeEnabled(),
+		SSCCap:        uint8(e.cfg.SSCCap),
+		Keys:          e.store,
+		Logf:          logf,
+		Verbose:       e.cfg.Verbose,
+		Debug:         e.cfg.Debug,
 		ForceMediaMTU: map[bool]int{true: overMTU}[e.cfg.MaxMTU || e.cfg.AACMode == "over"],
-		USBIDs: [][2]uint16{{e.cfg.VID, e.cfg.PID}},
+		USBIDs:        [][2]uint16{{e.cfg.VID, e.cfg.PID}},
 	}
 	if e.cfg.Mouse != "" {
 		if l, ok := e.store.FindLE(e.cfg.Mouse); ok {
@@ -479,6 +480,15 @@ func (e *engine) session(addrStr string) error {
 		s.SampleRate = rate
 	})
 	e.startVolumeSync()
+
+	if codecProbeEnabled() && !e.codecProbeRan && codec == bt.CodecAAC && !remoteCfg {
+		e.codecProbeRan = true
+		if err := e.probeCodecSwitch(ctx, caps); err != nil {
+			logf("codec probe failed: %v", err)
+			return err
+		}
+		return nil
+	}
 
 	select {
 	case <-e.ctx.Done():

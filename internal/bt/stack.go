@@ -71,6 +71,7 @@ type stackT struct {
 	streamCh  chan error
 	startCh   chan error
 	discCh    chan error
+	releaseCh chan error
 	inquiryCh chan error
 
 	a2dpCid, avrcpCid         uint16
@@ -551,6 +552,49 @@ func StopStream() {
 	})
 	s.streaming.Store(false)
 }
+
+// CloseStream releases the media channel while keeping AVDTP signaling open.
+func CloseStream(ctx context.Context) error {
+	s := stack
+	ch := make(chan error, 1)
+	var rc C.uint8_t
+	if err := s.callSync(func() {
+		if s.a2dpCid == 0 || s.localSeid == 0 {
+			rc = 1
+			return
+		}
+		rc = C.avdtp_source_stop_stream(C.uint16_t(s.a2dpCid), C.uint8_t(s.localSeid))
+		if rc == 0 {
+			s.releaseCh = ch
+			s.streaming.Store(false)
+			s.resetMedia()
+		}
+	}); err != nil {
+		return err
+	}
+	if rc != 0 {
+		return fmt.Errorf("AVDTP CLOSE: 0x%02X", uint8(rc))
+	}
+	err := wait(ctx, ch, streamTimeout)
+	cleanupErr := s.callSync(func() {
+		s.releaseCh = nil
+		if err == nil {
+			rc = C.ssc_prepare_stream_switch(C.uint16_t(s.a2dpCid))
+		}
+	})
+	if err != nil {
+		return err
+	}
+	if cleanupErr != nil {
+		return cleanupErr
+	}
+	if rc != 0 {
+		return fmt.Errorf("prepare AVDTP switch: 0x%02X", uint8(rc))
+	}
+	return nil
+}
+
+func ACLHandle() uint32 { return stack.aclHandle.Load() }
 
 // Disconnect closes the A2DP (and AVRCP) connection.
 func Disconnect() {

@@ -89,8 +89,8 @@ type App struct {
 	// Windows was applied (exit waits for it)
 	volSettled chan struct{}
 	// carry: audio routing left by an engine stopped for a restart
-	carry *ipc.AudioCarry
-	menuText      map[int]string
+	carry    *ipc.AudioCarry
+	menuText map[int]string
 }
 
 func logf(f string, a ...any) { logx.Printf(f, a...) }
@@ -103,7 +103,7 @@ func Run() int {
 		logf("settings: %v", err)
 	}
 	i18n.Set(s.Lang)
-	if installOrUpdate() {
+	if os.Getenv("SSCV2_CODEC_PROBE") != "1" && installOrUpdate() {
 		return 0 // the installed copy runs now
 	}
 	name, _ := windows.UTF16PtrFromString(`Local\SSCv2Tray`)
