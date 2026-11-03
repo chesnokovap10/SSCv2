@@ -29,6 +29,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"sscv2/internal/i18n"
+	"sscv2/internal/mtk"
 	"strings"
 	"syscall"
 	"time"
@@ -361,7 +362,9 @@ func buildScript(enable bool, oldInfs []string, instanceID, infPath, catPath, si
 			}
 		}
 	}
-	w("  Run 'pnputil.exe' @('/scan-devices') @(0, 3010)")
+	if !enable || !inPlace {
+		w("  Run 'pnputil.exe' @('/scan-devices') @(0, 3010)")
+	}
 	w("  $rc = 0")
 	w("} catch {")
 	w("  Log (\"ERROR: \" + $_.Exception.Message)")
@@ -455,6 +458,19 @@ func Switch(id USBID, enable bool) (Result, error) {
 			msg += i18n.T(" (временный сертификат не удалён — удалите '", " (the temporary certificate was not removed - delete '") + signerSubject + i18n.T("' в certlm.msc)", "' in certlm.msc)")
 		}
 		return Result{}, errors.New(msg + tail)
+	}
+	if enable && Variant != "remove" && st.InstanceID != "" {
+		started := time.Now()
+		if probeErr := mtk.CheckWinUSB(id.VID, id.PID); probeErr != nil {
+			if Logf != nil {
+				Logf("WinUSB readiness check failed in %s, rescanning: %v", time.Since(started), probeErr)
+			}
+			if _, scanErr := run(30*time.Second, "pnputil.exe", "/scan-devices"); scanErr != nil {
+				return Result{Changed: true}, fmt.Errorf("WinUSB readiness check: %v; rescan: %w", probeErr, scanErr)
+			}
+		} else if Logf != nil {
+			Logf("WinUSB ready in %s, skipped full device scan", time.Since(started))
+		}
 	}
 	// Let PnP settle and confirm.
 	want := BthUSB

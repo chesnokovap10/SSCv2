@@ -56,6 +56,16 @@ func Present(vid, pid uint16) bool {
 	return err == nil
 }
 
+// CheckWinUSB verifies that the whole-device interface can be opened and initialized.
+func CheckWinUSB(vid, pid uint16) error {
+	d, err := openDev(vid, pid, nil)
+	if err != nil {
+		return err
+	}
+	d.close()
+	return nil
+}
+
 func openDev(vid, pid uint16, logf func(string, ...any)) (*usbDev, error) {
 	path, err := devicePath(vid, pid)
 	if err != nil {
