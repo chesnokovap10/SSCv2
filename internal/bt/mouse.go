@@ -45,21 +45,20 @@ func (m mouseState) String() string {
 }
 
 type mouseBridge struct {
-	configured   bool
-	startPending bool
-	connecting   bool
-	stopping     bool
-	cancelDone   chan struct{}
-	addr         Addr
-	addrType     C.bd_addr_type_t
-	state        atomic.Int32
-	handle       uint16
-	hidsCid      uint16
-	classic      bool   // BR/EDR HID mouse (hid_host) instead of HID over GATT
-	hidCid       uint16 // classic: hid_host connection
-	buttons      uint32
-	reports      atomic.Uint32
-	raw          atomic.Uint32
+	configured bool
+	connecting bool
+	stopping   bool
+	cancelDone chan struct{}
+	addr       Addr
+	addrType   C.bd_addr_type_t
+	state      atomic.Int32
+	handle     uint16
+	hidsCid    uint16
+	classic    bool   // BR/EDR HID mouse (hid_host) instead of HID over GATT
+	hidCid     uint16 // classic: hid_host connection
+	buttons    uint32
+	reports    atomic.Uint32
+	raw        atomic.Uint32
 }
 
 // MouseStatus returns (configured, state text, reports this session).
@@ -110,21 +109,12 @@ func (m *mouseBridge) setup(s *stackT, b *LEBond) {
 }
 
 func (m *mouseBridge) onHCIWorking(s *stackT) {
-	if m.configured && !m.classic {
-		// Let the first BR/EDR page run without a concurrent LE attempt.
-		// A2DP starts the mouse sooner when the headphones are ready.
-		// The timer still brings up the mouse when they are unavailable.
-		m.startPending = true
-		C.ssc_timer_set(timerMouseRetry, 6000)
-		return
-	}
 	if m.configured {
 		m.connect(s)
 	}
 }
 
 func (m *mouseBridge) connect(s *stackT) {
-	m.startPending = false
 	if m.stopping {
 		return
 	}

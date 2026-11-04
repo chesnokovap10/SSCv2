@@ -296,9 +296,6 @@ func (s *stackT) onA2DP(cp *C.uint8_t, p []byte) {
 	case C.A2DP_SUBEVENT_STREAM_STARTED:
 		s.logf("bt: streaming started")
 		s.streaming.Store(true)
-		if s.mouse.startPending {
-			C.ssc_timer_set(timerMouseRetry, 1)
-		}
 		sig(s.startCh, nil)
 		C.a2dp_source_stream_endpoint_request_can_send_now(C.uint16_t(s.a2dpCid), C.uint8_t(s.localSeid))
 
