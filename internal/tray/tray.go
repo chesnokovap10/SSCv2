@@ -7,6 +7,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"syscall"
+	"time"
 	"unsafe"
 
 	"golang.org/x/sys/windows"
@@ -16,6 +17,7 @@ import (
 // Item is one menu entry. ID 0 + no Sub + !Separator = disabled label.
 type Item struct {
 	SubRevision string `json:"-"`
+	LiveLabel   bool   `json:"-"`
 	Slider      bool
 	Text        string
 	ID          int
@@ -24,6 +26,11 @@ type Item struct {
 	Disabled    bool
 	Separator   bool
 	Sub         []Item
+	infoID      uint32
+}
+
+func (it Item) informational() bool {
+	return it.ID == 0 && it.Sub == nil && !it.Separator && !it.Slider
 }
 
 // Tray drives the icon. Menu is called on every click to build the
@@ -44,18 +51,24 @@ type Tray struct {
 	menuButtonUp                uintptr
 	menuMouseCommand            int
 	menuIconBounds              menuRect
+	infoRows                    map[uint32]*menuInfoRow
+	nextInfoID                  uint32
+	infoHover                   menuInfoHover
 	VolumeKey                   func(uint32)
 	volumeKeys                  atomic.Bool
 	menuOpen                    atomic.Bool
 	rendered                    atomic.Pointer[[]Item]
 
-	mu      sync.Mutex
-	hwnd    uintptr
-	icons   map[Color]uintptr
-	color   Color
-	tip     string
-	created uint32 // TaskbarCreated message id
-	ready   chan struct{}
+	mu           sync.Mutex
+	hwnd         uintptr
+	icons        map[trayIconKey]uintptr
+	color        Color
+	iconMode     IconMode
+	pulseFrame   int
+	pulseStarted time.Time
+	tip          string
+	created      uint32 // TaskbarCreated message id
+	ready        chan struct{}
 }
 
 const callbackMsg = wmApp + 1
@@ -68,7 +81,7 @@ func (t *Tray) Run(initial Color, tip string) error {
 	defer runtime.UnlockOSThread()
 	pSetDpiAwarenessCtx.Call(^uintptr(3)) // DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2 (-4)
 	current = t
-	t.icons = map[Color]uintptr{}
+	t.icons = map[trayIconKey]uintptr{}
 	t.color, t.tip = initial, tip
 	if t.ready == nil {
 		t.ready = make(chan struct{})
@@ -112,19 +125,29 @@ func (t *Tray) Run(initial Color, tip string) error {
 		pDispatchMessageW.Call(uintptr(unsafe.Pointer(&m)))
 	}
 	t.notify(nimDelete, 0)
+	t.mu.Lock()
+	t.hwnd = 0
+	for _, icon := range t.icons {
+		pDestroyIcon.Call(icon)
+	}
+	t.mu.Unlock()
 	return nil
 }
 
+type trayIconKey struct {
+	color Color
+	mode  IconMode
+	size  int
+}
+
 func (t *Tray) iconFor(c Color) uintptr {
-	if h, ok := t.icons[c]; ok {
+	px, _, _ := pGetSystemMetrics.Call(smCxSmIcon)
+	key := trayIconKey{color: c, mode: t.iconMode, size: int(max(px, 16))}
+	if h, ok := t.icons[key]; ok {
 		return h
 	}
-	px, _, _ := pGetSystemMetrics.Call(smCxSmIcon)
-	if px < 16 {
-		px = 16
-	}
-	h := makeIcon(c, int(px))
-	t.icons[c] = h
+	h := makeIcon(key.color, key.mode, key.size)
+	t.icons[key] = h
 	return h
 }
 
@@ -141,7 +164,7 @@ func (t *Tray) notify(op uint32, flags uint32) {
 		return
 	}
 	n := t.nid(flags)
-	n.hIcon = t.iconFor(t.color)
+	n.hIcon = t.iconFor(volumePulseColor(t.color, t.pulseFrame))
 	copyUTF16(n.szTip[:], t.tip)
 	pShellNotifyIconW.Call(uintptr(op), uintptr(unsafe.Pointer(&n)))
 }
@@ -156,10 +179,10 @@ func (t *Tray) addIcon() {
 }
 
 // Set updates the glyph color and tooltip (any goroutine).
-func (t *Tray) Set(c Color, tip string) {
+func (t *Tray) Set(c Color, mode IconMode, tip string) {
 	t.mu.Lock()
-	changed := t.color != c || t.tip != tip
-	t.color, t.tip = c, tip
+	changed := t.color != c || t.iconMode != mode || t.tip != tip
+	t.color, t.iconMode, t.tip = c, mode, tip
 	t.mu.Unlock()
 	if changed {
 		t.notify(nimModify, nifIcon|nifTip|nifShowTip)
@@ -191,8 +214,9 @@ func (t *Tray) Quit() {
 }
 
 const (
-	menuOpenMsg  = wmApp + 4
-	menuCloseMsg = wmApp + 5
+	menuOpenMsg    = wmApp + 4
+	menuCloseMsg   = wmApp + 5
+	menuRefreshMsg = wmApp + 6
 )
 
 var endMenu = user32.NewProc("EndMenu")
@@ -206,6 +230,11 @@ func (t *Tray) RenderedMenu() []Item {
 func (t *Tray) OpenMenu()               { t.postMenuMessage(menuOpenMsg, 0) }
 func (t *Tray) CloseMenu()              { t.postMenuMessage(menuCloseMsg, 0) }
 func (t *Tray) ActivateMenuItem(id int) { t.postMenuMessage(menuActionMsg, uintptr(id)) }
+func (t *Tray) RefreshMenu() {
+	if t.menuOpen.Load() {
+		t.postMenuMessage(menuRefreshMsg, 0)
+	}
+}
 
 func (t *Tray) postMenuMessage(msg, arg uintptr) {
 	t.mu.Lock()
@@ -229,11 +258,15 @@ func (t *Tray) showMenu() {
 	}
 	defer t.menuOpen.Store(false)
 	items := t.Menu()
+	t.infoRows = make(map[uint32]*menuInfoRow)
+	t.nextInfoID = 0x7000
 	m := t.buildMenu(items)
 	t.rendered.Store(&items)
 	t.openMenu = m
 	t.activeMenus = append(t.activeMenus[:0], m.handle)
 	defer func() {
+		t.infoHover = menuInfoHover{}
+		t.infoRows = nil
 		t.rendered.Store(nil)
 		t.openMenu, t.volumeRow = nil, nil
 		t.selectedMenu, t.selectedID = 0, 0
@@ -255,7 +288,7 @@ func (t *Tray) showMenu() {
 	} else {
 		logx.Printf("tray icon mouse input: %v", mouseErr)
 	}
-	setTimer.Call(t.hwnd, 1, 75, 0)
+	setTimer.Call(t.hwnd, 1, 40, 0)
 	defer killTimer.Call(t.hwnd, 1)
 	setTimer.Call(t.hwnd, 2, 300, 0)
 	defer killTimer.Call(t.hwnd, 2)
@@ -279,7 +312,10 @@ func (t *Tray) showMenu() {
 
 func wndProc(hwnd, msg, wparam, lparam uintptr) uintptr {
 	t := current
-	if t != nil && t.sliderMessage(msg, wparam, lparam) {
+	if t != nil && msg == wmTimer && wparam == 1 && t.openMenu != nil {
+		t.refreshInfoHover()
+	}
+	if t != nil && (t.infoMessage(msg, lparam) || t.sliderMessage(msg, wparam, lparam)) {
 		return 1
 	}
 	switch uint32(msg) {
@@ -303,6 +339,12 @@ func wndProc(hwnd, msg, wparam, lparam uintptr) uintptr {
 	case menuCloseMsg:
 		endMenu.Call()
 		return 0
+	case menuRefreshMsg:
+		t.refreshOpenMenu()
+		return 0
+	case volumePulseMsg:
+		t.startVolumePulse(wparam != 0)
+		return 0
 	case menuActionMsg:
 		if t.openMenu != nil && t.DismissBefore != nil && t.DismissBefore(int(wparam)) {
 			t.afterDismiss = int(wparam)
@@ -314,10 +356,12 @@ func wndProc(hwnd, msg, wparam, lparam uintptr) uintptr {
 		}
 		return 0
 	case wmTimer:
+		if wparam == volumePulseTimer {
+			t.advanceVolumePulse()
+			return 0
+		}
 		if wparam == 2 && t.openMenu != nil {
-			items := t.Menu()
-			t.updateMenu(t.openMenu, items)
-			t.rendered.Store(&items)
+			t.refreshOpenMenu()
 			return 0
 		}
 	case callbackMsg:

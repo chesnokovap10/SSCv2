@@ -113,13 +113,23 @@ func ReadWindows() ([]AdapterBonds, error) {
 			// bookkeeping for BTstack; encryption uses the key itself.
 			ab.Classic = append(ab.Classic, Classic{Addr: macToAddr(n), Key: hex.EncodeToString(b), Type: 7, Name: name, CoD: cod})
 		}
-		subs, _ := k.ReadSubKeyNames(-1)
+		subs, err := k.ReadSubKeyNames(-1)
+		if err != nil {
+			k.Close()
+			return nil, err
+		}
 		for _, sub := range subs {
 			lk, err := openKey(k, sub, registry.QUERY_VALUE)
 			if err != nil {
-				continue
+				k.Close()
+				return nil, err
 			}
 			ltk, _, err := lk.GetBinaryValue("LTK")
+			if err != nil && !errors.Is(err, registry.ErrNotExist) {
+				lk.Close()
+				k.Close()
+				return nil, err
+			}
 			if err != nil || len(ltk) != 16 {
 				lk.Close()
 				continue

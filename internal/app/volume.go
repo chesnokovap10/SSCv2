@@ -60,10 +60,14 @@ func (a *App) setSliderVolume(value uint8) {
 }
 
 func (a *App) setVolumeLocked(value uint8, muted bool) {
+	changed := a.volumeLocked() != value || a.s.HeadphonesMuted != muted
 	if err := a.eng.in.Write(ipc.Command{Cmd: "volume", Volume: value, On: muted}); err != nil {
 		logf("headphone volume: %v", err)
 		return
 	}
 	a.s.HeadphonesVolume, a.s.HeadphonesMuted = &value, muted
 	_ = config.Save(a.s)
+	if changed && !a.s.DisableAnimations {
+		a.t.PulseVolume()
+	}
 }

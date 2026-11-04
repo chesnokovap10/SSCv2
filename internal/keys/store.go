@@ -102,7 +102,27 @@ func (s *Store) saveLocked() error {
 
 // Merge adds/replaces entries (by address) and saves.
 func (s *Store) Merge(in File) error {
+	return s.merge(in, false)
+}
+
+// ImportWindows replaces LE bonds with the current Windows snapshot.
+// Classic bonds may also be learned directly by BTstack.
+func (s *Store) ImportWindows(in File) error {
+	return s.merge(in, true)
+}
+
+func (s *Store) merge(in File, refreshLE bool) error {
 	s.mu.Lock()
+	defer s.mu.Unlock()
+	previous := s.f
+	if len(in.Classic) != 0 {
+		s.f.Classic = append([]Classic(nil), previous.Classic...)
+	}
+	if refreshLE {
+		s.f.LE = nil
+	} else if len(in.LE) != 0 {
+		s.f.LE = append([]LE(nil), previous.LE...)
+	}
 	if in.Adapter != "" {
 		s.f.Adapter = in.Adapter
 	}
@@ -121,9 +141,11 @@ func (s *Store) Merge(in File) error {
 			s.f.LE = append(s.f.LE, l)
 		}
 	}
-	err := s.saveLocked()
-	s.mu.Unlock()
-	return err
+	if err := s.saveLocked(); err != nil {
+		s.f = previous
+		return err
+	}
+	return nil
 }
 
 func (s *Store) putClassicLocked(c Classic) {

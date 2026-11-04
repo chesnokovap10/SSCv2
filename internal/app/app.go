@@ -54,6 +54,7 @@ const (
 	idVolDown
 	idVolUp
 	idVolMute
+	idAnimations
 
 	idBitrateBase    = 500 // + kbps (0 = auto)
 	idFoundBase      = 2000
@@ -222,6 +223,7 @@ func (a *App) setMode(m config.Mode) {
 	a.s.Mode = m
 	_ = config.Save(a.s)
 	a.mu.Unlock()
+	a.refresh()
 }
 
 func (a *App) setBusy(s string) {
@@ -252,6 +254,10 @@ func modeName(m config.Mode) string {
 func (a *App) state() (tray.Color, string) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
+	return a.stateLocked()
+}
+
+func (a *App) stateLocked() (tray.Color, string) {
 	if a.busy != "" {
 		return tray.Amber, a.busy
 	}
@@ -292,8 +298,20 @@ func (a *App) state() (tray.Color, string) {
 }
 
 func (a *App) refresh() {
-	c, s := a.state()
-	a.t.Set(c, "SSCv2: "+s)
+	a.mu.Lock()
+	c, s := a.stateLocked()
+	icon := tray.IconOff
+	switch a.mode {
+	case config.ModeAAC:
+		icon = tray.IconAAC
+	case config.ModeSSC:
+		icon = tray.IconSSC
+	case config.ModeSSCUHQ:
+		icon = tray.IconSSCPlus
+	}
+	a.t.Set(c, icon, "SSCv2: "+s)
+	a.mu.Unlock()
+	a.t.RefreshMenu()
 }
 
 // ---- modes ----------------------------------------------------------------
@@ -541,7 +559,7 @@ func (a *App) onEngineEvent(p *engineProc, ev ipc.Event) {
 	switch ev.Ev {
 	case "codec", "codecRejected":
 		a.mu.Lock()
-		current := a.eng == p && a.pendingUHQ
+		current := a.eng == p && a.pendingUHQ && (ev.Ev == "codecRejected" || ev.Codec != nil && ev.Codec.SSCUHQ)
 		if current {
 			a.pendingUHQ = false
 			if ev.Codec != nil && ev.Codec.SSCUHQ {
@@ -550,6 +568,9 @@ func (a *App) onEngineEvent(p *engineProc, ev ipc.Event) {
 			}
 		}
 		a.mu.Unlock()
+		if current {
+			a.refresh()
+		}
 		if current && ev.Ev == "codecRejected" {
 			a.t.Balloon("SSCv2", ev.Msg, 1)
 		}
@@ -748,6 +769,7 @@ func (a *App) setBitrate(kbps int) {
 	}
 	a.s.SetBitrate(m, kbps)
 	_ = config.Save(a.s)
+	defer a.t.RefreshMenu()
 	codec, eng, streaming := a.codecChange(m), a.eng, a.st.Streaming
 	if eng != nil && eng.running() && streaming {
 		if err := eng.in.Write(ipc.Command{Cmd: "codec", Codec: &codec}); err == nil {
@@ -777,6 +799,7 @@ func (a *App) setAllBitrates(on bool) {
 	_ = config.Save(a.s)
 	blocked, eng := a.noBitrate(m), a.eng
 	a.mu.Unlock()
+	a.t.RefreshMenu()
 	switch {
 	case !blocked && eng == nil && m.Streaming():
 		a.enable(m) // the codec was waiting for "All bitrates"
@@ -835,7 +858,8 @@ func (a *App) importWindows() {
 	a.mu.Lock()
 	known[a.st.AdapterAddr] = true
 	a.mu.Unlock()
-	known[store.Snapshot().Adapter] = true
+	previous := store.Snapshot()
+	known[previous.Adapter] = true
 	if r, _ := windowsRadio(); r != "" {
 		known[r] = true
 	}
@@ -851,15 +875,14 @@ func (a *App) importWindows() {
 	}
 	b := bonds[best]
 	b.File.Adapter = b.Adapter // shadowed by the outer field in JSON
-	if err := store.Merge(b.File); err != nil {
+	if err := store.ImportWindows(b.File); err != nil {
 		a.t.Balloon(T("Импорт не удался", "Import failed"), err.Error(), 2)
 		return
 	}
-	a.afterImport(store, fmt.Sprintf(T("Адаптер %s: устройств %d, мышей %d.", "Adapter %s: %d device(s), %d mouse/mice."), b.Adapter, len(b.Classic), len(b.LE)))
+	a.afterImport(store, previous.LE, fmt.Sprintf(T("Адаптер %s: устройств %d, мышей %d.", "Adapter %s: %d device(s), %d mouse/mice."), b.Adapter, len(b.Classic), len(b.LE)))
 }
 
-// afterImport auto-selects headphones / mouse when none is chosen yet.
-func (a *App) afterImport(store *keys.Store, msg string) {
+func (a *App) afterImport(store *keys.Store, previousLE []keys.LE, msg string) {
 	a.mu.Lock()
 	if a.s.Headphones == nil {
 		if c, ok := store.FindClassic(""); ok {
@@ -875,6 +898,14 @@ func (a *App) afterImport(store *keys.Store, msg string) {
 			a.s.Mouse = &config.Device{Addr: c.Addr, Name: c.Name}
 			msg += T(" Мышь: ", " Mouse: ") + nz(c.Name, c.Addr) + "."
 		}
+	} else if _, ok := store.FindLE(a.s.Mouse.Addr); !ok {
+		for _, old := range previousLE {
+			if !strings.EqualFold(old.Addr, a.s.Mouse.Addr) {
+				continue
+			}
+			a.s.Mouse = replacementLEMouse(old, store.Snapshot().LE)
+			break
+		}
 	}
 	_ = config.Save(a.s)
 	running := a.eng != nil
@@ -883,6 +914,20 @@ func (a *App) afterImport(store *keys.Store, msg string) {
 	if running {
 		a.restartEngine()
 	}
+}
+
+func replacementLEMouse(old keys.LE, current []keys.LE) *config.Device {
+	var replacement *config.Device
+	for _, bond := range current {
+		if old.Name == "" || !strings.EqualFold(old.Name, bond.Name) {
+			continue
+		}
+		if replacement != nil {
+			return nil
+		}
+		replacement = &config.Device{Addr: bond.Addr, Name: bond.Name}
+	}
+	return replacement
 }
 
 // ---- helper service ----------------------------------------------
@@ -1076,9 +1121,9 @@ func (a *App) menu() []tray.Item {
 		{Text: T("SSC (24 бит / 48 кГц)", "SSC (24 bit / 48 kHz)"), ID: idModeSSC, Radio: true, Checked: mode == config.ModeSSC, Disabled: busy},
 		{Text: T("SSC UHQ (96 кГц)", "SSC UHQ (96 kHz)"), ID: idModeUHQ, Radio: true, Checked: mode == config.ModeSSCUHQ, Disabled: busy || a.uhqUnavailable()},
 	}
-	items = append(items, tray.Item{Text: T("Кодек: ", "Codec: ") + modeName(mode), Sub: codecs})
+	items = append(items, tray.Item{Text: T("Кодек: ", "Codec: ") + modeName(mode), Sub: codecs, LiveLabel: true})
 	if a.noBitrate(mode) {
-		items = append(items, tray.Item{Text: T("Битрейт: — (", "Bitrate: - (") + a.unsupportedText(mode) + ")"})
+		items = append(items, tray.Item{Text: T("Битрейт: — (", "Bitrate: - (") + a.unsupportedText(mode) + ")", LiveLabel: true})
 	} else if mode.Streaming() {
 		cur := a.bitrateFor(mode)
 		label := T("Битрейт: ", "Bitrate: ") + bitrateText(cur)
@@ -1112,9 +1157,9 @@ func (a *App) menu() []tray.Item {
 			}
 			sub = append(sub, tray.Item{Text: t, ID: idBitrateBase + b, Radio: true, Checked: b == cur, Disabled: busy})
 		}
-		items = append(items, tray.Item{Text: label, Sub: sub, SubRevision: string(mode)})
+		items = append(items, tray.Item{Text: label, Sub: sub, SubRevision: string(mode), LiveLabel: true})
 	} else {
-		items = append(items, tray.Item{Text: T("Битрейт: —", "Bitrate: -")})
+		items = append(items, tray.Item{Text: T("Битрейт: —", "Bitrate: -"), LiveLabel: true})
 	}
 	items = append(items, tray.Item{Separator: true})
 
@@ -1183,6 +1228,7 @@ func (a *App) menu() []tray.Item {
 		}},
 		{Text: T("Макс. MTU для Samsung Galaxy Buds2 Pro (1017 байт)", "Max MTU for Samsung Galaxy Buds2 Pro (1017 bytes)"), ID: idMaxMTU, Checked: a.s.MaxMTU, Disabled: busy},
 		{Text: T("Все битрейты (не только проверенные на этих наушниках)", "All bitrates (not only those checked on these headphones)"), ID: idAllBitrates, Checked: a.s.AllBitrates, Disabled: busy},
+		{Text: T("Анимации", "Animations"), ID: idAnimations, Checked: !a.s.DisableAnimations},
 		{Text: T("Отладка и API интерфейса", "Debug and UI API"), ID: idDebug, Checked: a.s.Debug},
 		{Text: T("Открыть папку журналов", "Open the log folder"), ID: idOpenLogs},
 		{Separator: true},
@@ -1367,6 +1413,15 @@ func (a *App) command(id int) {
 		on := !a.s.AllBitrates
 		a.mu.Unlock()
 		go a.setAllBitrates(on)
+	case id == idAnimations:
+		a.mu.Lock()
+		a.s.DisableAnimations = !a.s.DisableAnimations
+		_ = config.Save(a.s)
+		if a.s.DisableAnimations {
+			a.t.StopVolumePulse()
+		}
+		a.mu.Unlock()
+		a.t.RefreshMenu()
 	case id == idUninstall:
 		go a.uninstall(false)
 	case id == idExit:

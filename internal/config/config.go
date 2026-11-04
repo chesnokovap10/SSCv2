@@ -61,10 +61,11 @@ type Settings struct {
 	Headphones *Device `json:"headphones,omitempty"`
 	Mouse      *Device `json:"mouse,omitempty"`
 	// Adapter USB id; zero means "first known MediaTek adapter found".
-	VID              uint16 `json:"vid,omitempty"`
-	PID              uint16 `json:"pid,omitempty"`
-	HeadphonesVolume *uint8 `json:"headphonesVolume,omitempty"`
-	HeadphonesMuted  bool   `json:"headphonesMuted,omitempty"`
+	VID               uint16 `json:"vid,omitempty"`
+	PID               uint16 `json:"pid,omitempty"`
+	HeadphonesVolume  *uint8 `json:"headphonesVolume,omitempty"`
+	HeadphonesMuted   bool   `json:"headphonesMuted,omitempty"`
+	DisableAnimations bool   `json:"disableAnimations,omitempty"`
 	// Debug: detailed journal (logs\debug.log) of switches, device
 	// exchanges and volume.
 	Debug bool `json:"debug,omitempty"`

@@ -567,9 +567,7 @@ func (e *engine) session(addrStr string) error {
 					logf("could not restore %s on ACL 0x%04x: %v", codec, handle, restoreErr)
 				}
 				if closed || bt.ACLHandle() != handle {
-					e.update(func(s *ipc.EngineStatus) {
-						s.Phase, s.Message, s.Streaming = "error", err.Error(), false
-					})
+					return errReconnect
 				}
 				continue
 			}

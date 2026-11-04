@@ -1,6 +1,7 @@
 package tray
 
 import (
+	"time"
 	"unsafe"
 
 	"golang.org/x/sys/windows"
@@ -17,6 +18,7 @@ var (
 	checkMenuItem   = user32.NewProc("CheckMenuItem")
 	enableMenuItem  = user32.NewProc("EnableMenuItem")
 	deleteMenu      = user32.NewProc("DeleteMenu")
+	mapWindowPoints = user32.NewProc("MapWindowPoints")
 )
 
 type menuItemInfo struct {
@@ -43,10 +45,33 @@ func sameMenuSlot(a, b Item) bool {
 	return a.ID == b.ID && a.Separator == b.Separator
 }
 
-func (t *Tray) writeMenuItem(m *liveMenu, position int, it Item, sub *liveMenu, replace bool) {
+func (t *Tray) writeMenuItem(m *liveMenu, position int, it *Item, sub *liveMenu, replace bool) {
 	flags, id := uintptr(mfByPosition), uintptr(it.ID)
 	label, _ := windows.UTF16PtrFromString(it.Text)
-	if it.Slider && t.Volume != nil && t.SetVolume != nil {
+	if it.informational() || it.LiveLabel {
+		if replace {
+			row := t.infoRows[it.infoID]
+			row.text, row.scrollPeriod = it.Text, 0
+			if t.infoHover.id == it.infoID {
+				t.infoHover.offset, t.infoHover.start = 0, time.Now()
+			}
+			t.redrawMenuItem(m.handle, position)
+			return
+		}
+		it.infoID = t.nextInfoID
+		t.nextInfoID++
+		t.infoRows[it.infoID] = &menuInfoRow{text: it.Text, informational: it.informational()}
+		flags |= mfOwnerDraw
+		if it.informational() || it.Disabled {
+			flags |= mfGrayed
+		}
+		id = uintptr(it.infoID)
+		if sub != nil {
+			id, flags = sub.handle, flags|mfPopup
+		}
+		insertMenu.Call(m.handle, uintptr(position), flags, id, uintptr(it.infoID))
+		return
+	} else if it.Slider && t.Volume != nil && t.SetVolume != nil {
 		if t.volumeRow == nil {
 			dpi, _, _ := getDpiForWindow.Call(t.hwnd)
 			level, muted, available := t.Volume()
@@ -139,15 +164,18 @@ func (t *Tray) updateMenu(m *liveMenu, next []Item) {
 		// Renaming or removing the parent row while its popup is open
 		// cancels native menu tracking. Refresh children in place and
 		// apply parent layout changes when the pointer returns to it.
-		for i, sub := range m.children {
-			if sub == nil {
+		for i, item := range next {
+			if i >= len(m.items) || !sameMenuSlot(m.items[i], item) {
 				continue
 			}
-			for _, item := range next {
-				if sameMenuSlot(m.items[i], item) {
-					t.updateMenu(sub, item.Sub)
-					break
-				}
+			old, sub := m.items[i], m.children[i]
+			if old.infoID != 0 && old.Text != item.Text {
+				item.infoID = old.infoID
+				t.writeMenuItem(m, i, &item, sub, true)
+				m.items[i].Text = item.Text
+			}
+			if sub != nil {
+				t.updateMenu(sub, item.Sub)
 			}
 		}
 		return
@@ -178,12 +206,13 @@ func (t *Tray) updateMenu(m *liveMenu, next []Item) {
 		}
 		if i < len(m.items) && sameMenuSlot(m.items[i], item) {
 			old, sub := m.items[i], m.children[i]
+			item.infoID = old.infoID
 			if sub != nil {
 				t.updateMenu(sub, item.Sub)
 			}
 			t.updateMenuState(m, i, item)
 			if old.Text != item.Text && !item.Slider {
-				t.writeMenuItem(m, i, item, sub, true)
+				t.writeMenuItem(m, i, &item, sub, true)
 			}
 			m.items[i] = item
 		} else {
@@ -191,7 +220,7 @@ func (t *Tray) updateMenu(m *liveMenu, next []Item) {
 			if item.Sub != nil {
 				sub = t.buildMenu(item.Sub)
 			}
-			t.writeMenuItem(m, i, item, sub, false)
+			t.writeMenuItem(m, i, &item, sub, false)
 			m.items = append(m.items, Item{})
 			copy(m.items[i+1:], m.items[i:])
 			m.items[i] = item
@@ -208,6 +237,27 @@ func (t *Tray) updateMenu(m *liveMenu, next []Item) {
 	}
 }
 
+func (t *Tray) refreshOpenMenu() {
+	m := t.openMenu
+	if m == nil {
+		return
+	}
+	next := t.Menu()
+	if t.hasOpenChild(m) {
+		for i, item := range next {
+			if item.LiveLabel && i < len(m.items) && !sameMenuSlot(m.items[i], item) {
+				// Adding or removing a submenu while Windows tracks a child
+				// cancels tracking. Reopen with the new layout immediately.
+				endMenu.Call()
+				t.postMenuMessage(menuOpenMsg, 0)
+				return
+			}
+		}
+	}
+	t.updateMenu(m, next)
+	t.rendered.Store(&next)
+}
+
 func (t *Tray) redrawMenuItem(menu uintptr, position int) {
 	var r menuRect
 	ok, _, _ := getMenuItemRect.Call(0, menu, uintptr(position), uintptr(unsafe.Pointer(&r)))
@@ -215,12 +265,14 @@ func (t *Tray) redrawMenuItem(menu uintptr, position int) {
 		x, y := (r.left+r.right)/2, (r.top+r.bottom)/2
 		hwnd, _, _ := windowFromPoint.Call(uintptr(uint64(uint32(x)) | uint64(uint32(y))<<32))
 		if hwnd != 0 {
-			invalidateRect.Call(hwnd, 0, 0)
+			mapWindowPoints.Call(0, hwnd, uintptr(unsafe.Pointer(&r)), 2)
+			invalidateRect.Call(hwnd, uintptr(unsafe.Pointer(&r)), 0)
 		}
 	}
 }
 
 func (t *Tray) removeMenuItem(m *liveMenu, i int) {
+	delete(t.infoRows, m.items[i].infoID)
 	if m.items[i].Slider {
 		t.volumeRow = nil
 	}
