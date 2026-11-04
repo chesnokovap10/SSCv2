@@ -19,7 +19,7 @@ import (
 
 const (
 	initTimeout    = 30 * time.Second
-	connectTimeout = 30 * time.Second // must exceed the ~20 s page timeout
+	connectTimeout = 30 * time.Second // includes paging, authentication and A2DP discovery
 	streamTimeout  = 10 * time.Second
 	callTimeout    = 5 * time.Second
 )
@@ -258,7 +258,7 @@ func (s *stackT) loop(started chan struct{}) {
 	C.gap_set_class_of_device(0x200414) // Audio / Loudspeaker
 	C.gap_set_allow_role_switch(true)   // many headphones want to be master
 	C.gap_set_default_link_policy_settings(0x0005)
-	C.gap_set_page_timeout(0x8000) // ~20 s
+	C.gap_set_page_timeout(0x2000) // 5.12 s before the engine can retry paging
 
 	C.l2cap_init()
 	C.sdp_init()
@@ -311,6 +311,24 @@ func Shutdown() {
 	}
 	s.streaming.Store(false)
 	if s.hciReady.Load() {
+		cancelled := make(chan struct{})
+		s.call(func() {
+			m := &s.mouse
+			m.stopping = true
+			if m.connecting {
+				// Cancel the pending LE create while HCI is still working.
+				// Halting would otherwise try to disconnect handle 0xFFFF.
+				m.cancelDone = cancelled
+				C.gap_connect_cancel()
+			} else {
+				close(cancelled)
+			}
+		})
+		select {
+		case <-cancelled:
+		case <-time.After(150 * time.Millisecond):
+			s.logf("bt: pending mouse connection did not cancel before HCI power off")
+		}
 		s.call(func() { C.hci_power_control(C.HCI_POWER_OFF) })
 		select {
 		case <-s.offCh:

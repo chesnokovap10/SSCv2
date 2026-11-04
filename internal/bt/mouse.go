@@ -45,17 +45,21 @@ func (m mouseState) String() string {
 }
 
 type mouseBridge struct {
-	configured bool
-	addr       Addr
-	addrType   C.bd_addr_type_t
-	state      atomic.Int32
-	handle     uint16
-	hidsCid    uint16
-	classic    bool   // BR/EDR HID mouse (hid_host) instead of HID over GATT
-	hidCid     uint16 // classic: hid_host connection
-	buttons    uint32
-	reports    atomic.Uint32
-	raw        atomic.Uint32
+	configured   bool
+	startPending bool
+	connecting   bool
+	stopping     bool
+	cancelDone   chan struct{}
+	addr         Addr
+	addrType     C.bd_addr_type_t
+	state        atomic.Int32
+	handle       uint16
+	hidsCid      uint16
+	classic      bool   // BR/EDR HID mouse (hid_host) instead of HID over GATT
+	hidCid       uint16 // classic: hid_host connection
+	buttons      uint32
+	reports      atomic.Uint32
+	raw          atomic.Uint32
 }
 
 // MouseStatus returns (configured, state text, reports this session).
@@ -94,6 +98,9 @@ func (m *mouseBridge) setup(s *stackT, b *LEBond) {
 		return
 	}
 	m.configured = true
+	m.stopping = false
+	m.connecting = false
+	m.cancelDone = nil
 	m.handle = 0xFFFF
 	kind := "legacy"
 	if b.SecureConn {
@@ -103,26 +110,39 @@ func (m *mouseBridge) setup(s *stackT, b *LEBond) {
 }
 
 func (m *mouseBridge) onHCIWorking(s *stackT) {
+	if m.configured && !m.classic {
+		// Let the first BR/EDR page run without a concurrent LE attempt.
+		// A2DP starts the mouse sooner when the headphones are ready.
+		// The timer still brings up the mouse when they are unavailable.
+		m.startPending = true
+		C.ssc_timer_set(timerMouseRetry, 6000)
+		return
+	}
 	if m.configured {
 		m.connect(s)
 	}
 }
 
 func (m *mouseBridge) connect(s *stackT) {
+	m.startPending = false
+	if m.stopping {
+		return
+	}
 	if m.classic {
 		return // the classic mouse connects to us (pages its host when moved)
 	}
-	if !m.configured || !s.hciReady.Load() || m.handle != 0xFFFF {
+	if !m.configured || !s.hciReady.Load() || m.connecting || m.handle != 0xFFFF {
 		return
 	}
 	m.set(s, mouseConnecting)
 	a := m.addr
 	st := uint8(C.gap_connect((*C.uint8_t)(&a[0]), m.addrType))
-	if st != 0 && st != C.ERROR_CODE_COMMAND_DISALLOWED {
+	if st != 0 {
 		s.logf("mouse: gap_connect failed (0x%02X)", st)
 		C.ssc_timer_set(timerMouseRetry, 2000)
 		return
 	}
+	m.connecting = true
 	s.logf("mouse: waiting for %s to advertise", m.addr)
 }
 
@@ -135,12 +155,23 @@ func (m *mouseBridge) onGapMeta(s *stackT, cp *C.uint8_t) {
 	if addrFromC(&peer[0]) != m.addr {
 		return
 	}
+	m.connecting = false
+	if m.cancelDone != nil {
+		close(m.cancelDone)
+		m.cancelDone = nil
+	}
 	if st := uint8(C.gap_subevent_le_connection_complete_get_status(cp)); st != 0 {
+		if m.stopping {
+			return
+		}
 		s.logf("mouse: LE connection failed (0x%02X), retrying", st)
 		C.ssc_timer_set(timerMouseRetry, 1000)
 		return
 	}
 	m.handle = uint16(C.gap_subevent_le_connection_complete_get_connection_handle(cp))
+	if m.stopping {
+		return
+	}
 	m.set(s, mouseEncrypting)
 	s.logf("mouse: connected (handle 0x%04X), encrypting", m.handle)
 	C.sm_request_pairing(C.hci_con_handle_t(m.handle))

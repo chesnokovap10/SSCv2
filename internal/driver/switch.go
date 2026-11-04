@@ -289,8 +289,9 @@ func buildScript(enable bool, oldInfs []string, instanceID, infPath, catPath, si
 }`)
 	w("$rc = 1")
 	w("try {")
-	w("  Remove-Signer")
-	w("  Log (\"adapter driver: \" + (Svc))")
+	if enable {
+		w("  Remove-Signer")
+	}
 	if !enable {
 		// AVCTP (AVRCP) must already run when the radio comes back. Started
 		// afterwards, the headphones connect without AVRCP and Windows
@@ -305,7 +306,6 @@ func buildScript(enable bool, oldInfs []string, instanceID, infPath, catPath, si
 	}
 	if !enable && inPlace {
 		w("  Run 'pnputil.exe' @('/disable-device', $id) @(0, 3010) 60")
-		w("  Log (\"adapter problem after disable: \" + (Get-PnpDevice -InstanceId $id).Problem)")
 	}
 	// Deleting the WinUSB package with /uninstall reinstalls the best
 	// remaining driver (usbccgp -> BTHUSB) on the same devnode.
@@ -362,7 +362,7 @@ func buildScript(enable bool, oldInfs []string, instanceID, infPath, catPath, si
 			}
 		}
 	}
-	if !enable || !inPlace {
+	if !inPlace {
 		w("  Run 'pnputil.exe' @('/scan-devices') @(0, 3010)")
 	}
 	w("  $rc = 0")
@@ -420,6 +420,7 @@ func Switch(id USBID, enable bool) (Result, error) {
 		return Result{Message: i18n.T("адаптер уже в нужном режиме", "the adapter is already in that mode")}, nil
 	}
 
+	oldInfs := findWinUSBInfs(id)
 	dir, err := os.MkdirTemp("", "sscv2drv")
 	if err != nil {
 		return Result{}, err
@@ -443,7 +444,7 @@ func Switch(id USBID, enable bool) (Result, error) {
 		}
 	}
 	// UTF-8 BOM so Windows PowerShell 5.1 reads non-ASCII paths correctly.
-	script := "\ufeff" + buildScript(enable, findWinUSBInfs(id), st.InstanceID, infPath, catPath, signtool, logPath)
+	script := "\ufeff" + buildScript(enable, oldInfs, st.InstanceID, infPath, catPath, signtool, logPath)
 	if err := os.WriteFile(scriptPath, []byte(script), 0o644); err != nil {
 		return Result{}, err
 	}
@@ -470,6 +471,13 @@ func Switch(id USBID, enable bool) (Result, error) {
 			}
 		} else if Logf != nil {
 			Logf("WinUSB ready in %s, skipped full device scan", time.Since(started))
+		}
+	}
+	// The in-place enable normally starts the Bluetooth child without
+	// a global rescan. Keep the scan as recovery if the child is missing.
+	if !enable && Variant != "remove" && st.InstanceID != "" && Detect(id).Mode != BthUSB {
+		if _, scanErr := run(30*time.Second, "pnputil.exe", "/scan-devices"); scanErr != nil {
+			return Result{Changed: true}, fmt.Errorf("Bluetooth readiness rescan: %w", scanErr)
 		}
 	}
 	// Let PnP settle and confirm.

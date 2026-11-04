@@ -23,6 +23,7 @@ import (
 	"sscv2/internal/ipc"
 	"sscv2/internal/keys"
 	"sscv2/internal/logx"
+	"sscv2/internal/mtk"
 	"sscv2/internal/tray"
 )
 
@@ -377,7 +378,10 @@ func (a *App) enable(m config.Mode) {
 	}
 	if st.Mode != driver.WinUSB {
 		a.setBusy(T("переключение адаптера в WinUSB", "switching the adapter to WinUSB"))
-		_, err := helper.Call(ipc.Request{Op: "driver", VID: st.ID.VID, PID: st.ID.PID, WinUSB: true})
+		a.mu.Lock()
+		variant := a.driverVariant
+		a.mu.Unlock()
+		_, err := helper.Call(ipc.Request{Op: "driver", VID: st.ID.VID, PID: st.ID.PID, WinUSB: true, Variant: variant})
 		if err != nil {
 			logf("driver winusb: %v", err)
 			a.t.Balloon(T("Не удалось включить поток", "Could not start streaming"), err.Error(), 2)
@@ -385,10 +389,24 @@ func (a *App) enable(m config.Mode) {
 			a.setMode(config.ModeOff)
 			return
 		}
-		for i := 0; i < 40 && driver.Detect(st.ID).Mode != driver.WinUSB; i++ {
-			time.Sleep(250 * time.Millisecond)
+		deadline := time.Now().Add(10 * time.Second)
+		for {
+			err := mtk.CheckWinUSB(st.ID.VID, st.ID.PID)
+			if err == nil {
+				break
+			}
+			if time.Now().After(deadline) {
+				logf("WinUSB interface not ready: %v", err)
+				if _, restoreErr := helper.Call(ipc.Request{Op: "driver", VID: st.ID.VID, PID: st.ID.PID, Variant: variant}); restoreErr != nil {
+					logf("restore Bluetooth after WinUSB readiness failure: %v", restoreErr)
+				}
+				a.t.Balloon(T("Не удалось включить поток", "Could not start streaming"), err.Error(), 2)
+				a.refreshAdapter()
+				a.setMode(config.ModeOff)
+				return
+			}
+			time.Sleep(50 * time.Millisecond)
 		}
-		time.Sleep(200 * time.Millisecond) // let the WinUSB interface settle
 		a.refreshAdapter()
 	}
 	a.setMode(m)
