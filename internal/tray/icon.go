@@ -138,11 +138,12 @@ func iconLabelTop(size int) int { return size - (size*32+50)/100 }
 func trayHeadphonesCoverage(px, x, y int) float64 {
 	const glyphTop, glyphBottom = 0.15, 0.92
 	size := float64(iconLabelTop(px)-2) / (glyphBottom - glyphTop)
-	left := (float64(px) - size) / 2
+	width := min(float64(px), size*1.2)
+	left := (float64(px) - width) / 2
 	hits := 0
 	for dy := 0; dy < 4; dy++ {
 		for dx := 0; dx < 4; dx++ {
-			sx := (float64(x) + (float64(dx)+0.5)/4 - left) / size
+			sx := (float64(x) + (float64(dx)+0.5)/4 - left) / width
 			sy := glyphTop + (float64(y)+(float64(dy)+0.5)/4-1)/size
 			if headphones(sx, sy) {
 				hits++
