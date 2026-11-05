@@ -14,12 +14,15 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
-	"sscv2/internal/i18n"
 	"strings"
 	"sync"
 
+	"golang.org/x/sys/windows"
+
 	"sscv2/internal/bt"
 	"sscv2/internal/config"
+	"sscv2/internal/i18n"
+	"sscv2/internal/logx"
 )
 
 // Classic is a BR/EDR bond (headphones, or a classic HID mouse).
@@ -75,15 +78,22 @@ type Store struct {
 // Open loads keys.json (missing file = empty store).
 func Open() (*Store, error) {
 	s := &Store{path: config.KeysPath()}
-	b, err := os.ReadFile(s.path)
+	f, err := readFile(s.path)
+	s.f = f
+	return s, err
+}
+
+func readFile(path string) (File, error) {
+	var f File
+	b, err := os.ReadFile(path)
 	if errors.Is(err, os.ErrNotExist) {
-		return s, nil
+		return f, nil
 	}
 	if err != nil {
-		return s, err
+		return f, err
 	}
-	err = json.Unmarshal(b, &s.f)
-	return s, err
+	err = json.Unmarshal(b, &f)
+	return f, err
 }
 
 // Snapshot returns a copy of the file content.
@@ -96,8 +106,31 @@ func (s *Store) Snapshot() File {
 	return f
 }
 
-func (s *Store) saveLocked() error {
-	return config.WriteJSONAtomic(s.path, &s.f)
+// editLocked serializes updates across the tray and engine. Lock a separate
+// file so replacing keys.json does not replace the file holding the lock.
+func (s *Store) editLocked(edit func(*File) bool) error {
+	lock, err := os.OpenFile(s.path+".lock", os.O_CREATE|os.O_RDWR, 0o600)
+	if err != nil {
+		return err
+	}
+	defer lock.Close()
+	handle := windows.Handle(lock.Fd())
+	var region windows.Overlapped
+	if err := windows.LockFileEx(handle, windows.LOCKFILE_EXCLUSIVE_LOCK, 0, 1, 0, &region); err != nil {
+		return err
+	}
+	defer windows.UnlockFileEx(handle, 0, 1, 0, &region)
+	f, err := readFile(s.path)
+	if err != nil {
+		return err
+	}
+	if edit(&f) {
+		if err := config.WriteJSONAtomic(s.path, &f); err != nil {
+			return err
+		}
+	}
+	s.f = f
+	return nil
 }
 
 // Merge adds/replaces entries (by address) and saves.
@@ -114,70 +147,72 @@ func (s *Store) ImportWindows(in File) error {
 func (s *Store) merge(in File, refreshLE bool) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	previous := s.f
-	if len(in.Classic) != 0 {
-		s.f.Classic = append([]Classic(nil), previous.Classic...)
-	}
-	if refreshLE {
-		s.f.LE = nil
-	} else if len(in.LE) != 0 {
-		s.f.LE = append([]LE(nil), previous.LE...)
-	}
-	if in.Adapter != "" {
-		s.f.Adapter = in.Adapter
-	}
-	for _, c := range in.Classic {
-		s.putClassicLocked(c)
-	}
-	for _, l := range in.LE {
-		replaced := false
-		for i := range s.f.LE {
-			if strings.EqualFold(s.f.LE[i].Addr, l.Addr) {
-				s.f.LE[i] = l
-				replaced = true
+	return s.editLocked(func(f *File) bool {
+		if refreshLE {
+			f.LE = nil
+		}
+		if in.Adapter != "" {
+			f.Adapter = in.Adapter
+		}
+		for _, c := range in.Classic {
+			f.putClassic(c)
+		}
+		for _, l := range in.LE {
+			replaced := false
+			for i := range f.LE {
+				if strings.EqualFold(f.LE[i].Addr, l.Addr) {
+					f.LE[i] = l
+					replaced = true
+					break
+				}
+			}
+			if !replaced {
+				f.LE = append(f.LE, l)
 			}
 		}
-		if !replaced {
-			s.f.LE = append(s.f.LE, l)
-		}
-	}
-	if err := s.saveLocked(); err != nil {
-		s.f = previous
-		return err
-	}
-	return nil
+		return true
+	})
 }
 
-func (s *Store) putClassicLocked(c Classic) {
-	for i := range s.f.Classic {
-		if strings.EqualFold(s.f.Classic[i].Addr, c.Addr) {
+func (f *File) putClassic(c Classic) {
+	for i := range f.Classic {
+		if strings.EqualFold(f.Classic[i].Addr, c.Addr) {
 			if c.Name == "" {
-				c.Name = s.f.Classic[i].Name
+				c.Name = f.Classic[i].Name
 			}
 			if c.CoD == 0 {
-				c.CoD = s.f.Classic[i].CoD
+				c.CoD = f.Classic[i].CoD
 			}
-			s.f.Classic[i] = c
+			f.Classic[i] = c
 			return
 		}
 	}
-	s.f.Classic = append(s.f.Classic, c)
+	f.Classic = append(f.Classic, c)
 }
 
 // SetName records a friendly name for a classic device (e.g. from inquiry).
 func (s *Store) SetName(addr, name string, cod uint32) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	for i := range s.f.Classic {
-		if strings.EqualFold(s.f.Classic[i].Addr, addr) {
+	err := s.editLocked(func(f *File) bool {
+		for i := range f.Classic {
+			c := &f.Classic[i]
+			if !strings.EqualFold(c.Addr, addr) {
+				continue
+			}
+			previous := *c
 			if name != "" {
-				s.f.Classic[i].Name = name
+				c.Name = name
 			}
 			if cod != 0 {
-				s.f.Classic[i].CoD = cod
+				c.CoD = cod
 			}
-			_ = s.saveLocked()
+			return *c != previous
 		}
+		return false
+	})
+	if err != nil {
+		logx.Printf("save Bluetooth device name: %v", err)
 	}
 }
 
@@ -208,8 +243,16 @@ func (s *Store) Get(a bt.Addr) (bt.LinkKey, int, bool) {
 
 func (s *Store) Put(a bt.Addr, k bt.LinkKey, typ int) {
 	s.mu.Lock()
-	s.putClassicLocked(Classic{Addr: a.String(), Key: hex.EncodeToString(k[:]), Type: typ})
-	_ = s.saveLocked()
+	c := Classic{Addr: a.String(), Key: hex.EncodeToString(k[:]), Type: typ}
+	err := s.editLocked(func(f *File) bool {
+		f.putClassic(c)
+		return true
+	})
+	if err != nil {
+		// Keep the live bond usable even if the disk write failed.
+		s.f.putClassic(c)
+		logx.Printf("save Bluetooth bond: %v", err)
+	}
 	cb := s.OnChange
 	s.mu.Unlock()
 	if cb != nil {
@@ -221,14 +264,23 @@ func (s *Store) Delete(a bt.Addr) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	as := a.String()
-	out := s.f.Classic[:0]
-	for _, c := range s.f.Classic {
-		if !strings.EqualFold(c.Addr, as) {
-			out = append(out, c)
+	err := s.editLocked(func(f *File) bool {
+		return f.deleteClassic(as)
+	})
+	if err != nil {
+		s.f.deleteClassic(as)
+		logx.Printf("delete Bluetooth bond: %v", err)
+	}
+}
+
+func (f *File) deleteClassic(addr string) bool {
+	for i, c := range f.Classic {
+		if strings.EqualFold(c.Addr, addr) {
+			f.Classic = append(f.Classic[:i], f.Classic[i+1:]...)
+			return true
 		}
 	}
-	s.f.Classic = out
-	_ = s.saveLocked()
+	return false
 }
 
 func (s *Store) At(i int) (bt.Addr, bt.LinkKey, int, bool) {

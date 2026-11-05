@@ -10,7 +10,6 @@ import (
 const (
 	mfByPosition  = 0x0400
 	menuActionMsg = wmApp + 3
-	miimFType     = 0x100
 )
 
 var (
@@ -49,7 +48,7 @@ func sameMenuSlot(a, b Item) bool {
 func (t *Tray) writeMenuItem(m *liveMenu, position int, it *Item, sub *liveMenu, replace bool) {
 	flags, id := uintptr(mfByPosition), uintptr(it.ID)
 	label, _ := windows.UTF16PtrFromString(it.Text)
-	if it.informational() || it.LiveLabel {
+	if it.informational() || it.LiveLabel || it.Radio {
 		if replace {
 			row := t.infoRows[it.infoID]
 			row.text, row.scrollPeriod = it.Text, 0
@@ -61,7 +60,7 @@ func (t *Tray) writeMenuItem(m *liveMenu, position int, it *Item, sub *liveMenu,
 		}
 		it.infoID = t.nextInfoID
 		t.nextInfoID++
-		t.infoRows[it.infoID] = &menuInfoRow{text: it.Text, informational: it.informational()}
+		t.infoRows[it.infoID] = &menuInfoRow{text: it.Text, informational: it.informational(), radio: it.Radio, checked: it.Checked}
 		flags |= mfOwnerDraw
 		if it.informational() || it.Disabled {
 			flags |= mfGrayed
@@ -103,21 +102,20 @@ func (t *Tray) writeMenuItem(m *liveMenu, position int, it *Item, sub *liveMenu,
 		return
 	}
 	insertMenu.Call(m.handle, uintptr(position), flags, id, uintptr(unsafe.Pointer(label)))
-	if it.Radio {
-		info := menuItemInfo{mask: miimFType, typ: mfRadioChk}
-		info.size = uint32(unsafe.Sizeof(info))
-		setMenuItemInfo.Call(m.handle, uintptr(position), 1, uintptr(unsafe.Pointer(&info)))
-	}
 }
 
 func (t *Tray) updateMenuState(m *liveMenu, i int, item Item) {
 	old := &m.items[i]
 	if old.Checked != item.Checked {
-		flags := uintptr(mfByPosition)
-		if item.Checked {
-			flags |= mfChecked
+		if old.Radio {
+			t.infoRows[old.infoID].checked = item.Checked
+		} else {
+			flags := uintptr(mfByPosition)
+			if item.Checked {
+				flags |= mfChecked
+			}
+			checkMenuItem.Call(m.handle, uintptr(i), flags)
 		}
-		checkMenuItem.Call(m.handle, uintptr(i), flags)
 		old.Checked = item.Checked
 		t.redrawMenuItem(m.handle, i)
 	}

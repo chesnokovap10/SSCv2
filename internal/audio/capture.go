@@ -4,7 +4,6 @@ import (
 	"errors"
 	"fmt"
 	"runtime"
-	"sscv2/internal/i18n"
 	"sscv2/internal/logx"
 	"sync"
 	"sync/atomic"
@@ -12,6 +11,8 @@ import (
 	"unsafe"
 
 	"golang.org/x/sys/windows"
+
+	"sscv2/internal/i18n"
 )
 
 const (
@@ -76,6 +77,7 @@ type Capture struct {
 	running atomic.Bool
 	wg      sync.WaitGroup
 	conv    []float32
+	errors  chan error
 }
 
 // OpenCapture prepares capture on endpoint id ("" = default output).
@@ -146,13 +148,21 @@ func (c *Capture) Start(cb Callback) error {
 		return fmt.Errorf("IAudioClient.Start: %w", err)
 	}
 	c.running.Store(true)
+	c.errors = make(chan error, 1)
 	c.wg.Add(1)
-	go c.loop(cb)
+	go func() {
+		defer c.wg.Done()
+		if err := c.loop(cb); err != nil {
+			c.errors <- err
+		}
+	}()
 	return nil
 }
 
-func (c *Capture) loop(cb Callback) {
-	defer c.wg.Done()
+// Errors reports the terminal error, if any, from the current capture.
+func (c *Capture) Errors() <-chan error { return c.errors }
+
+func (c *Capture) loop(cb Callback) error {
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
 	task := uint32(0)
@@ -168,19 +178,20 @@ func (c *Capture) loop(cb Callback) {
 	var lastPacket time.Time
 	for c.running.Load() {
 		time.Sleep(5 * time.Millisecond)
-		var pkt uint32
-		if err := hr(vcall(c.capture, 5, uintptr(unsafe.Pointer(&pkt)))); err != nil {
-			logx.Printf("capture: GetNextPacketSize: %v", err)
-			return
-		}
-		for pkt > 0 {
+		for c.running.Load() {
+			var pkt uint32
+			if err := hr(vcall(c.capture, 5, uintptr(unsafe.Pointer(&pkt)))); err != nil {
+				return fmt.Errorf("capture: GetNextPacketSize: %w", err)
+			}
+			if pkt == 0 {
+				break
+			}
 			var data uintptr
 			var frames, flags uint32
 			var devPos, qpc uint64
 			if err := hr(vcall(c.capture, 3, uintptr(unsafe.Pointer(&data)), uintptr(unsafe.Pointer(&frames)),
 				uintptr(unsafe.Pointer(&flags)), uintptr(unsafe.Pointer(&devPos)), uintptr(unsafe.Pointer(&qpc)))); err != nil {
-				logx.Dbgf("audio", "capture: GetBuffer: %v", err)
-				break
+				return fmt.Errorf("capture: GetBuffer: %w", err)
 			}
 			var out []float32
 			if frames > 0 && cb != nil {
@@ -211,8 +222,7 @@ func (c *Capture) loop(cb Callback) {
 			}
 			// Return the WASAPI packet before running the encoder and transport.
 			if err := hr(vcall(c.capture, 4, uintptr(frames))); err != nil {
-				logx.Printf("capture: ReleaseBuffer: %v", err)
-				return
+				return fmt.Errorf("capture: ReleaseBuffer: %w", err)
 			}
 			now := time.Now()
 			if !lastPacket.IsZero() {
@@ -225,12 +235,9 @@ func (c *Capture) loop(cb Callback) {
 			if out != nil {
 				cb(out, int(frames))
 			}
-			if err := hr(vcall(c.capture, 5, uintptr(unsafe.Pointer(&pkt)))); err != nil {
-				logx.Printf("capture: GetNextPacketSize: %v", err)
-				return
-			}
 		}
 	}
+	return nil
 }
 
 // Stop ends capturing (the device stays open; Close releases it).

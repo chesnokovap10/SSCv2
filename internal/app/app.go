@@ -59,11 +59,8 @@ const (
 	idRepository
 	idAutoStart
 
-	idBitrateBase    = 500 // + kbps (0 = auto)
-	idFoundBase      = 2000
-	idHeadphonesBase = 3000
-	idMouseBase      = 4000
-	idClassicMouse   = 5000 // + index in the classic keys
+	idBitrateBase = 500 // + kbps (0 = auto)
+	idDeviceBase  = 2000
 )
 
 // Bitrates (kbps) offered per codec; 0 = auto.
@@ -100,8 +97,10 @@ type App struct {
 	volSettled        chan struct{}
 	stopVolumeRestore func() // guarded by opMu
 	// carry: audio routing left by an engine stopped for a restart
-	carry    *ipc.AudioCarry
-	menuText map[int]string
+	carry             *ipc.AudioCarry
+	menuText          map[int]string
+	menuDeviceIDs     map[menuDeviceKey]int
+	menuDeviceTargets []menuDevice
 }
 
 func logf(f string, a ...any) { logx.Printf(f, a...) }
@@ -1178,21 +1177,21 @@ func (a *App) menu() []tray.Item {
 		scanText = T("Поиск…", "Searching…")
 	}
 	pair = append(pair, tray.Item{Text: scanText, ID: idScan, Disabled: !engineUp || a.scanning})
-	for i, d := range a.scan {
+	for _, d := range a.scan {
 		label := fmt.Sprintf("    %s (%s)", nz(d.Name, T("без имени", "no name")), d.Addr)
 		if d.Audio {
 			label += " ♪"
 		}
-		pair = append(pair, tray.Item{Text: label, ID: idFoundBase + i})
+		pair = append(pair, tray.Item{Text: label, ID: a.menuDeviceID(menuFound, d.Addr, d.Name)})
 	}
 	pair = append(pair, tray.Item{Separator: true}, tray.Item{Text: T("Наушники:", "Headphones:")})
 	nh := 0
-	for i, c := range snap.Classic {
+	for _, c := range snap.Classic {
 		if c.IsPeripheral() {
 			continue // mice and keyboards are listed below
 		}
 		sel := a.s.Headphones != nil && strings.EqualFold(a.s.Headphones.Addr, c.Addr)
-		pair = append(pair, tray.Item{Text: "    " + nz(c.Name, c.Addr), ID: idHeadphonesBase + i, Radio: true, Checked: sel})
+		pair = append(pair, tray.Item{Text: "    " + nz(c.Name, c.Addr), ID: a.menuDeviceID(menuHeadphones, c.Addr, c.Name), Radio: true, Checked: sel})
 		nh++
 	}
 	if nh == 0 {
@@ -1200,17 +1199,17 @@ func (a *App) menu() []tray.Item {
 	}
 	pair = append(pair, tray.Item{Text: T("Мышь:", "Mouse:")})
 	pair = append(pair, tray.Item{Text: T("    Без мыши", "    No mouse"), ID: idNoMouse, Radio: true, Checked: a.s.Mouse == nil})
-	for i, l := range snap.LE {
+	for _, l := range snap.LE {
 		sel := a.s.Mouse != nil && strings.EqualFold(a.s.Mouse.Addr, l.Addr)
-		pair = append(pair, tray.Item{Text: "    " + nz(l.Name, l.Addr), ID: idMouseBase + i, Radio: true, Checked: sel})
+		pair = append(pair, tray.Item{Text: "    " + nz(l.Name, l.Addr), ID: a.menuDeviceID(menuLEMouse, l.Addr, l.Name), Radio: true, Checked: sel})
 	}
-	for i, c := range snap.Classic {
+	for _, c := range snap.Classic {
 		if !c.IsPointing() {
 			continue
 		}
 		sel := a.s.Mouse != nil && strings.EqualFold(a.s.Mouse.Addr, c.Addr)
 		pair = append(pair, tray.Item{Text: "    " + nz(c.Name, c.Addr) + T(" (классическая)", " (classic)"),
-			ID: idClassicMouse + i, Radio: true, Checked: sel})
+			ID: a.menuDeviceID(menuClassicMouse, c.Addr, c.Name), Radio: true, Checked: sel})
 	}
 	items = append(items, tray.Item{Text: T("Сопрячь устройство", "Pair a device"), Sub: pair})
 	items = append(items, tray.Item{Text: T("Инфо об устройствах…", "Device info…"), ID: idInfo})
@@ -1316,7 +1315,7 @@ func (a *App) command(id int) {
 		go a.enable(config.ModeSSC)
 	case id == idModeUHQ:
 		go a.enable(config.ModeSSCUHQ)
-	case id >= idBitrateBase && id < idFoundBase:
+	case id >= idBitrateBase && id < idDeviceBase:
 		go a.setBitrate(id - idBitrateBase)
 	case id == idImportWin:
 		go a.importWindows()
@@ -1334,65 +1333,8 @@ func (a *App) command(id int) {
 			a.t.Balloon(T("Поиск устройств", "Searching for devices"), T("10 секунд… Переведите наушники в режим сопряжения.",
 				"10 seconds… Put the headphones into pairing mode."), 0)
 		}
-	case id >= idFoundBase && id < idFoundBase+500:
-		a.mu.Lock()
-		i := id - idFoundBase
-		if i >= len(a.scan) {
-			a.mu.Unlock()
-			return
-		}
-		d := a.scan[i]
-		a.s.Headphones = &config.Device{Addr: d.Addr, Name: d.Name}
-		_ = config.Save(a.s)
-		eng := a.eng
-		a.mu.Unlock()
-		if eng != nil {
-			eng.send(ipc.Command{Cmd: "connect", Addr: d.Addr})
-		}
-	case id >= idHeadphonesBase && id < idHeadphonesBase+500:
-		store, _ := keys.Open()
-		snap := store.Snapshot()
-		i := id - idHeadphonesBase
-		if i >= len(snap.Classic) {
-			return
-		}
-		c := snap.Classic[i]
-		a.mu.Lock()
-		a.s.Headphones = &config.Device{Addr: c.Addr, Name: c.Name}
-		_ = config.Save(a.s)
-		eng := a.eng
-		a.mu.Unlock()
-		if eng != nil {
-			eng.send(ipc.Command{Cmd: "connect", Addr: c.Addr})
-		}
-	case id >= idClassicMouse && id < idClassicMouse+500:
-		store, _ := keys.Open()
-		snap := store.Snapshot()
-		i := id - idClassicMouse
-		if i >= len(snap.Classic) {
-			return
-		}
-		a.mu.Lock()
-		a.s.Mouse = &config.Device{Addr: snap.Classic[i].Addr, Name: snap.Classic[i].Name}
-		_ = config.Save(a.s)
-		a.mu.Unlock()
-		go a.restartEngine()
-	case id == idNoMouse || (id >= idMouseBase && id < idMouseBase+500):
-		var dev *config.Device
-		if id != idNoMouse {
-			store, _ := keys.Open()
-			snap := store.Snapshot()
-			i := id - idMouseBase
-			if i >= len(snap.LE) {
-				return
-			}
-			dev = &config.Device{Addr: snap.LE[i].Addr, Name: snap.LE[i].Name}
-		}
-		a.mu.Lock()
-		a.s.Mouse = dev
-		_ = config.Save(a.s)
-		a.mu.Unlock()
-		go a.restartEngine()
+	case id == idNoMouse || id >= idDeviceBase:
+		a.selectMenuDevice(id)
 	case id == idInfo:
 		go a.showInfo()
 	case id == idSvcInstall:

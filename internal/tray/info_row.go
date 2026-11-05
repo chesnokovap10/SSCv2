@@ -18,6 +18,8 @@ type menuInfoRow struct {
 	text          string
 	scrollPeriod  int32
 	informational bool
+	radio         bool
+	checked       bool
 }
 
 type menuInfoHover struct {
@@ -80,6 +82,12 @@ func (t *Tray) drawInfoRow(it *drawMenuItem, row *menuInfoRow) {
 	color, _, _ := getSysColor.Call(foreground)
 	oldColor, _, _ := setTextColor.Call(it.dc, color)
 	oldMode, _, _ := setBkMode.Call(it.dc, 1)
+	if row.radio && row.checked {
+		mark := it.rect
+		mark.right = r.left
+		dot := uint16('●')
+		drawText.Call(it.dc, uintptr(unsafe.Pointer(&dot)), 1, uintptr(unsafe.Pointer(&mark)), textFlags|0x5) // DT_CENTER | DT_VCENTER
+	}
 	if t.infoHover.id == uint32(it.data) && row.scrollPeriod > 0 {
 		x := r.left - t.infoHover.offset%row.scrollPeriod
 		y := r.top + (r.bottom-r.top-extent.height)/2
@@ -107,6 +115,10 @@ func (t *Tray) infoAtCursor() (uint32, uintptr, int) {
 				var r menuRect
 				ok, _, _ := getMenuItemRect.Call(0, m.handle, uintptr(pos), uintptr(unsafe.Pointer(&r)))
 				if ok != 0 && pt.x >= r.left && pt.x < r.right && pt.y >= r.top && pt.y < r.bottom {
+					// Windows handles hover repainting for native rows.
+					if item.infoID == 0 {
+						return 0, 0, 0
+					}
 					return item.infoID, m.handle, pos
 				}
 			}

@@ -65,22 +65,27 @@ func RunService(owner string) error {
 
 // ServiceState: "not installed", "stopped", "running", ...
 func ServiceState() (installed, running bool) {
+	q, installed := serviceStatus()
+	return installed, q.State == svc.Running
+}
+
+func serviceStatus() (svc.Status, bool) {
 	scm, err := windows.OpenSCManager(nil, nil, windows.SC_MANAGER_CONNECT)
 	if err != nil {
-		return false, false
+		return svc.Status{}, false
 	}
 	defer windows.CloseServiceHandle(scm)
 	h, err := windows.OpenService(scm, windows.StringToUTF16Ptr(ServiceName), windows.SERVICE_QUERY_STATUS)
 	if err != nil {
-		return false, false
+		return svc.Status{}, false
 	}
 	s := &mgr.Service{Name: ServiceName, Handle: h}
 	defer s.Close()
 	q, err := s.Query()
 	if err != nil {
-		return true, false
+		return svc.Status{}, true
 	}
-	return true, q.State == svc.Running
+	return q, true
 }
 
 func installDir() string {

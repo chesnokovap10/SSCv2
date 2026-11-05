@@ -8,6 +8,7 @@ import (
 
 	"sscv2/internal/config"
 	"sscv2/internal/i18n"
+	"sscv2/internal/keys"
 	"sscv2/internal/tray"
 )
 
@@ -177,9 +178,9 @@ func TestMenuClassicMouse(t *testing.T) {
 		switch {
 		case it.Text == "Headphones:" || it.Text == "Mouse:":
 			section = it.Text
-		case it.ID >= idHeadphonesBase && it.ID < idHeadphonesBase+500:
+		case it.ID >= idDeviceBase && section == "Headphones:":
 			hp = append(hp, strings.TrimSpace(it.Text))
-		case it.ID >= idClassicMouse && it.ID < idClassicMouse+500 && section == "Mouse:":
+		case it.ID >= idDeviceBase && section == "Mouse:":
 			mice = append(mice, strings.TrimSpace(it.Text))
 		}
 	}
@@ -188,5 +189,46 @@ func TestMenuClassicMouse(t *testing.T) {
 	}
 	if len(mice) != 1 || mice[0] != "BT Mouse (classic)" {
 		t.Errorf("classic mice: %q", mice)
+	}
+}
+
+func TestMenuDeviceSelectionSurvivesReorderedBonds(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("APPDATA", dir)
+	t.Setenv("LOCALAPPDATA", dir)
+	store, err := keys.Open()
+	if err != nil {
+		t.Fatal(err)
+	}
+	first := keys.LE{Addr: "00:11:22:33:44:55", Name: "Mouse A"}
+	second := keys.LE{Addr: "00:11:22:33:44:66", Name: "Mouse B"}
+	if err := store.ImportWindows(keys.File{LE: []keys.LE{first, second}}); err != nil {
+		t.Fatal(err)
+	}
+	a := &App{s: &config.Settings{Mode: config.ModeOff}}
+	findMouseA := func() int {
+		t.Helper()
+		for _, item := range a.menu() {
+			for _, child := range item.Sub {
+				if strings.TrimSpace(child.Text) == first.Name {
+					return child.ID
+				}
+			}
+		}
+		t.Fatal("missing Mouse A")
+		return 0
+	}
+	visibleID := findMouseA()
+	if err := store.ImportWindows(keys.File{LE: []keys.LE{second, first}}); err != nil {
+		t.Fatal(err)
+	}
+	if id := findMouseA(); id != visibleID {
+		t.Fatalf("Mouse A ID changed from %d to %d", visibleID, id)
+	}
+	a.command(visibleID)
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.s.Mouse == nil || a.s.Mouse.Addr != first.Addr {
+		t.Fatalf("selected %+v, want %s", a.s.Mouse, first.Addr)
 	}
 }

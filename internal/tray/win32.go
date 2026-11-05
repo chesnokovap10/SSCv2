@@ -68,7 +68,6 @@ const (
 	mfChecked   = 0x8
 	mfPopup     = 0x10
 	mfSeparator = 0x800
-	mfRadioChk  = 0x200 // MFT_RADIOCHECK
 
 	tpmReturnCmd   = 0x0100
 	tpmRightButton = 0x0002
@@ -76,11 +75,11 @@ const (
 
 	smCxSmIcon = 49
 
-	mbOK          = 0x0
-	mbIconInfo    = 0x40
-	mbIconWarning = 0x30
-	mbYesNo       = 0x4
-	mbIconQuestion = 0x20
+	mbOK            = 0x0
+	mbIconInfo      = 0x40
+	mbIconWarning   = 0x30
+	mbYesNo         = 0x4
+	mbIconQuestion  = 0x20
 	mbSetForeground = 0x10000
 	mbTopMost       = 0x40000
 	idYes           = 6

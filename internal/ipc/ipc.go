@@ -189,6 +189,6 @@ func (r *Reader) Read(v any) error {
 	return json.Unmarshal(r.s.Bytes(), v)
 }
 
-// Version of the program: "0.3 #<commit hash, 8 chars>", set by build.cmd
+// Version of the program: "0.3.1 #<commit hash, 8 chars>", set by build.cmd
 // through -ldflags "-X 'sscv2/internal/ipc.Version=...'".
-var Version = "0.3 #dev"
+var Version = "0.3.1 #dev"

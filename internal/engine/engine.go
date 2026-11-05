@@ -250,6 +250,7 @@ func (e *engine) run() error {
 	activeUntil := time.Now().Add(activeWindow)
 	for {
 		if e.target == "" {
+			e.releaseSessionAudio()
 			e.update(func(s *ipc.EngineStatus) {
 				s.Phase, s.Message = "idle", i18n.T("наушники не выбраны - «Сопрячь устройство»", "no headphones chosen - see Pair a device")
 			})
@@ -264,9 +265,7 @@ func (e *engine) run() error {
 		}
 
 		if time.Now().After(activeUntil) {
-			if e.carried {
-				e.releaseAudio() // the headphones did not come: sound back to the speakers
-			}
+			e.releaseSessionAudio() // the headphones did not come: sound back to the speakers
 			// passive: wait until the headphones connect to us
 			e.update(func(s *ipc.EngineStatus) {
 				s.Phase, s.Message = "waiting", i18n.T("ожидание наушников (подключатся, когда их достанут из кейса)", "waiting for the headphones (they connect when taken out of the case)")
@@ -309,9 +308,11 @@ func (e *engine) run() error {
 			backoff = time.Second
 			msg = i18n.T("переподключение на ", "reconnecting for ") + strings.ToUpper(e.cfg.Codec)
 		case err != nil:
+			e.releaseSessionAudio()
 			logf("session: %v", err)
 			msg = err.Error()
 		default:
+			e.releaseSessionAudio()
 			backoff = 3 * time.Second
 		}
 		if time.Now().After(activeUntil) {
@@ -414,7 +415,7 @@ func (e *engine) session(addrStr string) error {
 		sscUHQMode, sscForced = false, 0
 	}
 
-	if err := e.setupAudio(); err != nil {
+	if err := e.openAudio(); err != nil {
 		return err
 	}
 
@@ -501,6 +502,9 @@ func (e *engine) session(addrStr string) error {
 	if err := bt.StartStream(ctx); err != nil {
 		return err
 	}
+	if err := e.startAudio(); err != nil {
+		return err
+	}
 	// Silence until the headphones settled on the reference level (Galaxy Buds
 	// jump to their own, often 100 %, level right after connecting).
 	e.pipe.muted.Store(true)
@@ -516,6 +520,8 @@ func (e *engine) session(addrStr string) error {
 			return nil
 		case <-e.disc:
 			return errLinkLost
+		case err := <-e.cap.Errors():
+			return err
 		case a := <-e.retarget:
 			e.target = a
 			return nil
@@ -627,8 +633,8 @@ func (e *engine) unmuteWhenSettled() {
 	}
 }
 
-// setupAudio captures the default render endpoint before its physical mute.
-func (e *engine) setupAudio() error {
+// openAudio reads the output format for codec negotiation without muting it.
+func (e *engine) openAudio() error {
 	if e.cap != nil {
 		return nil
 	}
@@ -640,25 +646,33 @@ func (e *engine) setupAudio() error {
 		cp.Close()
 		return fmt.Errorf(i18n.T("частота вывода %d Гц не поддерживается", "unsupported output rate %d Hz"), cp.Format.SampleRate)
 	}
+	e.cap = cp
+	e.srate = cp.Format.SampleRate
+	return nil
+}
+
+// startAudio takes ownership of the output mute once Bluetooth is streaming.
+func (e *engine) startAudio() error {
+	if e.stopMuteGuard != nil {
+		return nil
+	}
+	cp := e.cap
 	id := cp.Device.ID
 	e.mu.Lock()
 	previous := e.st.MuteEndpoint
 	e.mu.Unlock()
 	if previous != "" && previous != id {
 		if err := audio.SetMute(previous, false); err != nil {
-			cp.Close()
 			return err
 		}
 		e.update(func(s *ipc.EngineStatus) { s.MuteEndpoint = "" })
 	}
 	muted, err := audio.Muted(id)
 	if err != nil {
-		cp.Close()
 		return err
 	}
 	stopMuteGuard, err := audio.HoldMute(id)
 	if err != nil {
-		cp.Close()
 		return err
 	}
 	if err := cp.Start(func(samples []float32, frames int) { e.pipe.onCapture(samples, frames, cp.Format.Channels) }); err != nil {
@@ -666,12 +680,9 @@ func (e *engine) setupAudio() error {
 		if !muted {
 			_ = audio.SetMute(id, false)
 		}
-		cp.Close()
 		return err
 	}
-	e.cap = cp
 	e.stopMuteGuard = stopMuteGuard
-	e.srate = cp.Format.SampleRate
 	e.carried = false
 	logf("capture: %s [%s]", cp.Device.Name, cp.Format)
 	e.update(func(s *ipc.EngineStatus) {
@@ -811,12 +822,18 @@ func (e *engine) onLinkLost() {
 }
 
 // releaseAudio stops capture and volume sync and undoes the output changes
-// (physical endpoint mute). setupAudio
+// (physical endpoint mute). startAudio
 // redoes them on the next connection.
 // stopAudio stops capture and volume sync only.
 func (e *engine) stopAudio() {
 	e.closeCapture()
 	logf("audio: routing left for the next engine")
+}
+
+func (e *engine) releaseSessionAudio() {
+	if e.cap != nil || e.carried {
+		e.releaseAudio()
+	}
 }
 
 func (e *engine) releaseAudio() {
@@ -847,9 +864,6 @@ func (e *engine) teardown() {
 // RestoreAudio undoes what an engine changed (also used by the tray when an
 // engine died).
 func RestoreAudio(st ipc.EngineStatus) {
-	if err := audio.InitCOM(); err != nil {
-		return
-	}
 	if st.MuteEndpoint != "" {
 		_ = audio.SetMute(st.MuteEndpoint, false)
 	}

@@ -5,12 +5,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"sscv2/internal/i18n"
 	"time"
 	"unsafe"
 
 	"golang.org/x/sys/windows"
+	"golang.org/x/sys/windows/svc"
 
+	"sscv2/internal/i18n"
 	"sscv2/internal/ipc"
 	"sscv2/internal/logx"
 )
@@ -23,32 +24,46 @@ func pipeSDDL(ownerSID string) string {
 	if ownerSID == "" {
 		ownerSID = "IU" // interactive users
 	}
-	return "D:P(A;;GA;;;SY)(A;;GA;;;BA)(A;;GRGW;;;" + ownerSID + ")"
+	// GENERIC_READ | FILE_WRITE_DATA. GENERIC_WRITE would also allow the
+	// client to create its own server instance under the same name.
+	return "D:P(A;;GA;;;SY)(A;;GA;;;BA)(A;;0x80000002;;;" + ownerSID + ")"
 }
 
 // Serve accepts helper requests until the process exits.
 func Serve(ownerSID string) error {
-	sd, err := windows.SecurityDescriptorFromString(pipeSDDL(ownerSID))
-	if err != nil {
-		return fmt.Errorf("pipe SDDL: %w", err)
-	}
-	sa := &windows.SecurityAttributes{Length: uint32(unsafe.Sizeof(windows.SecurityAttributes{})), SecurityDescriptor: sd}
-	name, _ := windows.UTF16PtrFromString(pipeName)
+	first := true
 	for {
-		h, err := windows.CreateNamedPipe(name,
-			windows.PIPE_ACCESS_DUPLEX,
-			windows.PIPE_TYPE_BYTE|windows.PIPE_READMODE_BYTE|windows.PIPE_WAIT|windows.PIPE_REJECT_REMOTE_CLIENTS,
-			windows.PIPE_UNLIMITED_INSTANCES, 64<<10, 64<<10, 0, sa)
+		h, err := newPipeInstance(pipeName, ownerSID, first)
 		if err != nil {
-			return fmt.Errorf("CreateNamedPipe: %w", err)
+			return err
 		}
 		if err := windows.ConnectNamedPipe(h, nil); err != nil && err != windows.ERROR_PIPE_CONNECTED {
 			windows.CloseHandle(h)
 			time.Sleep(100 * time.Millisecond)
 			continue
 		}
+		first = false
 		go serveConn(h)
 	}
+}
+
+func newPipeInstance(pipe, ownerSID string, first bool) (windows.Handle, error) {
+	sd, err := windows.SecurityDescriptorFromString(pipeSDDL(ownerSID))
+	if err != nil {
+		return 0, fmt.Errorf("pipe SDDL: %w", err)
+	}
+	sa := &windows.SecurityAttributes{Length: uint32(unsafe.Sizeof(windows.SecurityAttributes{})), SecurityDescriptor: sd}
+	mode := uint32(windows.PIPE_ACCESS_DUPLEX)
+	if first {
+		mode |= windows.FILE_FLAG_FIRST_PIPE_INSTANCE
+	}
+	h, err := windows.CreateNamedPipe(windows.StringToUTF16Ptr(pipe), mode,
+		windows.PIPE_TYPE_BYTE|windows.PIPE_READMODE_BYTE|windows.PIPE_WAIT|windows.PIPE_REJECT_REMOTE_CLIENTS,
+		windows.PIPE_UNLIMITED_INSTANCES, 64<<10, 64<<10, 0, sa)
+	if err != nil {
+		return 0, fmt.Errorf("CreateNamedPipe: %w", err)
+	}
+	return h, nil
 }
 
 func serveConn(h windows.Handle) {
@@ -79,18 +94,28 @@ func serveConn(h windows.Handle) {
 
 // ErrNoService means the helper service is not reachable.
 var ErrNoService = i18n.Error("служба не запущена", "the service is not running")
+var errUnexpectedPipeServer = i18n.Error("канал не принадлежит службе SSCv2", "the pipe does not belong to the SSCv2 service")
 
 // callPipe sends one request to the running service.
 func callPipe(req ipc.Request) (ipc.Response, error) {
-	name, _ := windows.UTF16PtrFromString(pipeName)
+	status, _ := serviceStatus()
+	if status.State != svc.Running || status.ProcessId == 0 {
+		return ipc.Response{}, ErrNoService
+	}
+	return callPipeAt(pipeName, status.ProcessId, req)
+}
+
+func callPipeAt(pipe string, servicePID uint32, req ipc.Request) (ipc.Response, error) {
+	name := windows.StringToUTF16Ptr(pipe)
 	var h windows.Handle
 	var err error
 	for i := 0; i < 20; i++ {
-		h, err = windows.CreateFile(name, windows.GENERIC_READ|windows.GENERIC_WRITE, 0, nil, windows.OPEN_EXISTING, 0, 0)
+		h, err = windows.CreateFile(name, windows.GENERIC_READ|windows.FILE_WRITE_DATA, 0, nil, windows.OPEN_EXISTING,
+			windows.SECURITY_SQOS_PRESENT|windows.SECURITY_IDENTIFICATION, 0)
 		if err == nil {
 			break
 		}
-		if err != windows.ERROR_PIPE_BUSY {
+		if err != windows.ERROR_PIPE_BUSY && err != windows.ERROR_FILE_NOT_FOUND {
 			return ipc.Response{}, ErrNoService
 		}
 		time.Sleep(100 * time.Millisecond)
@@ -100,6 +125,13 @@ func callPipe(req ipc.Request) (ipc.Response, error) {
 	}
 	f := os.NewFile(uintptr(h), "pipe")
 	defer f.Close()
+	var pid uint32
+	if err := windows.GetNamedPipeServerProcessId(h, &pid); err != nil {
+		return ipc.Response{}, fmt.Errorf("GetNamedPipeServerProcessId: %w", err)
+	}
+	if pid == 0 || pid != servicePID {
+		return ipc.Response{}, errUnexpectedPipeServer
+	}
 	b, _ := json.Marshal(req)
 	if _, err := f.Write(append(b, '\n')); err != nil {
 		return ipc.Response{}, err
