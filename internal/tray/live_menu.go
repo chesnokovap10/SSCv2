@@ -10,6 +10,7 @@ import (
 const (
 	mfByPosition  = 0x0400
 	menuActionMsg = wmApp + 3
+	miimFType     = 0x100
 )
 
 var (
@@ -65,7 +66,9 @@ func (t *Tray) writeMenuItem(m *liveMenu, position int, it *Item, sub *liveMenu,
 		if it.informational() || it.Disabled {
 			flags |= mfGrayed
 		}
-		id = uintptr(it.infoID)
+		if id == 0 {
+			id = uintptr(it.infoID)
+		}
 		if sub != nil {
 			id, flags = sub.handle, flags|mfPopup
 		}
@@ -85,9 +88,6 @@ func (t *Tray) writeMenuItem(m *liveMenu, position int, it *Item, sub *liveMenu,
 		if it.Checked {
 			flags |= mfChecked
 		}
-		if it.Radio {
-			flags |= mfRadioChk
-		}
 		if it.Disabled || it.ID == 0 && sub == nil {
 			flags |= mfGrayed
 		}
@@ -103,6 +103,11 @@ func (t *Tray) writeMenuItem(m *liveMenu, position int, it *Item, sub *liveMenu,
 		return
 	}
 	insertMenu.Call(m.handle, uintptr(position), flags, id, uintptr(unsafe.Pointer(label)))
+	if it.Radio {
+		info := menuItemInfo{mask: miimFType, typ: mfRadioChk}
+		info.size = uint32(unsafe.Sizeof(info))
+		setMenuItemInfo.Call(m.handle, uintptr(position), 1, uintptr(unsafe.Pointer(&info)))
+	}
 }
 
 func (t *Tray) updateMenuState(m *liveMenu, i int, item Item) {

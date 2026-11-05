@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"runtime"
 	"sscv2/internal/i18n"
+	"sscv2/internal/logx"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -16,6 +17,7 @@ import (
 const (
 	shareModeShared     = 0
 	streamFlagsLoopback = 0x00020000
+	bufferDiscontinuity = 0x1
 	bufferFlagsSilent   = 0x2
 	waveFormatFloat     = 0x0003
 	waveFormatExt       = 0xFFFE
@@ -163,26 +165,30 @@ func (c *Capture) loop(cb Callback) {
 	}
 
 	ch := c.Format.Channels
+	var lastPacket time.Time
 	for c.running.Load() {
 		time.Sleep(5 * time.Millisecond)
 		var pkt uint32
-		if hr(vcall(c.capture, 5, uintptr(unsafe.Pointer(&pkt)))) != nil {
+		if err := hr(vcall(c.capture, 5, uintptr(unsafe.Pointer(&pkt)))); err != nil {
+			logx.Printf("capture: GetNextPacketSize: %v", err)
 			return
 		}
 		for pkt > 0 {
 			var data uintptr
 			var frames, flags uint32
 			var devPos, qpc uint64
-			if hr(vcall(c.capture, 3, uintptr(unsafe.Pointer(&data)), uintptr(unsafe.Pointer(&frames)),
-				uintptr(unsafe.Pointer(&flags)), uintptr(unsafe.Pointer(&devPos)), uintptr(unsafe.Pointer(&qpc)))) != nil {
+			if err := hr(vcall(c.capture, 3, uintptr(unsafe.Pointer(&data)), uintptr(unsafe.Pointer(&frames)),
+				uintptr(unsafe.Pointer(&flags)), uintptr(unsafe.Pointer(&devPos)), uintptr(unsafe.Pointer(&qpc)))); err != nil {
+				logx.Dbgf("audio", "capture: GetBuffer: %v", err)
 				break
 			}
+			var out []float32
 			if frames > 0 && cb != nil {
 				n := int(frames) * ch
 				if cap(c.conv) < n {
 					c.conv = make([]float32, n)
 				}
-				out := c.conv[:n]
+				out = c.conv[:n]
 				switch {
 				case flags&bufferFlagsSilent != 0 || data == 0:
 					clear(out)
@@ -199,11 +205,29 @@ func (c *Capture) loop(cb Callback) {
 						out[i] = float32(float64(v) / 2147483648.0)
 					}
 				}
+			}
+			if frames == 0 {
+				break
+			}
+			// Return the WASAPI packet before running the encoder and transport.
+			if err := hr(vcall(c.capture, 4, uintptr(frames))); err != nil {
+				logx.Printf("capture: ReleaseBuffer: %v", err)
+				return
+			}
+			now := time.Now()
+			if !lastPacket.IsZero() {
+				gap := now.Sub(lastPacket)
+				if flags&bufferDiscontinuity != 0 || gap >= 80*time.Millisecond {
+					logx.Dbgf("audio", "capture: packet gap=%v flags=0x%x device frame=%d", gap.Round(time.Millisecond), flags, devPos)
+				}
+			}
+			lastPacket = now
+			if out != nil {
 				cb(out, int(frames))
 			}
-			vcall(c.capture, 4, uintptr(frames))
-			if hr(vcall(c.capture, 5, uintptr(unsafe.Pointer(&pkt)))) != nil {
-				break
+			if err := hr(vcall(c.capture, 5, uintptr(unsafe.Pointer(&pkt)))); err != nil {
+				logx.Printf("capture: GetNextPacketSize: %v", err)
+				return
 			}
 		}
 	}

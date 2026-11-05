@@ -229,6 +229,9 @@ func UninstallSystem(pid int) error {
 // RemoveUserData deletes the user's settings, keys, logs and the desktop
 // shortcut once process pid has exited (its log files are still open).
 func RemoveUserData(pid int) {
+	if err := SetAutoStart(false); err != nil {
+		logx.Printf("remove autostart: %v", err)
+	}
 	var dirs []string
 	for _, env := range []string{"APPDATA", "LOCALAPPDATA"} {
 		if b := os.Getenv(env); b != "" {

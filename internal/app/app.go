@@ -20,6 +20,7 @@ import (
 	"sscv2/internal/engine"
 	"sscv2/internal/helper"
 	"sscv2/internal/i18n"
+	"sscv2/internal/install"
 	"sscv2/internal/ipc"
 	"sscv2/internal/keys"
 	"sscv2/internal/logx"
@@ -55,6 +56,8 @@ const (
 	idVolUp
 	idVolMute
 	idAnimations
+	idRepository
+	idAutoStart
 
 	idBitrateBase    = 500 // + kbps (0 = auto)
 	idFoundBase      = 2000
@@ -129,7 +132,7 @@ func Run() int {
 	}
 	a.t = &tray.Tray{Menu: a.menu, Command: a.command, DismissBefore: func(id int) bool {
 		switch id {
-		case idExit, idInfo, idLangRU, idLangEN:
+		case idExit, idInfo, idLangRU, idLangEN, idRepository:
 			return true
 		default:
 			return false
@@ -1102,6 +1105,7 @@ func (a *App) menu() []tray.Item {
 	store, _ := keys.Open()
 	snap := store.Snapshot()
 	installed, running := helper.ServiceState()
+	autoStart, autoStartErr := install.AutoStart()
 
 	a.mu.Lock()
 	defer a.mu.Unlock()
@@ -1110,7 +1114,7 @@ func (a *App) menu() []tray.Item {
 	engineUp := a.eng != nil
 
 	items := []tray.Item{
-		{Text: "SSCv2 " + ipc.Version + " — " + s},
+		{Text: "SSCv2 " + ipc.Version + " — " + s, ID: idRepository, LiveLabel: true},
 		{Separator: true},
 		{Text: T("Громкость наушников", "Headphone volume"), ID: idVolume, Slider: true},
 	}
@@ -1226,6 +1230,7 @@ func (a *App) menu() []tray.Item {
 			{Text: "Русский", ID: idLangRU, Radio: true, Checked: lang == i18n.RU},
 			{Text: "English", ID: idLangEN, Radio: true, Checked: lang == i18n.EN},
 		}},
+		{Text: T("Запускать при входе в Windows", "Start when signing in to Windows"), ID: idAutoStart, Checked: autoStart, Disabled: autoStartErr != nil},
 		{Text: T("Макс. MTU для Samsung Galaxy Buds2 Pro (1017 байт)", "Max MTU for Samsung Galaxy Buds2 Pro (1017 bytes)"), ID: idMaxMTU, Checked: a.s.MaxMTU, Disabled: busy},
 		{Text: T("Все битрейты (не только проверенные на этих наушниках)", "All bitrates (not only those checked on these headphones)"), ID: idAllBitrates, Checked: a.s.AllBitrates, Disabled: busy},
 		{Text: T("Анимации", "Animations"), ID: idAnimations, Checked: !a.s.DisableAnimations},
@@ -1299,6 +1304,8 @@ func (a *App) command(id int) {
 	a.mu.Unlock()
 	logx.Dbgf("ui", "menu: %q (id %d)", strings.TrimSpace(label), id)
 	switch {
+	case id == idRepository:
+		openTarget("https://github.com/chesnokovap10/SSCv2")
 	case id == idVolMute:
 		a.adjustVolume(id)
 	case id == idModeOff:
@@ -1393,7 +1400,17 @@ func (a *App) command(id int) {
 	case id == idSvcRemove:
 		go a.removeService()
 	case id == idOpenLogs:
-		openFolder(config.LogDir())
+		openTarget(config.LogDir())
+	case id == idAutoStart:
+		on, err := install.AutoStart()
+		if err == nil {
+			err = install.SetAutoStart(!on)
+		}
+		if err != nil {
+			logf("autostart: %v", err)
+			a.t.Balloon("SSCv2", T("Не удалось изменить автозапуск", "Could not change startup setting"), 2)
+		}
+		a.t.RefreshMenu()
 	case id == idMaxMTU:
 		a.mu.Lock()
 		on := !a.s.MaxMTU
