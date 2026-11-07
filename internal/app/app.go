@@ -76,18 +76,19 @@ type App struct {
 
 	opMu sync.Mutex // one mode switch / privileged op at a time
 
-	mu         sync.Mutex
-	s          *config.Settings
-	mode       config.Mode // effective mode
-	busy       string
-	pendingUHQ bool
-	eng        *engineProc
-	st         ipc.EngineStatus
-	scan       []ipc.Found
-	scanning   bool
-	adapter    driver.Status
-	crashes    []time.Time
-	quitting   bool
+	mu           sync.Mutex
+	s            *config.Settings
+	mode         config.Mode // effective mode
+	busy         string
+	pendingUHQ   bool
+	eng          *engineProc
+	resumeEngine *engineProc // old process being replaced after system sleep
+	st           ipc.EngineStatus
+	scan         []ipc.Found
+	scanning     bool
+	adapter      driver.Status
+	crashes      []time.Time
+	quitting     bool
 	// restoreMode: how the headphones' level is restored after "Off"
 	// (ctl "restore <mode>", for diagnostics; not persisted).
 	restoreMode   string
@@ -129,7 +130,7 @@ func Run() int {
 	if a.s.Debug {
 		logx.SetDebug(true)
 	}
-	a.t = &tray.Tray{Menu: a.menu, Command: a.command, DismissBefore: func(id int) bool {
+	a.t = &tray.Tray{Menu: a.menu, Command: a.command, Resume: a.onResume, DismissBefore: func(id int) bool {
 		switch id {
 		case idExit, idInfo, idLangRU, idLangEN, idRepository:
 			return true
@@ -279,12 +280,18 @@ func (a *App) stateLocked() (tray.Color, string) {
 		return tray.Red, T("движок не запущен", "engine not running")
 	}
 	st := a.st
+	if a.resumeEngine != nil && a.resumeEngine == a.eng {
+		return tray.Amber, T("восстановление после сна", "recovering after sleep")
+	}
 	name := st.HeadphonesName
 	if name == "" {
 		name = st.Headphones
 	}
 	switch st.Phase {
 	case "streaming":
+		if !st.Connected || !st.Streaming {
+			return tray.Blue, T("ожидание наушников", "waiting for headphones")
+		}
 		return tray.Green, fmt.Sprintf("%s → %s", st.Codec, name)
 	case "error":
 		return tray.Red, T("ошибка: ", "error: ") + st.Message

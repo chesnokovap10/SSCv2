@@ -43,6 +43,7 @@ type Tray struct {
 	Volume                      func() (uint8, bool, bool)
 	SetVolume                   func(uint8)
 	ToggleMute                  func()
+	Resume                      func() // must return promptly; called on the UI thread
 	volumeRow                   *menuSlider
 	openMenu                    *liveMenu
 	selectedMenu, selectedFlags uintptr
@@ -104,6 +105,14 @@ func (t *Tray) Run(initial Color, tip string) error {
 	t.hwnd = hwnd
 	t.created = uint32(c)
 	t.mu.Unlock()
+	if t.Resume != nil {
+		notify, _, err := user32.NewProc("RegisterSuspendResumeNotification").Call(hwnd, 0)
+		if notify != 0 {
+			defer user32.NewProc("UnregisterSuspendResumeNotification").Call(notify)
+		} else {
+			logx.Printf("power: register suspend/resume notifications: %v", err)
+		}
+	}
 	t.addIcon()
 	close(t.ready)
 	if t.VolumeKey != nil {
@@ -319,6 +328,11 @@ func wndProc(hwnd, msg, wparam, lparam uintptr) uintptr {
 		return 1
 	}
 	switch uint32(msg) {
+	case 0x0218: // WM_POWERBROADCAST
+		if wparam == 0x0012 && t != nil && t.Resume != nil { // PBT_APMRESUMEAUTOMATIC
+			t.Resume()
+		}
+		return 1
 	case 0x0117: // WM_INITMENUPOPUP
 		if t.openMenu != nil && wparam != t.openMenu.handle {
 			t.prepareSubmenu(t.openMenu, t.Menu(), wparam)
