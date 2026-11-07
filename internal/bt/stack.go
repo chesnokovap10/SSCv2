@@ -226,6 +226,25 @@ func Start(o Options) error {
 func (s *stackT) loop(started chan struct{}) {
 	runtime.LockOSThread()
 	defer close(s.loopDone)
+	input := make(chan mouseReport, 64)
+	s.mouse.input = input
+	inputDone := make(chan struct{})
+	go func() {
+		defer close(inputDone)
+		var buttons uint32
+		for report := range input {
+			injectMouse(report, buttons)
+			buttons = report.buttons
+		}
+		injectMouse(mouseReport{}, buttons)
+	}()
+	defer func() {
+		close(input)
+		select {
+		case <-inputDone:
+		case <-time.After(250 * time.Millisecond):
+		}
+	}()
 
 	C.btstack_memory_init()
 	C.btstack_run_loop_init(C.btstack_run_loop_windows_get_instance())

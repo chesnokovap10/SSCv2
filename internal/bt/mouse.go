@@ -57,6 +57,7 @@ type mouseBridge struct {
 	classic    bool   // BR/EDR HID mouse (hid_host) instead of HID over GATT
 	hidCid     uint16 // classic: hid_host connection
 	buttons    uint32
+	input      chan mouseReport
 	reports    atomic.Uint32
 	raw        atomic.Uint32
 }
@@ -307,7 +308,33 @@ type mouseInput struct {
 	extra     uintptr
 }
 
+type mouseReport struct {
+	dx, dy, wheel, hwheel int32
+	buttons               uint32
+}
+
 func (m *mouseBridge) send(dx, dy, wheel, hwheel int32, buttons uint32) {
+	if dx == 0 && dy == 0 && wheel == 0 && hwheel == 0 && buttons == m.buttons {
+		return
+	}
+	m.buttons = buttons
+	report := mouseReport{dx, dy, wheel, hwheel, buttons}
+	select {
+	case m.input <- report:
+		return
+	default:
+	}
+	// SendInput can block while Windows switches focus. Keep recent input
+	// and its complete button state without holding up the Bluetooth loop.
+	select {
+	case <-m.input:
+	default:
+	}
+	m.input <- report // only the Bluetooth thread produces reports
+}
+
+func injectMouse(report mouseReport, previous uint32) {
+	dx, dy, wheel, hwheel, buttons := report.dx, report.dy, report.wheel, report.hwheel, report.buttons
 	var in [8]mouseInput
 	n := 0
 	add := func(flags uint32, x, y int32, data uint32) {
@@ -324,7 +351,7 @@ func (m *mouseBridge) send(dx, dy, wheel, hwheel int32, buttons uint32) {
 		{mouseeventfXDown, mouseeventfXUp, 1},
 		{mouseeventfXDown, mouseeventfXUp, 2},
 	}
-	changed := buttons ^ m.buttons
+	changed := buttons ^ previous
 	for b := 0; b < 5; b++ {
 		if changed&(1<<b) == 0 {
 			continue
@@ -335,7 +362,6 @@ func (m *mouseBridge) send(dx, dy, wheel, hwheel int32, buttons uint32) {
 			add(btn[b].up, 0, 0, btn[b].data)
 		}
 	}
-	m.buttons = buttons
 	if wheel != 0 {
 		add(mouseeventfWheel, 0, 0, uint32(wheel*wheelDelta))
 	}
