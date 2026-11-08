@@ -72,6 +72,26 @@ func main() {
 			os.Exit(1)
 		}
 		fmt.Fprintln(console(), out)
+	case "test-signing":
+		out := console()
+		if len(args) != 2 || (args[1] != "on" && args[1] != "off") {
+			fmt.Fprintln(out, "usage: ssc.exe test-signing on|off")
+			os.Exit(2)
+		}
+		enabled := args[1] == "on"
+		if _, err := helper.Call(ipc.Request{Op: "test-signing", TestSigning: &enabled}); err != nil {
+			fmt.Fprintln(out, "test-signing:", err)
+			os.Exit(1)
+		}
+		active, err := driver.TestSigning()
+		switch {
+		case err != nil:
+			fmt.Fprintln(out, "Boot setting saved. Current Windows test signing:", err)
+		case active != enabled:
+			fmt.Fprintln(out, "Boot setting saved. Restart Windows to apply it.")
+		default:
+			fmt.Fprintln(out, "Boot setting saved. The requested mode is already active.")
+		}
 	case "native-aac":
 		out := console()
 		if err := nativebt.Run(args[1:], out); err != nil {
@@ -123,7 +143,7 @@ func main() {
 			fmt.Fprintf(out, "MediaTek adapter %s: %s [service %s] %s\n", st.ID, st.Mode, st.Service, st.InstanceID)
 		}
 		inst, run := helper.ServiceState()
-		testSigning, err := nativebt.TestSigning()
+		testSigning, err := driver.TestSigning()
 		if err != nil {
 			fmt.Fprintf(out, "Windows test signing: unknown (%v)\n", err)
 		} else {

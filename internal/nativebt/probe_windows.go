@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"sscv2/internal/codec/aac"
+	"sscv2/internal/driver"
 )
 
 const (
@@ -275,7 +276,7 @@ func Run(args []string, out io.Writer) error {
 	if len(args) > 1 || len(args) == 1 && len(args[0]) > 0 && args[0][0] == '-' {
 		return fmt.Errorf("usage: [-configure-aac|-loopback-aac|-stream-aac seconds] [profile-driver device interface path]")
 	}
-	testSigning, err := TestSigning()
+	testSigning, err := driver.TestSigning()
 	if err != nil {
 		return err
 	}

@@ -24,7 +24,7 @@ func Handle(req ipc.Request) (resp ipc.Response) {
 	}
 	defer func() {
 		if r := recover(); r != nil {
-			resp = ipc.Response{Error: fmt.Sprintf(i18n.T("внутренняя ошибка: %v", "internal error: %v"), r)}
+			resp = ipc.Response{Error: fmt.Sprintf(i18n.T("?????????? ??????: %v", "internal error: %v"), r)}
 		}
 	}()
 	if req.Lang != "" {
@@ -52,7 +52,7 @@ func Handle(req ipc.Request) (resp ipc.Response) {
 			}
 		}
 		if !known {
-			return fail(fmt.Errorf(i18n.T("устройство %s не из списка поддерживаемых MediaTek", "device %s is not a supported MediaTek adapter"), id))
+			return fail(fmt.Errorf(i18n.T("?????????? %s ?? ?? ?????? ?????????????? MediaTek", "device %s is not a supported MediaTek adapter"), id))
 		}
 		driver.Variant = req.Variant
 		r, err := driver.Switch(id, req.WinUSB)
@@ -60,6 +60,14 @@ func Handle(req ipc.Request) (resp ipc.Response) {
 			return fail(err)
 		}
 		resp.OK, resp.Message = true, r.Message
+	case "test-signing":
+		if req.TestSigning == nil {
+			return fail(fmt.Errorf("test-signing requires an explicit state"))
+		}
+		if err := driver.SetTestSigning(*req.TestSigning); err != nil {
+			return fail(err)
+		}
+		resp.OK = true
 	case "keys-read":
 		bonds, err := keys.ReadWindows()
 		if err != nil {
@@ -73,7 +81,7 @@ func Handle(req ipc.Request) (resp ipc.Response) {
 		}
 		resp.OK = true
 	default:
-		return fail(fmt.Errorf(i18n.T("неизвестная операция %q", "unknown operation %q"), req.Op))
+		return fail(fmt.Errorf(i18n.T("??????????? ???????? %q", "unknown operation %q"), req.Op))
 	}
 	return resp
 }

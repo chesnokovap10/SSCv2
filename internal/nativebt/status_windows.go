@@ -2,25 +2,9 @@ package nativebt
 
 import (
 	"fmt"
-	"unsafe"
 
 	"golang.org/x/sys/windows"
 )
-
-// TestSigning reports the running kernel's code-integrity policy. The BCD
-// setting can already be different when a reboot is pending.
-func TestSigning() (bool, error) {
-	const testSigning = 0x02
-	info := struct {
-		Length  uint32
-		Options uint32
-	}{Length: 8}
-	if err := windows.NtQuerySystemInformation(windows.SystemCodeIntegrityInformation,
-		unsafe.Pointer(&info), info.Length, nil); err != nil {
-		return false, fmt.Errorf("query Windows code integrity: %w", err)
-	}
-	return info.Options&testSigning != 0, nil
-}
 
 func Interfaces() ([]string, error) {
 	// Matches the device interface registered by SscAvdtpProbe.sys.

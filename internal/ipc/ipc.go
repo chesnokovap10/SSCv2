@@ -124,18 +124,19 @@ type Event struct {
 
 // Request to the privileged helper.
 type Request struct {
-	Op      string `json:"op"` // ping|driver|keys-read|keys-write
-	VID     uint16 `json:"vid,omitempty"`
-	PID     uint16 `json:"pid,omitempty"`
-	WinUSB  bool   `json:"winusb,omitempty"`
-	Adapter string `json:"adapter,omitempty"`
-	Device  string `json:"device,omitempty"`
-	Key     string `json:"key,omitempty"`
-	Dir     string `json:"dir,omitempty"`
-	Name    string `json:"name,omitempty"`
-	Debug   bool   `json:"debug,omitempty"`   // hand the op's log lines back
-	Lang    string `json:"lang,omitempty"`    // language of the error messages
-	Variant string `json:"variant,omitempty"` // diagnostics: driver switch variant
+	Op          string `json:"op"` // ping|driver|test-signing|keys-read|keys-write
+	VID         uint16 `json:"vid,omitempty"`
+	PID         uint16 `json:"pid,omitempty"`
+	WinUSB      bool   `json:"winusb,omitempty"`
+	TestSigning *bool  `json:"testSigning,omitempty"`
+	Adapter     string `json:"adapter,omitempty"`
+	Device      string `json:"device,omitempty"`
+	Key         string `json:"key,omitempty"`
+	Dir         string `json:"dir,omitempty"`
+	Name        string `json:"name,omitempty"`
+	Debug       bool   `json:"debug,omitempty"`   // hand the op's log lines back
+	Lang        string `json:"lang,omitempty"`    // language of the error messages
+	Variant     string `json:"variant,omitempty"` // diagnostics: driver switch variant
 }
 
 // Response from the helper.
