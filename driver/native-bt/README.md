@@ -23,7 +23,7 @@ directory's `package` subdirectory. The INF matches the Samsung Buds2 Pro
 Stereo A2DP hardware ID. It can match multiple paired units of that model.
 
 For a hardware trial, sign the SYS and catalog with a test certificate trusted
-by the test machine and boot Windows into test-signing mode. Build the probe with
+by the test machine and boot Windows into test-signing mode. With the Go CGO C/C++ toolchain enabled, build the probe with
 `go build -o avdtp-probe.exe ./cmd/avdtp-probe`, then run from an elevated
 PowerShell with the signed package and probe executable:
 
@@ -35,4 +35,4 @@ The script requires exactly one enabled matching stereo device. It temporarily
 switches its driver, queries the AVDTP codecs, removes the test package, and
 checks that the original Microsoft A2DP driver is active again.
 
-Pass -ConfigureAAC to also negotiate AAC and verify AVDTP Open, Start and Suspend over a separate media channel. This check does not send audio frames.
+Pass -ConfigureAAC to negotiate AAC, open a separate media channel, and send a quiet two-second 440 Hz test tone. Confirm playback by listening on the Buds.

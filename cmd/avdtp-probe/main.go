@@ -1,10 +1,15 @@
 package main
 
 import (
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"os"
+	"time"
+
+	"sscv2/internal/codec/aac"
 )
 
 const (
@@ -70,7 +75,7 @@ func (p *probe) command(signal byte, payload ...byte) ([]byte, error) {
 	}
 }
 
-func inspect(link io.ReadWriter, out io.Writer, openMedia func() (io.Closer, error)) error {
+func inspect(link io.ReadWriter, out io.Writer, openMedia func() (io.WriteCloser, error)) error {
 	p := probe{link: link}
 	endpoints, err := p.command(discover)
 	if err != nil {
@@ -133,7 +138,7 @@ func supportsProbeAAC(codec []byte) bool {
 	return maxBitrate == 0 || maxBitrate >= probeAACBitrate
 }
 
-func (p *probe) checkAACConfiguration(out io.Writer, seid byte, openMedia func() (io.Closer, error)) (result error) {
+func (p *probe) checkAACConfiguration(out io.Writer, seid byte, openMedia func() (io.WriteCloser, error)) (result error) {
 	const localSEID = 1
 	bitrate := uint32(probeAACBitrate)
 	_, err := p.command(setConfiguration, seid<<2, localSEID<<2,
@@ -158,10 +163,70 @@ func (p *probe) checkAACConfiguration(out io.Writer, seid byte, openMedia func()
 	if _, err := p.command(startStream, seid<<2); err != nil {
 		return fmt.Errorf("start AAC stream: %w", err)
 	}
+	if err := sendAACTone(media, out); err != nil {
+		return err
+	}
 	if _, err := p.command(suspendStream, seid<<2); err != nil {
 		return fmt.Errorf("suspend AAC stream: %w", err)
 	}
 	fmt.Fprintf(out, "AAC media channel opened, started and suspended on SEID %d\n", seid)
+	return nil
+}
+
+func sendAACTone(media io.Writer, out io.Writer) error {
+	const sampleRate = 48000
+	const samples = 2 * sampleRate
+	encoder, err := aac.New(sampleRate, 2, probeAACBitrate, 600)
+	if err != nil {
+		return fmt.Errorf("initialize AAC tone encoder: %w", err)
+	}
+	defer encoder.Close()
+
+	pcm := make([]int16, encoder.FrameLen*2)
+	var packet [612]byte
+	packet[0], packet[1] = 0x80, 0xe0 // RTP v2, marker, dynamic payload type 96.
+	binary.BigEndian.PutUint32(packet[8:12], 1)
+	started := time.Now()
+	var sequence uint16
+	var timestamp uint32
+	for offset := 0; offset < samples; offset += encoder.FrameLen {
+		for frame := 0; frame < encoder.FrameLen; frame++ {
+			index := offset + frame
+			envelope := max(0, min(1, float64(min(index, samples-index))/960))
+			sample := int16(2600 * envelope * math.Sin(2*math.Pi*440*float64(index)/sampleRate))
+			pcm[2*frame], pcm[2*frame+1] = sample, sample
+		}
+		payload, err := encoder.Encode(pcm)
+		if err != nil {
+			return err
+		}
+		if len(payload) == 0 {
+			continue
+		}
+		if len(payload) > len(packet)-12 {
+			return fmt.Errorf("AAC frame exceeds probe packet budget: %d", len(payload))
+		}
+		binary.BigEndian.PutUint16(packet[2:4], sequence)
+		binary.BigEndian.PutUint32(packet[4:8], timestamp)
+		copy(packet[12:], payload)
+		deadline := started.Add(time.Duration(timestamp) * time.Second / sampleRate)
+		time.Sleep(time.Until(deadline))
+		size := 12 + len(payload)
+		n, err := media.Write(packet[:size])
+		if err != nil {
+			return fmt.Errorf("write AAC packet %d: %w", sequence, err)
+		}
+		if n != size {
+			return io.ErrShortWrite
+		}
+		sequence++
+		timestamp += uint32(encoder.FrameLen)
+	}
+	if sequence == 0 {
+		return fmt.Errorf("AAC encoder produced no packets")
+	}
+	time.Sleep(time.Until(started.Add(time.Duration(timestamp)*time.Second/sampleRate + 150*time.Millisecond)))
+	fmt.Fprintf(out, "Sent %d AAC RTP packets (440 Hz test tone)\n", sequence)
 	return nil
 }
 
@@ -178,9 +243,9 @@ func run(args []string) error {
 		return err
 	}
 	defer link.Close()
-	var openMedia func() (io.Closer, error)
+	var openMedia func() (io.WriteCloser, error)
 	if checkAAC {
-		openMedia = func() (io.Closer, error) {
+		openMedia = func() (io.WriteCloser, error) {
 			return os.OpenFile(args[0], os.O_RDWR, 0)
 		}
 	}
