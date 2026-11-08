@@ -69,6 +69,14 @@ func (a *App) toggleTestSigning() {
 
 	active, err := driver.TestSigning()
 	if err == nil && active == enable {
+		if enable {
+			a.mu.Lock()
+			aacRunning := a.mode == config.ModeAAC && a.eng != nil
+			a.mu.Unlock()
+			if aacRunning {
+				go a.enable(config.ModeAAC)
+			}
+		}
 		return
 	}
 	if !tray.Ask(title, T("Изменение сохранено. Перезагрузить компьютер сейчас?", "The change was saved. Restart the computer now?")) {
