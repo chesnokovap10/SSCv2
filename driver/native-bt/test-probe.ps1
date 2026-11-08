@@ -2,6 +2,7 @@
 param(
     [Parameter(Mandatory)] [string] $InfPath,
     [Parameter(Mandatory)] [string] $ProbePath,
+    [switch] $ConfigureAAC,
     [string] $WdkRoot
 )
 
@@ -57,7 +58,10 @@ try {
         ForEach-Object { if ($_ -match '(\\\\\?\\\S+)') { $Matches[1] } })
     if ($paths.Count -ne 1) { throw "Expected one probe interface, found $($paths.Count)." }
 
-    $process = Start-Process -FilePath $probe -ArgumentList ('"' + $paths[0] + '"') -PassThru -WindowStyle Hidden -RedirectStandardOutput $stdout -RedirectStandardError $stderr
+    $arguments = @()
+    if ($ConfigureAAC) { $arguments += '-configure-aac' }
+    $arguments += '"' + $paths[0] + '"'
+    $process = Start-Process -FilePath $probe -ArgumentList $arguments -PassThru -WindowStyle Hidden -RedirectStandardOutput $stdout -RedirectStandardError $stderr
     if (!$process.WaitForExit(12000)) {
         $process.Kill()
         $process.WaitForExit()

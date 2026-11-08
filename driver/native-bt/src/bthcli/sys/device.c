@@ -96,8 +96,6 @@ Return Value:
     // Configure file callbacks
     //    
 
-    WdfDeviceInitSetExclusive(DeviceInit, TRUE);
-
     WDF_FILEOBJECT_CONFIG_INIT(
         &fileobjectConfig,
         BthEchoCliEvtDeviceFileCreate,

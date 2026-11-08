@@ -34,3 +34,5 @@ PowerShell with the signed package and probe executable:
 The script requires exactly one enabled matching stereo device. It temporarily
 switches its driver, queries the AVDTP codecs, removes the test package, and
 checks that the original Microsoft A2DP driver is active again.
+
+Pass -ConfigureAAC to also negotiate AAC and verify AVDTP Open, Start and Suspend over a separate media channel. This check does not send audio frames.
