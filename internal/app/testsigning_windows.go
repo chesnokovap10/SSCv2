@@ -54,16 +54,33 @@ func (a *App) toggleTestSigning() {
 		tray.Info(title, fmt.Sprintf(T("Режим загрузки Windows изменён, но не удалось сохранить настройку SSCv2.\n\n%v", "The Windows boot setting changed, but the SSCv2 preference could not be saved.\n\n%v"), err))
 	}
 
+	if !enable {
+		a.mu.Lock()
+		wasNative := a.native != nil
+		a.mu.Unlock()
+		if err := a.stopNativeAAC(); err != nil {
+			a.nativeError(err)
+			return
+		}
+		if wasNative {
+			a.setMode(config.ModeOff)
+		}
+	}
+
 	active, err := driver.TestSigning()
-	if err == nil && active == enable {
-		if enable {
-			a.mu.Lock()
-			aacRunning := a.mode == config.ModeAAC && a.eng != nil
-			a.mu.Unlock()
-			if aacRunning {
+	if enable {
+		a.mu.Lock()
+		mode, legacyRunning := a.mode, a.eng != nil
+		a.mu.Unlock()
+		if legacyRunning {
+			if err == nil && active && mode == config.ModeAAC {
 				go a.enable(config.ModeAAC)
+			} else {
+				defer func() { go a.disable() }()
 			}
 		}
+	}
+	if err == nil && active == enable {
 		return
 	}
 	if !tray.Ask(title, T("Изменение сохранено. Перезагрузить компьютер сейчас?", "The change was saved. Restart the computer now?")) {
