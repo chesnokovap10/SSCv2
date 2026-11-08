@@ -75,7 +75,7 @@ func (p *probe) command(signal byte, payload ...byte) ([]byte, error) {
 	}
 }
 
-func inspect(link io.ReadWriter, out io.Writer, openMedia func() (io.WriteCloser, error)) error {
+func inspect(link io.ReadWriter, out io.Writer, openMedia func() (io.WriteCloser, error), loopback bool) error {
 	p := probe{link: link}
 	endpoints, err := p.command(discover)
 	if err != nil {
@@ -123,7 +123,7 @@ func inspect(link io.ReadWriter, out io.Writer, openMedia func() (io.WriteCloser
 	if aacSEID == 0 {
 		return fmt.Errorf("no idle AAC sink supports the test configuration")
 	}
-	return p.checkAACConfiguration(out, aacSEID, openMedia)
+	return p.checkAACConfiguration(out, aacSEID, openMedia, loopback)
 }
 
 // MPEG-2 AAC LC, 48 kHz, stereo, constant 192 kbit/s.
@@ -138,7 +138,7 @@ func supportsProbeAAC(codec []byte) bool {
 	return maxBitrate == 0 || maxBitrate >= probeAACBitrate
 }
 
-func (p *probe) checkAACConfiguration(out io.Writer, seid byte, openMedia func() (io.WriteCloser, error)) (result error) {
+func (p *probe) checkAACConfiguration(out io.Writer, seid byte, openMedia func() (io.WriteCloser, error), loopback bool) (result error) {
 	const localSEID = 1
 	bitrate := uint32(probeAACBitrate)
 	_, err := p.command(setConfiguration, seid<<2, localSEID<<2,
@@ -163,7 +163,11 @@ func (p *probe) checkAACConfiguration(out io.Writer, seid byte, openMedia func()
 	if _, err := p.command(startStream, seid<<2); err != nil {
 		return fmt.Errorf("start AAC stream: %w", err)
 	}
-	if err := sendAACTone(media, out); err != nil {
+	send := sendAACTone
+	if loopback {
+		send = sendAACLoopback
+	}
+	if err := send(media, out); err != nil {
 		return err
 	}
 	if _, err := p.command(suspendStream, seid<<2); err != nil {
@@ -174,8 +178,22 @@ func (p *probe) checkAACConfiguration(out io.Writer, seid byte, openMedia func()
 }
 
 func sendAACTone(media io.Writer, out io.Writer) error {
+	return sendAAC(media, out, 2*48000, "440 Hz test tone", true, func(pcm []int16, offset int) error {
+		for i := 0; i < len(pcm)/2; i++ {
+			sample := toneSample(offset+i, 2*48000)
+			pcm[2*i], pcm[2*i+1] = sample, sample
+		}
+		return nil
+	})
+}
+
+func toneSample(index, samples int) int16 {
+	envelope := max(0, min(1, float64(min(index, samples-index))/960))
+	return int16(2600 * envelope * math.Sin(2*math.Pi*440*float64(index)/48000))
+}
+
+func sendAAC(media io.Writer, out io.Writer, samples int, source string, pace bool, fill func([]int16, int) error) error {
 	const sampleRate = 48000
-	const samples = 2 * sampleRate
 	encoder, err := aac.New(sampleRate, 2, probeAACBitrate, 600)
 	if err != nil {
 		return fmt.Errorf("initialize AAC tone encoder: %w", err)
@@ -190,11 +208,8 @@ func sendAACTone(media io.Writer, out io.Writer) error {
 	var sequence uint16
 	var timestamp uint32
 	for offset := 0; offset < samples; offset += encoder.FrameLen {
-		for frame := 0; frame < encoder.FrameLen; frame++ {
-			index := offset + frame
-			envelope := max(0, min(1, float64(min(index, samples-index))/960))
-			sample := int16(2600 * envelope * math.Sin(2*math.Pi*440*float64(index)/sampleRate))
-			pcm[2*frame], pcm[2*frame+1] = sample, sample
+		if err := fill(pcm, offset); err != nil {
+			return err
 		}
 		payload, err := encoder.Encode(pcm)
 		if err != nil {
@@ -210,7 +225,9 @@ func sendAACTone(media io.Writer, out io.Writer) error {
 		binary.BigEndian.PutUint32(packet[4:8], timestamp)
 		copy(packet[12:], payload)
 		deadline := started.Add(time.Duration(timestamp) * time.Second / sampleRate)
-		time.Sleep(time.Until(deadline))
+		if pace {
+			time.Sleep(time.Until(deadline))
+		}
 		size := 12 + len(payload)
 		n, err := media.Write(packet[:size])
 		if err != nil {
@@ -226,17 +243,18 @@ func sendAACTone(media io.Writer, out io.Writer) error {
 		return fmt.Errorf("AAC encoder produced no packets")
 	}
 	time.Sleep(time.Until(started.Add(time.Duration(timestamp)*time.Second/sampleRate + 150*time.Millisecond)))
-	fmt.Fprintf(out, "Sent %d AAC RTP packets (440 Hz test tone)\n", sequence)
+	fmt.Fprintf(out, "Sent %d AAC RTP packets (%s)\n", sequence, source)
 	return nil
 }
 
 func run(args []string) error {
-	checkAAC := len(args) == 2 && args[0] == "-configure-aac"
+	loopback := len(args) == 2 && args[0] == "-loopback-aac"
+	checkAAC := loopback || len(args) == 2 && args[0] == "-configure-aac"
 	if checkAAC {
 		args = args[1:]
 	}
 	if len(args) != 1 {
-		return fmt.Errorf("usage: avdtp-probe [-configure-aac] <profile-driver device interface path>")
+		return fmt.Errorf("usage: avdtp-probe [-configure-aac|-loopback-aac] <profile-driver device interface path>")
 	}
 	link, err := os.OpenFile(args[0], os.O_RDWR, 0)
 	if err != nil {
@@ -249,7 +267,7 @@ func run(args []string) error {
 			return os.OpenFile(args[0], os.O_RDWR, 0)
 		}
 	}
-	return inspect(link, os.Stdout, openMedia)
+	return inspect(link, os.Stdout, openMedia, loopback)
 }
 
 func main() {

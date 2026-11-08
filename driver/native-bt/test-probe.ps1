@@ -3,6 +3,7 @@ param(
     [Parameter(Mandatory)] [string] $InfPath,
     [Parameter(Mandatory)] [string] $ProbePath,
     [switch] $ConfigureAAC,
+    [switch] $LoopbackAAC,
     [string] $WdkRoot
 )
 
@@ -59,7 +60,8 @@ try {
     if ($paths.Count -ne 1) { throw "Expected one probe interface, found $($paths.Count)." }
 
     $arguments = @()
-    if ($ConfigureAAC) { $arguments += '-configure-aac' }
+    if ($LoopbackAAC) { $arguments += '-loopback-aac' }
+    elseif ($ConfigureAAC) { $arguments += '-configure-aac' }
     $arguments += '"' + $paths[0] + '"'
     $process = Start-Process -FilePath $probe -ArgumentList $arguments -PassThru -WindowStyle Hidden -RedirectStandardOutput $stdout -RedirectStandardError $stderr
     if (!$process.WaitForExit(12000)) {
