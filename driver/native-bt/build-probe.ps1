@@ -1,6 +1,7 @@
 param(
     [string] $WdkRoot,
     [Parameter(Mandatory)] [string] $OutputDirectory,
+    [switch] $Package,
     [string] $SdkRoot = "${env:ProgramFiles(x86)}\Windows Kits\10",
     [string] $SdkVersion = '10.0.26100.0'
 )
@@ -54,3 +55,12 @@ try {
 
 
 
+
+if ($Package) {
+    $packageDirectory = (New-Item -ItemType Directory -Force -Path (Join-Path $output 'package')).FullName
+    $inf = Join-Path $PSScriptRoot 'SscAvdtpProbe.inf'
+    $binary = Join-Path $output 'SscAvdtpProbe.sys'
+    Copy-Item -LiteralPath $inf, $binary -Destination $packageDirectory -Force
+    & "$wdk\bin\$SdkVersion\x86\Inf2Cat.exe" "/driver:$packageDirectory" /os:10_GE_X64
+    if ($LASTEXITCODE) { throw "Driver catalog generation failed ($LASTEXITCODE)." }
+}
