@@ -60,6 +60,11 @@ func Handle(req ipc.Request) (resp ipc.Response) {
 			return fail(err)
 		}
 		resp.OK, resp.Message = true, r.Message
+	case "native-stereo-bind", "native-stereo-restore":
+		if err := driver.SwitchNativeStereo(req.Op == "native-stereo-bind"); err != nil {
+			return fail(err)
+		}
+		resp.OK = true
 	case "test-signing":
 		if req.TestSigning == nil {
 			return fail(fmt.Errorf("test-signing requires an explicit state"))

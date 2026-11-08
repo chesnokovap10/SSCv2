@@ -48,3 +48,10 @@ test tone:
 ```powershell
 ssc.exe native-aac -stream-aac 10
 ```
+
+For testing the privileged helper, an administrator can provision the signed
+INF, SYS and CAT under the SSCv2 installation directory in its native-bt
+subfolder. Use ssc.exe native-stereo bind to switch the sole supported stereo
+devnode, and ssc.exe native-stereo restore to remove the test binding and
+verify that Microsoft A2DP is back. The helper accepts no package path from
+the caller. The tray does not invoke these commands yet.

@@ -92,6 +92,17 @@ func main() {
 		default:
 			fmt.Fprintln(out, "Boot setting saved. The requested mode is already active.")
 		}
+	case "native-stereo":
+		out := console()
+		if len(args) != 2 || (args[1] != "bind" && args[1] != "restore") {
+			fmt.Fprintln(out, "usage: ssc.exe native-stereo bind|restore")
+			os.Exit(2)
+		}
+		if _, err := helper.Call(ipc.Request{Op: "native-stereo-" + args[1]}); err != nil {
+			fmt.Fprintln(out, "native-stereo:", err)
+			os.Exit(1)
+		}
+		fmt.Fprintln(out, "native-stereo:", args[1], "complete")
 	case "native-aac":
 		out := console()
 		if err := nativebt.Run(args[1:], out); err != nil {
