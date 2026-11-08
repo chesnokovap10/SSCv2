@@ -25,7 +25,7 @@ $tools = "$vs\VC\Tools\MSVC\$version\bin\Hostx64\x64"
 $includes = @(
     "$vs\VC\Tools\MSVC\$version\include",
     "$wdk\Include\$SdkVersion\km",
-    "$wdk\Include\wdf\kmdf\1.33",
+    "$wdk\Include\wdf\kmdf\1.31",
     "$SdkRoot\Include\$SdkVersion\shared",
     "$SdkRoot\Include\$SdkVersion\um",
     "$SdkRoot\Include\$SdkVersion\ucrt",
@@ -43,10 +43,10 @@ try {
         "$sample\common\lib\clisrv.c",
         "$sample\common\lib\connection.c"
     )
-    & "$tools\cl.exe" /nologo /c /O2 /kernel /Zl /D_AMD64_ /D_WIN64 /DWINVER=0x0A00 /D_WIN32_WINNT=0x0A00 /DNTDDI_VERSION=0x0A00000C /DALLOC_PRAGMA $includes $sources
+    & "$tools\cl.exe" /nologo /c /O2 /kernel /Zl /D_AMD64_ /D_WIN64 /DWINVER=0x0A00 /D_WIN32_WINNT=0x0A00 /DNTDDI_VERSION=0x0A000008 /DALLOC_PRAGMA /DKMDF_VERSION_MAJOR=1 /DKMDF_VERSION_MINOR=31 $includes $sources
     if ($LASTEXITCODE) { throw "Driver compilation failed ($LASTEXITCODE)." }
 
-    & "$tools\link.exe" /nologo /kernel /driver /subsystem:native /entry:FxDriverEntry /nodefaultlib /out:SscAvdtpProbe.sys device.obj driver.obj queue.obj client.obj clisrv.obj connection.obj "/libpath:$wdk\Lib\$SdkVersion\km\x64" "/libpath:$wdk\Lib\wdf\kmdf\x64\1.33" ntoskrnl.lib hal.lib wdfdriverentry.lib wdfldr.lib bufferoverflowfastfailk.lib
+    & "$tools\link.exe" /nologo /kernel /driver /subsystem:native /entry:FxDriverEntry /nodefaultlib /out:SscAvdtpProbe.sys device.obj driver.obj queue.obj client.obj clisrv.obj connection.obj "/libpath:$wdk\Lib\$SdkVersion\km\x64" "/libpath:$wdk\Lib\wdf\kmdf\x64\1.31" ntoskrnl.lib hal.lib wdfdriverentry.lib wdfldr.lib bufferoverflowfastfailk.lib
     if ($LASTEXITCODE) { throw "Driver link failed ($LASTEXITCODE)." }
 } finally {
     Pop-Location
@@ -61,6 +61,6 @@ if ($Package) {
     $inf = Join-Path $PSScriptRoot 'SscAvdtpProbe.inf'
     $binary = Join-Path $output 'SscAvdtpProbe.sys'
     Copy-Item -LiteralPath $inf, $binary -Destination $packageDirectory -Force
-    & "$wdk\bin\$SdkVersion\x86\Inf2Cat.exe" "/driver:$packageDirectory" /os:10_GE_X64
+    & "$wdk\bin\$SdkVersion\x86\Inf2Cat.exe" "/driver:$packageDirectory" /os:10_VB_X64,10_GE_X64
     if ($LASTEXITCODE) { throw "Driver catalog generation failed ($LASTEXITCODE)." }
 }

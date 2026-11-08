@@ -8,9 +8,9 @@ CatalogFile=SscAvdtpProbe.cat
 PnpLockdown=1
 
 [Manufacturer]
-%Provider%=Models,NTamd64.10.0...22621
+%Provider%=Models,NTamd64.10.0...19041
 
-[Models.NTamd64.10.0...22621]
+[Models.NTamd64.10.0...19041]
 %DeviceDesc%=Probe,BTHENUM\{0000110b-0000-1000-8000-00805f9b34fb}_VID&00010075_PID&a013
 
 [SourceDisksNames]
@@ -48,7 +48,7 @@ ServiceBinary=%13%\SscAvdtpProbe.sys
 KmdfService=SscAvdtpProbe,ProbeKmdf
 
 [ProbeKmdf]
-KmdfLibraryVersion=1.33
+KmdfLibraryVersion=1.31
 
 [Strings]
 Provider="SSCv2"
