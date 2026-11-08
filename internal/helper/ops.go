@@ -65,6 +65,11 @@ func Handle(req ipc.Request) (resp ipc.Response) {
 			return fail(err)
 		}
 		resp.OK = true
+	case "native-stereo-reconnect":
+		if err := driver.ReconnectNativeStereo(); err != nil {
+			return fail(err)
+		}
+		resp.OK = true
 	case "test-signing":
 		if req.TestSigning == nil {
 			return fail(fmt.Errorf("test-signing requires an explicit state"))

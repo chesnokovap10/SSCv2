@@ -225,6 +225,12 @@ func headphonesEndpoint(name string) (Endpoint, bool) {
 	return Endpoint{}, false
 }
 
+// HeadphonesStereoActive reports whether Windows can render to these headphones.
+func HeadphonesStereoActive(name string) bool {
+	_, ok := headphonesEndpoint(name)
+	return ok
+}
+
 // HeadphonesVolume reads the Windows stereo endpoint's level and mute state.
 func HeadphonesVolume(name string) (level float32, muted bool, ok bool) {
 	if name == "" {

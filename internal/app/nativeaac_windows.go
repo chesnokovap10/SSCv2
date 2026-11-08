@@ -10,6 +10,7 @@ import (
 	"syscall"
 	"time"
 
+	"sscv2/internal/audio"
 	"sscv2/internal/config"
 	"sscv2/internal/driver"
 	"sscv2/internal/helper"
@@ -137,8 +138,32 @@ func (a *App) stopNativeAAC() error {
 			return err
 		}
 		a.nativeBound = false
+		a.recoverStockStereo()
 	}
 	return nil
+}
+
+func (a *App) recoverStockStereo() {
+	const buds = "Buds2 Pro"
+	wait := func(timeout time.Duration) bool {
+		deadline := time.Now().Add(timeout)
+		for {
+			if audio.HeadphonesStereoActive(buds) {
+				return true
+			}
+			if time.Now().After(deadline) {
+				return false
+			}
+			time.Sleep(150 * time.Millisecond)
+		}
+	}
+	logf("native AAC: reconnecting Buds A2DP after restoring the Windows stereo driver")
+	if _, err := helper.Call(ipc.Request{Op: "native-stereo-reconnect"}); err != nil {
+		logf("native AAC: reconnect Buds A2DP: %v", err)
+		a.t.Balloon("SSCv2", T("Не удалось переподключить стереовыход Buds: ", "Could not reconnect Buds stereo: ")+err.Error(), 2)
+		return
+	}
+	logf("native AAC: Windows stereo output active after reconnect: %v", wait(6*time.Second))
 }
 
 func (a *App) nativeError(err error) {
