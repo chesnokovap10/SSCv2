@@ -56,15 +56,16 @@ try {
     if ((Get-PnpDeviceProperty -InstanceId $id -KeyName $infProperty).Data -ne $packages[0].Driver) {
         throw 'Probe driver did not bind.'
     }
-    $paths = @(pnputil /enum-interfaces /class '{105bdfd9-73ce-4bcf-b2e9-c5d611f69a23}' |
-        ForEach-Object { if ($_ -match '(\\\\\?\\\S+)') { $Matches[1] } })
-    if ($paths.Count -ne 1) { throw "Expected one probe interface, found $($paths.Count)." }
-
     $arguments = @()
     if ($UseSSC) { $arguments += 'native-aac' }
     if ($LoopbackAAC) { $arguments += '-loopback-aac' }
     elseif ($ConfigureAAC) { $arguments += '-configure-aac' }
-    $arguments += '"' + $paths[0] + '"'
+    if (!$UseSSC) {
+        $paths = @(pnputil /enum-interfaces /class '{105bdfd9-73ce-4bcf-b2e9-c5d611f69a23}' |
+            ForEach-Object { if ($_ -match '(\\\\\?\\\S+)') { $Matches[1] } })
+        if ($paths.Count -ne 1) { throw "Expected one probe interface, found $($paths.Count)." }
+        $arguments += '"' + $paths[0] + '"'
+    }
     $process = Start-Process -FilePath $probe -ArgumentList $arguments -PassThru -WindowStyle Hidden -RedirectStandardOutput $stdout -RedirectStandardError $stderr
     if (!$process.WaitForExit(12000)) {
         $process.Kill()

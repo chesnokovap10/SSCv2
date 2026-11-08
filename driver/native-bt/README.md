@@ -41,10 +41,10 @@ Use -LoopbackAAC to render the test tone through the default Windows output and 
 
 The same diagnostic is available in the main executable. Pass -UseSSC to
 test-probe.ps1 and point -ProbePath at the built SSCv2 executable. With the
-driver already bound and its interface path known, the executable can also
+driver already bound, the executable finds its active interface and can also
 forward default-output loopback for a bounded interval without rendering a
 test tone:
 
 ```powershell
-ssc.exe native-aac -stream-aac 10 $interfacePath
+ssc.exe native-aac -stream-aac 10
 ```

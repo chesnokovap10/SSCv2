@@ -123,6 +123,18 @@ func main() {
 			fmt.Fprintf(out, "MediaTek adapter %s: %s [service %s] %s\n", st.ID, st.Mode, st.Service, st.InstanceID)
 		}
 		inst, run := helper.ServiceState()
+		testSigning, err := nativebt.TestSigning()
+		if err != nil {
+			fmt.Fprintf(out, "Windows test signing: unknown (%v)\n", err)
+		} else {
+			fmt.Fprintf(out, "Windows test signing: %t\n", testSigning)
+		}
+		paths, err := nativebt.Interfaces()
+		if err != nil {
+			fmt.Fprintf(out, "Native Bluetooth interfaces: unknown (%v)\n", err)
+		} else {
+			fmt.Fprintf(out, "Native Bluetooth interfaces: %d\n", len(paths))
+		}
 		fmt.Fprintf(out, "version %s\nhelper service: installed=%v running=%v\n", ipc.Version, inst, run)
 		fmt.Fprintf(out, "installed copy: %s (present %v, this is it %v)\n", install.Exe(), install.Installed(), install.RunningInstalled())
 		fmt.Fprintf(out, "settings: %s\nlogs: %s\n", config.SettingsPath(), config.LogDir())

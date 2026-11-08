@@ -251,7 +251,7 @@ func sendAAC(media io.Writer, out io.Writer, samples int, source string, pace bo
 // Run opens the probe driver interface and runs the requested AAC diagnostic.
 func Run(args []string, out io.Writer) error {
 	var loopback time.Duration
-	if len(args) == 3 && args[0] == "-stream-aac" {
+	if len(args) >= 2 && args[0] == "-stream-aac" {
 		seconds, err := strconv.Atoi(args[1])
 		if err != nil || seconds < 1 || seconds > 3600 {
 			return fmt.Errorf("stream duration must be 1 to 3600 seconds")
@@ -260,7 +260,7 @@ func Run(args []string, out io.Writer) error {
 		args = args[2:]
 	}
 	checkAAC := loopback != 0
-	if len(args) == 2 {
+	if len(args) > 0 && !checkAAC {
 		switch args[0] {
 		case "-loopback-aac":
 			loopback = -2 * time.Second
@@ -272,10 +272,26 @@ func Run(args []string, out io.Writer) error {
 			args = args[1:]
 		}
 	}
-	if len(args) != 1 {
-		return fmt.Errorf("usage: [-configure-aac|-loopback-aac|-stream-aac seconds] <profile-driver device interface path>")
+	if len(args) > 1 || len(args) == 1 && len(args[0]) > 0 && args[0][0] == '-' {
+		return fmt.Errorf("usage: [-configure-aac|-loopback-aac|-stream-aac seconds] [profile-driver device interface path]")
 	}
-	link, err := os.OpenFile(args[0], os.O_RDWR, 0)
+	testSigning, err := TestSigning()
+	if err != nil {
+		return err
+	}
+	if !testSigning {
+		return fmt.Errorf("Windows is not running in test-signing mode")
+	}
+	var path string
+	if len(args) == 1 {
+		path = args[0]
+	} else {
+		path, err = singleInterface()
+		if err != nil {
+			return err
+		}
+	}
+	link, err := os.OpenFile(path, os.O_RDWR, 0)
 	if err != nil {
 		return err
 	}
@@ -283,7 +299,7 @@ func Run(args []string, out io.Writer) error {
 	var openMedia func() (io.WriteCloser, error)
 	if checkAAC {
 		openMedia = func() (io.WriteCloser, error) {
-			return os.OpenFile(args[0], os.O_RDWR, 0)
+			return os.OpenFile(path, os.O_RDWR, 0)
 		}
 	}
 	return inspect(link, out, openMedia, loopback)
