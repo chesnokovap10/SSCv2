@@ -15,7 +15,9 @@
 package main
 
 import (
+	"context"
 	"fmt"
+	"io"
 	"os"
 	"strconv"
 	"strings"
@@ -103,6 +105,17 @@ func main() {
 			os.Exit(1)
 		}
 		fmt.Fprintln(out, "native-stereo:", args[1], "complete")
+	case "native-aac-worker":
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		go func() {
+			_, _ = io.Copy(io.Discard, os.Stdin)
+			cancel()
+		}()
+		if err := nativebt.RunLive(ctx, os.Stdout); err != nil {
+			fmt.Fprintln(os.Stdout, "native-aac:", err)
+			os.Exit(1)
+		}
 	case "native-aac":
 		out := console()
 		if err := nativebt.Run(args[1:], out); err != nil {

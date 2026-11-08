@@ -1,6 +1,7 @@
 package nativebt
 
 import (
+	"context"
 	"encoding/binary"
 	"errors"
 	"fmt"
@@ -77,7 +78,7 @@ func (p *probe) command(signal byte, payload ...byte) ([]byte, error) {
 	}
 }
 
-func inspect(link io.ReadWriter, out io.Writer, openMedia func() (io.WriteCloser, error), loopback time.Duration) error {
+func inspect(ctx context.Context, link io.ReadWriter, out io.Writer, openMedia func() (io.WriteCloser, error), loopback time.Duration) error {
 	p := probe{link: link}
 	endpoints, err := p.command(discover)
 	if err != nil {
@@ -125,7 +126,7 @@ func inspect(link io.ReadWriter, out io.Writer, openMedia func() (io.WriteCloser
 	if aacSEID == 0 {
 		return fmt.Errorf("no idle AAC sink supports the test configuration")
 	}
-	return p.checkAACConfiguration(out, aacSEID, openMedia, loopback)
+	return p.checkAACConfiguration(ctx, out, aacSEID, openMedia, loopback)
 }
 
 // MPEG-2 AAC LC, 48 kHz, stereo, constant 192 kbit/s.
@@ -140,7 +141,7 @@ func supportsProbeAAC(codec []byte) bool {
 	return maxBitrate == 0 || maxBitrate >= probeAACBitrate
 }
 
-func (p *probe) checkAACConfiguration(out io.Writer, seid byte, openMedia func() (io.WriteCloser, error), loopback time.Duration) (result error) {
+func (p *probe) checkAACConfiguration(ctx context.Context, out io.Writer, seid byte, openMedia func() (io.WriteCloser, error), loopback time.Duration) (result error) {
 	const localSEID = 1
 	bitrate := uint32(probeAACBitrate)
 	_, err := p.command(setConfiguration, seid<<2, localSEID<<2,
@@ -167,9 +168,9 @@ func (p *probe) checkAACConfiguration(out io.Writer, seid byte, openMedia func()
 	}
 	send := sendAACTone
 	if loopback != 0 {
-		send = func(media io.Writer, out io.Writer) error { return sendAACLoopback(media, out, loopback) }
+		send = func(media io.Writer, out io.Writer) error { return sendAACLoopback(ctx, media, out, loopback) }
 	}
-	if err := send(media, out); err != nil {
+	if err := send(media, out); err != nil && !errors.Is(err, context.Canceled) {
 		return err
 	}
 	if _, err := p.command(suspendStream, seid<<2); err != nil {
@@ -208,8 +209,11 @@ func sendAAC(media io.Writer, out io.Writer, samples int, source string, pace bo
 	binary.BigEndian.PutUint32(packet[8:12], 1)
 	started := time.Now()
 	var sequence uint16
-	var timestamp uint32
-	for offset := 0; offset < samples; offset += encoder.FrameLen {
+	var timestamp uint64
+	if samples == 0 {
+		defer func() { fmt.Fprintf(out, "Sent %d AAC RTP packets (%s)\n", timestamp/uint64(encoder.FrameLen), source) }()
+	}
+	for offset := 0; samples == 0 || offset < samples; offset += encoder.FrameLen {
 		if err := fill(pcm, offset); err != nil {
 			return err
 		}
@@ -224,7 +228,7 @@ func sendAAC(media io.Writer, out io.Writer, samples int, source string, pace bo
 			return fmt.Errorf("AAC frame exceeds probe packet budget: %d", len(payload))
 		}
 		binary.BigEndian.PutUint16(packet[2:4], sequence)
-		binary.BigEndian.PutUint32(packet[4:8], timestamp)
+		binary.BigEndian.PutUint32(packet[4:8], uint32(timestamp))
 		copy(packet[12:], payload)
 		deadline := started.Add(time.Duration(timestamp) * time.Second / sampleRate)
 		if pace {
@@ -239,18 +243,27 @@ func sendAAC(media io.Writer, out io.Writer, samples int, source string, pace bo
 			return io.ErrShortWrite
 		}
 		sequence++
-		timestamp += uint32(encoder.FrameLen)
+		timestamp += uint64(encoder.FrameLen)
 	}
 	if timestamp == 0 {
 		return fmt.Errorf("AAC encoder produced no packets")
 	}
 	time.Sleep(time.Until(started.Add(time.Duration(timestamp)*time.Second/sampleRate + 150*time.Millisecond)))
-	fmt.Fprintf(out, "Sent %d AAC RTP packets (%s)\n", timestamp/uint32(encoder.FrameLen), source)
+	fmt.Fprintf(out, "Sent %d AAC RTP packets (%s)\n", timestamp/uint64(encoder.FrameLen), source)
 	return nil
 }
 
 // Run opens the probe driver interface and runs the requested AAC diagnostic.
 func Run(args []string, out io.Writer) error {
+	return run(context.Background(), args, out, false)
+}
+
+// RunLive streams until ctx is canceled.
+func RunLive(ctx context.Context, out io.Writer) error {
+	return run(ctx, nil, out, true)
+}
+
+func run(ctx context.Context, args []string, out io.Writer, live bool) error {
 	var loopback time.Duration
 	if len(args) >= 2 && args[0] == "-stream-aac" {
 		seconds, err := strconv.Atoi(args[1])
@@ -259,6 +272,9 @@ func Run(args []string, out io.Writer) error {
 		}
 		loopback = time.Duration(seconds) * time.Second
 		args = args[2:]
+	}
+	if live {
+		loopback = time.Nanosecond // no frame limit or generated tone
 	}
 	checkAAC := loopback != 0
 	if len(args) > 0 && !checkAAC {
@@ -303,5 +319,5 @@ func Run(args []string, out io.Writer) error {
 			return os.OpenFile(path, os.O_RDWR, 0)
 		}
 	}
-	return inspect(link, out, openMedia, loopback)
+	return inspect(ctx, link, out, openMedia, loopback)
 }

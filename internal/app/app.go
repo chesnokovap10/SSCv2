@@ -75,7 +75,8 @@ var bitrates = map[config.Mode][]int{
 type App struct {
 	t *tray.Tray
 
-	opMu sync.Mutex // one mode switch / privileged op at a time
+	opMu        sync.Mutex // one mode switch / privileged op at a time
+	nativeBound bool       // guarded by opMu
 
 	mu           sync.Mutex
 	s            *config.Settings
@@ -83,6 +84,7 @@ type App struct {
 	busy         string
 	pendingUHQ   bool
 	eng          *engineProc
+	native       *nativeProcess
 	resumeEngine *engineProc // old process being replaced after system sleep
 	st           ipc.EngineStatus
 	scan         []ipc.Found
@@ -133,7 +135,7 @@ func Run() int {
 	}
 	a.t = &tray.Tray{Menu: a.menu, Command: a.command, Resume: a.onResume, DismissBefore: func(id int) bool {
 		switch id {
-		case idExit, idInfo, idLangRU, idLangEN, idRepository:
+		case idExit, idInfo, idLangRU, idLangEN, idRepository, idTestSigning:
 			return true
 		default:
 			return false
@@ -268,6 +270,12 @@ func (a *App) stateLocked() (tray.Color, string) {
 	if a.adapter.Mode == driver.NotPresent {
 		return tray.Red, T("адаптер не найден", "adapter not found")
 	}
+	if a.native != nil {
+		if a.native.ready.Load() {
+			return tray.Green, "AAC (Windows Bluetooth)"
+		}
+		return tray.Amber, "AAC (Windows Bluetooth)..."
+	}
 	if a.mode == config.ModeOff {
 		if a.adapter.Mode == driver.WinUSB {
 			return tray.Blue, T("выкл (адаптер в WinUSB)", "off (adapter in WinUSB)")
@@ -338,8 +346,28 @@ func (a *App) enable(m config.Mode) {
 
 	a.mu.Lock()
 	cur, eng, streaming, pendingUHQ := a.mode, a.eng, a.st.Streaming, a.pendingUHQ
+	native, preferNative, quitting := a.native, a.s.WindowsTestSigning && m == config.ModeAAC, a.quitting
 	a.mu.Unlock()
-	if pendingUHQ || cur == m && eng != nil && eng.running() {
+	if quitting || pendingUHQ || preferNative && native != nil ||
+		!preferNative && cur == m && eng != nil && eng.running() {
+		return
+	}
+	if err := a.stopNativeAAC(); err != nil {
+		a.nativeError(err)
+		return
+	}
+	if preferNative {
+		if eng != nil {
+			a.stopForRestart(eng, false)
+			st := a.refreshAdapter()
+			if st.Mode == driver.WinUSB {
+				if _, err := helper.Call(ipc.Request{Op: "driver", VID: st.ID.VID, PID: st.ID.PID}); err != nil {
+					a.nativeError(err)
+					return
+				}
+			}
+		}
+		a.startNativeAAC()
 		return
 	}
 	a.mu.Lock()
@@ -505,6 +533,11 @@ func (a *App) disable() {
 	if a.stopVolumeRestore != nil {
 		a.stopVolumeRestore()
 		a.stopVolumeRestore = nil
+	}
+
+	if err := a.stopNativeAAC(); err != nil {
+		a.nativeError(err)
+		return
 	}
 
 	a.mu.Lock()
@@ -1136,6 +1169,8 @@ func (a *App) menu() []tray.Item {
 	items = append(items, tray.Item{Text: T("Кодек: ", "Codec: ") + modeName(mode), Sub: codecs, LiveLabel: true})
 	if a.noBitrate(mode) {
 		items = append(items, tray.Item{Text: T("Битрейт: — (", "Bitrate: - (") + a.unsupportedText(mode) + ")", LiveLabel: true})
+	} else if a.native != nil {
+		items = append(items, tray.Item{Text: "AAC (Windows Bluetooth), 192 kbps"})
 	} else if mode.Streaming() {
 		cur := a.bitrateFor(mode)
 		label := T("Битрейт: ", "Bitrate: ") + bitrateText(cur)

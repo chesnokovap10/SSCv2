@@ -1,6 +1,7 @@
 package nativebt
 
 import (
+	"context"
 	"encoding/binary"
 	"fmt"
 	"io"
@@ -13,7 +14,7 @@ import (
 	"sscv2/internal/audio"
 )
 
-func sendAACLoopback(media io.Writer, out io.Writer, duration time.Duration) error {
+func sendAACLoopback(ctx context.Context, media io.Writer, out io.Writer, duration time.Duration) error {
 
 	if err := audio.InitCOM(); err != nil {
 		return err
@@ -49,22 +50,38 @@ func sendAACLoopback(media io.Writer, out io.Writer, duration time.Duration) err
 		playback = make(chan bool, 1)
 		go func() { playback <- playLoopbackTone() }()
 	}
-	timeout := time.NewTimer(5 * time.Second)
+	live := duration == time.Nanosecond
+	interval := 5 * time.Second
+	if live {
+		interval = 100 * time.Millisecond
+		fmt.Fprintln(out, "native-aac-ready")
+	}
+	timeout := time.NewTimer(interval)
 	defer timeout.Stop()
 	var pending []float32
 	var peak float32
 	channels := capture.Format.Channels
-	err = sendAAC(media, out, int(duration/time.Second)*48000, "WASAPI loopback", false, func(pcm []int16, _ int) error {
+	err = sendAAC(media, out, int(duration/time.Second)*48000, "WASAPI loopback", live, func(pcm []int16, _ int) error {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		for i := 0; i < len(pcm); i += 2 {
 			for len(pending) == 0 {
 				select {
 				case pending = <-blocks:
-					timeout.Reset(5 * time.Second)
+					timeout.Reset(interval)
 				case <-overflow:
 					return fmt.Errorf("WASAPI capture queue overflow")
 				case err := <-capture.Errors():
 					return err
+				case <-ctx.Done():
+					return ctx.Err()
 				case <-timeout.C:
+					if live {
+						clear(pcm[i:])
+						timeout.Reset(time.Second * 1024 / 48000)
+						return nil
+					}
 					return fmt.Errorf("timed out waiting for WASAPI samples")
 				}
 			}
