@@ -30,6 +30,7 @@ import (
 	"sscv2/internal/install"
 	"sscv2/internal/ipc"
 	"sscv2/internal/logx"
+	"sscv2/internal/nativebt"
 )
 
 func main() {
@@ -71,6 +72,12 @@ func main() {
 			os.Exit(1)
 		}
 		fmt.Fprintln(console(), out)
+	case "native-aac":
+		out := console()
+		if err := nativebt.Run(args[1:], out); err != nil {
+			fmt.Fprintln(out, "native-aac:", err)
+			os.Exit(1)
+		}
 	case "engine":
 		os.Exit(engine.Run(os.Stdin, os.Stdout))
 	case "service":

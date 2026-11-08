@@ -38,3 +38,13 @@ checks that the original Microsoft A2DP driver is active again.
 Pass -ConfigureAAC to negotiate AAC, open a separate media channel, and send a quiet two-second 440 Hz test tone. Confirm playback by listening on the Buds.
 
 Use -LoopbackAAC to render the test tone through the default Windows output and stream the WASAPI loopback capture to the Buds. This diagnostic requires a 48 kHz mono or stereo default output.
+
+The same diagnostic is available in the main executable. Pass -UseSSC to
+test-probe.ps1 and point -ProbePath at the built SSCv2 executable. With the
+driver already bound and its interface path known, the executable can also
+forward default-output loopback for a bounded interval without rendering a
+test tone:
+
+```powershell
+ssc.exe native-aac -stream-aac 10 $interfacePath
+```

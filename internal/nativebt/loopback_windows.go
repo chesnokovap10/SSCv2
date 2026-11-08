@@ -1,4 +1,4 @@
-package main
+package nativebt
 
 import (
 	"encoding/binary"
@@ -13,13 +13,11 @@ import (
 	"sscv2/internal/audio"
 )
 
-func sendAACLoopback(media io.Writer, out io.Writer) error {
-	runtime.LockOSThread()
-	defer runtime.UnlockOSThread()
+func sendAACLoopback(media io.Writer, out io.Writer, duration time.Duration) error {
+
 	if err := audio.InitCOM(); err != nil {
 		return err
 	}
-	defer windows.NewLazySystemDLL("ole32.dll").NewProc("CoUninitialize").Call()
 
 	capture, err := audio.OpenCapture("")
 	if err != nil {
@@ -45,18 +43,23 @@ func sendAACLoopback(media io.Writer, out io.Writer) error {
 		return err
 	}
 
-	playback := make(chan bool, 1)
-	go func() { playback <- playLoopbackTone() }()
+	var playback chan bool
+	if duration < 0 {
+		duration = -duration
+		playback = make(chan bool, 1)
+		go func() { playback <- playLoopbackTone() }()
+	}
 	timeout := time.NewTimer(5 * time.Second)
 	defer timeout.Stop()
 	var pending []float32
 	var peak float32
 	channels := capture.Format.Channels
-	err = sendAAC(media, out, 2*48000, "WASAPI loopback", false, func(pcm []int16, _ int) error {
+	err = sendAAC(media, out, int(duration/time.Second)*48000, "WASAPI loopback", false, func(pcm []int16, _ int) error {
 		for i := 0; i < len(pcm); i += 2 {
 			for len(pending) == 0 {
 				select {
 				case pending = <-blocks:
+					timeout.Reset(5 * time.Second)
 				case <-overflow:
 					return fmt.Errorf("WASAPI capture queue overflow")
 				case err := <-capture.Errors():
@@ -77,10 +80,10 @@ func sendAACLoopback(media io.Writer, out io.Writer) error {
 	if err != nil {
 		return err
 	}
-	if !<-playback || peak < 0.003 {
+	if playback != nil && (!<-playback || peak < 0.003) {
 		return fmt.Errorf("loopback test tone was not captured (peak %.4f)", peak)
 	}
-	fmt.Fprintf(out, "WASAPI captured non-silent audio (peak %.4f)\n", peak)
+	fmt.Fprintf(out, "WASAPI capture peak %.4f\n", peak)
 	return nil
 }
 

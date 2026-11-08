@@ -4,6 +4,7 @@ param(
     [Parameter(Mandatory)] [string] $ProbePath,
     [switch] $ConfigureAAC,
     [switch] $LoopbackAAC,
+    [switch] $UseSSC,
     [string] $WdkRoot
 )
 
@@ -60,6 +61,7 @@ try {
     if ($paths.Count -ne 1) { throw "Expected one probe interface, found $($paths.Count)." }
 
     $arguments = @()
+    if ($UseSSC) { $arguments += 'native-aac' }
     if ($LoopbackAAC) { $arguments += '-loopback-aac' }
     elseif ($ConfigureAAC) { $arguments += '-configure-aac' }
     $arguments += '"' + $paths[0] + '"'
