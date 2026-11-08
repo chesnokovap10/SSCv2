@@ -58,6 +58,7 @@ const (
 	idAnimations
 	idRepository
 	idAutoStart
+	idTestSigning
 
 	idBitrateBase = 500 // + kbps (0 = auto)
 	idDeviceBase  = 2000
@@ -1112,6 +1113,7 @@ func (a *App) menu() []tray.Item {
 	snap := store.Snapshot()
 	installed, running := helper.ServiceState()
 	autoStart, autoStartErr := install.AutoStart()
+	testSigning, testSigningErr := driver.TestSigning()
 
 	a.mu.Lock()
 	defer a.mu.Unlock()
@@ -1231,6 +1233,16 @@ func (a *App) menu() []tray.Item {
 		}
 	}
 	lang := i18n.Lang()
+	testSigningState := T("неизвестно", "unknown")
+	if testSigningErr == nil {
+		testSigningState = T("выключена", "off")
+		if testSigning {
+			testSigningState = T("включена", "on")
+		}
+		if testSigning != a.s.WindowsTestSigning {
+			testSigningState += T(" (отличается от выбора)", " (differs from selection)")
+		}
+	}
 	settings := []tray.Item{
 		{Text: T("Язык", "Language"), Sub: []tray.Item{
 			{Text: "Русский", ID: idLangRU, Radio: true, Checked: lang == i18n.RU},
@@ -1239,6 +1251,8 @@ func (a *App) menu() []tray.Item {
 		{Text: T("Запускать при входе в Windows", "Start when signing in to Windows"), ID: idAutoStart, Checked: autoStart, Disabled: autoStartErr != nil},
 		{Text: T("Макс. MTU для Samsung Galaxy Buds2 Pro (1017 байт)", "Max MTU for Samsung Galaxy Buds2 Pro (1017 bytes)"), ID: idMaxMTU, Checked: a.s.MaxMTU, Disabled: busy},
 		{Text: T("Все битрейты (не только проверенные на этих наушниках)", "All bitrates (not only those checked on these headphones)"), ID: idAllBitrates, Checked: a.s.AllBitrates, Disabled: busy},
+		{Text: T("Тестовый режим Windows…", "Windows test mode…"), ID: idTestSigning, Checked: a.s.WindowsTestSigning, Disabled: busy},
+		{Text: T("Текущая тестовая подпись Windows: ", "Current Windows test signing: ") + testSigningState, Disabled: true},
 		{Text: T("Анимации", "Animations"), ID: idAnimations, Checked: !a.s.DisableAnimations},
 		{Text: T("Отладка и API интерфейса", "Debug and UI API"), ID: idDebug, Checked: a.s.Debug},
 		{Text: T("Открыть папку журналов", "Open the log folder"), ID: idOpenLogs},
@@ -1350,6 +1364,8 @@ func (a *App) command(id int) {
 		go a.removeService()
 	case id == idOpenLogs:
 		openTarget(config.LogDir())
+	case id == idTestSigning:
+		go a.toggleTestSigning()
 	case id == idAutoStart:
 		on, err := install.AutoStart()
 		if err == nil {
