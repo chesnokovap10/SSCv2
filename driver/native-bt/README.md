@@ -56,8 +56,7 @@ devnode, and ssc.exe native-stereo restore to remove the test binding and
 verify that Microsoft A2DP is back. The helper accepts no package path from
 the caller. The tray does not invoke these commands yet.
 
-When the tray preference for Windows test mode is enabled and Windows has
-booted with test signing active, the tray's AAC mode uses this driver. It
+When Windows boots with test signing active, the tray uses the Windows Bluetooth stack for AAC. SSC and SSC UHQ are unavailable on this path. It
 requires the provisioned package and a 48 kHz default render endpoint. The
 experimental route uses 192 kbit/s, captures the default output, and leaves
 local playback audible. The probe INF grants local interactive users read

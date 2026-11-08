@@ -346,8 +346,17 @@ func (a *App) enable(m config.Mode) {
 
 	a.mu.Lock()
 	cur, eng, streaming, pendingUHQ := a.mode, a.eng, a.st.Streaming, a.pendingUHQ
-	native, preferNative, quitting := a.native, a.s.WindowsTestSigning && m == config.ModeAAC, a.quitting
+	native, quitting := a.native, a.quitting
 	a.mu.Unlock()
+	preferNative, err := driver.TestSigning()
+	if err != nil {
+		a.t.Balloon("SSCv2", err.Error(), 2)
+		return
+	}
+	if preferNative && m != config.ModeAAC {
+		a.t.Balloon("SSCv2", T("Этот кодек пока недоступен через Bluetooth Windows.", "This codec is not yet available through Windows Bluetooth."), 1)
+		return
+	}
 	if quitting || pendingUHQ || preferNative && native != nil ||
 		!preferNative && cur == m && eng != nil && eng.running() {
 		return
@@ -359,12 +368,12 @@ func (a *App) enable(m config.Mode) {
 	if preferNative {
 		if eng != nil {
 			a.stopForRestart(eng, false)
-			st := a.refreshAdapter()
-			if st.Mode == driver.WinUSB {
-				if _, err := helper.Call(ipc.Request{Op: "driver", VID: st.ID.VID, PID: st.ID.PID}); err != nil {
-					a.nativeError(err)
-					return
-				}
+		}
+		st := a.refreshAdapter()
+		if st.Mode == driver.WinUSB {
+			if _, err := helper.Call(ipc.Request{Op: "driver", VID: st.ID.VID, PID: st.ID.PID}); err != nil {
+				a.nativeError(err)
+				return
 			}
 		}
 		a.startNativeAAC()
@@ -1163,8 +1172,8 @@ func (a *App) menu() []tray.Item {
 	codecs := []tray.Item{
 		{Text: T("Выкл (Bluetooth Windows)", "Off (Windows Bluetooth)"), ID: idModeOff, Radio: true, Checked: mode == config.ModeOff, Disabled: busy},
 		{Text: "AAC", ID: idModeAAC, Radio: true, Checked: mode == config.ModeAAC, Disabled: busy},
-		{Text: T("SSC (24 бит / 48 кГц)", "SSC (24 bit / 48 kHz)"), ID: idModeSSC, Radio: true, Checked: mode == config.ModeSSC, Disabled: busy},
-		{Text: T("SSC UHQ (96 кГц)", "SSC UHQ (96 kHz)"), ID: idModeUHQ, Radio: true, Checked: mode == config.ModeSSCUHQ, Disabled: busy || a.uhqUnavailable()},
+		{Text: T("SSC (24 бит / 48 кГц)", "SSC (24 bit / 48 kHz)"), ID: idModeSSC, Radio: true, Checked: mode == config.ModeSSC, Disabled: busy || testSigning || testSigningErr != nil},
+		{Text: T("SSC UHQ (96 кГц)", "SSC UHQ (96 kHz)"), ID: idModeUHQ, Radio: true, Checked: mode == config.ModeSSCUHQ, Disabled: busy || testSigning || testSigningErr != nil || a.uhqUnavailable()},
 	}
 	items = append(items, tray.Item{Text: T("Кодек: ", "Codec: ") + modeName(mode), Sub: codecs, LiveLabel: true})
 	if a.noBitrate(mode) {
