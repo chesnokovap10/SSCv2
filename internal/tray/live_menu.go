@@ -40,7 +40,7 @@ func sameMenuSlot(a, b Item) bool {
 		return false
 	}
 	if a.Sub != nil {
-		return a.Text == b.Text || len(a.Sub) > 0 && len(b.Sub) > 0 && a.Sub[0].ID != 0 && a.Sub[0].ID == b.Sub[0].ID
+		return a.Text == b.Text || len(a.Sub) > 0 && len(b.Sub) > 0 && (a.Sub[0].ID != 0 || a.Sub[0].Sub != nil) && sameMenuSlot(a.Sub[0], b.Sub[0])
 	}
 	return a.ID == b.ID && a.Separator == b.Separator
 }
@@ -60,7 +60,7 @@ func (t *Tray) writeMenuItem(m *liveMenu, position int, it *Item, sub *liveMenu,
 		}
 		it.infoID = t.nextInfoID
 		t.nextInfoID++
-		t.infoRows[it.infoID] = &menuInfoRow{text: it.Text, informational: it.informational(), radio: it.Radio, checked: it.Checked}
+		t.infoRows[it.infoID] = &menuInfoRow{text: it.Text, minWidth: it.MinWidth, informational: it.informational(), radio: it.Radio, checked: it.Checked}
 		flags |= mfOwnerDraw
 		if it.informational() || it.Disabled {
 			flags |= mfGrayed
@@ -107,7 +107,7 @@ func (t *Tray) writeMenuItem(m *liveMenu, position int, it *Item, sub *liveMenu,
 func (t *Tray) updateMenuState(m *liveMenu, i int, item Item) {
 	old := &m.items[i]
 	if old.Checked != item.Checked {
-		if old.Radio {
+		if old.infoID != 0 {
 			t.infoRows[old.infoID].checked = item.Checked
 		} else {
 			flags := uintptr(mfByPosition)
@@ -162,6 +162,15 @@ func (t *Tray) hasOpenChild(m *liveMenu) bool {
 	return false
 }
 
+func (t *Tray) menuIsActive(menu uintptr) bool {
+	for _, handle := range t.activeMenus {
+		if handle == menu {
+			return true
+		}
+	}
+	return false
+}
+
 func (t *Tray) updateMenu(m *liveMenu, next []Item) {
 	if t.hasOpenChild(m) {
 		// Renaming or removing the parent row while its popup is open
@@ -172,7 +181,12 @@ func (t *Tray) updateMenu(m *liveMenu, next []Item) {
 				continue
 			}
 			old, sub := m.items[i], m.children[i]
-			if old.infoID != 0 && old.Text != item.Text {
+			t.updateMenuState(m, i, item)
+			if item.Slider && t.volumeRow != nil && old.Text != item.Text {
+				t.volumeRow.label = item.Text
+				t.volumeRow.redraw()
+				m.items[i].Text = item.Text
+			} else if old.Text != item.Text && (old.infoID != 0 || sub == nil || !t.menuIsActive(sub.handle)) {
 				item.infoID = old.infoID
 				t.writeMenuItem(m, i, &item, sub, true)
 				m.items[i].Text = item.Text
@@ -185,15 +199,18 @@ func (t *Tray) updateMenu(m *liveMenu, next []Item) {
 	}
 	// Native Windows popups can move when a label changes their measured size.
 	// Keep the visible bitrate popup's layout and update its check marks in place.
-	for _, handle := range t.activeMenus {
-		if handle == m.handle && m.handle != t.openMenu.handle {
-			for i, item := range next {
-				if i < len(m.items) && sameMenuSlot(m.items[i], item) {
-					t.updateMenuState(m, i, item)
+	if m != t.openMenu && t.menuIsActive(m.handle) {
+		for i, item := range next {
+			if i < len(m.items) && sameMenuSlot(m.items[i], item) {
+				t.updateMenuState(m, i, item)
+				if old := &m.items[i]; old.infoID != 0 && old.Text != item.Text {
+					item.infoID = old.infoID
+					t.writeMenuItem(m, i, &item, m.children[i], true)
+					old.Text = item.Text
 				}
 			}
-			return
 		}
+		return
 	}
 	for i, item := range next {
 		if i < len(m.items) && !sameMenuSlot(m.items[i], item) {

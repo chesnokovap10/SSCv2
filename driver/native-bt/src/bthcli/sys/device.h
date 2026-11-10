@@ -50,6 +50,7 @@ typedef struct _BTHECHOSAMPLE_CLIENT_FILE_CONTEXT
     //
     // Server PSM
     //
+    BTH_ADDR                ServerBthAddress;
     USHORT                  ServerPsm;    
 } BTHECHOSAMPLE_CLIENT_FILE_CONTEXT, *PBTHECHOSAMPLE_CLIENT_FILE_CONTEXT;
 

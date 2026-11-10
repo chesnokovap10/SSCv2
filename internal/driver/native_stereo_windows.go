@@ -30,8 +30,30 @@ var (
 // SwitchNativeStereo changes only the Buds2 Pro Stereo devnode. The package
 // must have been provisioned by an administrator in the SSCv2 install folder.
 func SwitchNativeStereo(enable bool) error {
+	return switchStereo(enable, probeStereoService, "SscAvdtpProbe.inf", "")
+}
+
+func SwitchBudsRender(enable bool, address string) error {
+	if address == "" {
+		return errors.New("missing Buds address")
+	}
+	return switchStereo(enable, "SscBudsRender", "SscBudsRender.inf", address)
+}
+
+func switchStereo(enable bool, service, sourceINF, address string) error {
 	stereoMu.Lock()
 	defer stereoMu.Unlock()
+	err := switchNativeStereo(enable, service, sourceINF, address)
+	if enable && errors.Is(err, errRetryStereoBind) {
+		time.Sleep(250 * time.Millisecond)
+		return switchNativeStereo(true, service, sourceINF, address)
+	}
+	return err
+}
+
+var errRetryStereoBind = errors.New("retry stereo driver switch after rollback")
+
+func switchNativeStereo(enable bool, service, sourceINF, address string) error {
 
 	set, err := windows.SetupDiGetClassDevsEx(&mediaClass, "", 0, windows.DIGCF_PRESENT, 0, "")
 	if err != nil {
@@ -46,11 +68,22 @@ func SwitchNativeStereo(enable bool) error {
 	if err != nil {
 		return err
 	}
+	if address != "" {
+		id, err := set.DeviceInstanceID(dev)
+		if err != nil {
+			return err
+		}
+		instance := id[strings.LastIndexByte(id, '&')+1:]
+		mac, _, _ := strings.Cut(instance, "_")
+		if !strings.EqualFold(mac, strings.ReplaceAll(address, ":", "")) {
+			return errors.New("Buds stereo device does not match the configured address")
+		}
+	}
 	if !enable {
 		if strings.EqualFold(current, windowsStereoINF) {
 			return setStereoState(set, dev, windows.DICS_ENABLE)
 		}
-		if !strings.EqualFold(strProp(set, dev, windows.SPDRP_SERVICE), probeStereoService) {
+		if !strings.EqualFold(strProp(set, dev, windows.SPDRP_SERVICE), service) {
 			return fmt.Errorf("refusing to remove unexpected stereo driver %q", current)
 		}
 		return restoreStereo(set, dev, current)
@@ -69,16 +102,25 @@ func SwitchNativeStereo(enable bool) error {
 	if err != nil {
 		return err
 	}
-	source := filepath.Join(programFiles, "SSCv2", "native-bt", "SscAvdtpProbe.inf")
+	source := filepath.Join(programFiles, "SSCv2", "native-bt", sourceINF)
 	staged, err := stageStereoINF(source)
 	if err != nil {
 		return err
 	}
 	if err := bindStereo(set, dev, staged); err != nil {
-		return errors.Join(err, restoreStereo(set, dev, filepath.Base(staged)))
+		rollbackErr := restoreStereo(set, dev, filepath.Base(staged))
+		var disableErr *stereoDisableError
+		if rollbackErr == nil && errors.As(err, &disableErr) && errors.Is(disableErr.err, windows.ERROR_INVALID_DATA) {
+			return errors.Join(errRetryStereoBind, err)
+		}
+		return errors.Join(err, rollbackErr)
 	}
 	return nil
 }
+
+type stereoDisableError struct{ err error }
+
+func (e *stereoDisableError) Error() string { return "disable Buds stereo: " + e.err.Error() }
 
 func findBudsStereo(set windows.DevInfo) (*windows.DevInfoData, error) {
 	var match *windows.DevInfoData
@@ -153,6 +195,10 @@ func setStereoState(set windows.DevInfo, dev *windows.DevInfoData, state windows
 }
 
 func bindStereo(set windows.DevInfo, dev *windows.DevInfoData, inf string) error {
+	return installStereo(set, dev, inf, true)
+}
+
+func installStereo(set windows.DevInfo, dev *windows.DevInfoData, inf string, disable bool) error {
 	params, err := set.DeviceInstallParams(dev)
 	if err != nil {
 		return err
@@ -172,8 +218,10 @@ func bindStereo(set windows.DevInfo, dev *windows.DevInfoData, inf string) error
 	if err != nil {
 		return err
 	}
-	if err := setStereoState(set, dev, windows.DICS_DISABLE); err != nil {
-		return fmt.Errorf("disable Buds stereo: %w", err)
+	if disable {
+		if err := setStereoState(set, dev, windows.DICS_DISABLE); err != nil {
+			return &stereoDisableError{err: err}
+		}
 	}
 	var reboot uint32
 	result, _, callErr := installDevice.Call(0, uintptr(set), uintptr(unsafe.Pointer(dev)),
@@ -184,8 +232,10 @@ func bindStereo(set windows.DevInfo, dev *windows.DevInfoData, inf string) error
 	if reboot != 0 {
 		return errors.New("Windows requested a restart to switch the stereo driver")
 	}
-	if err := setStereoState(set, dev, windows.DICS_ENABLE); err != nil {
-		return fmt.Errorf("enable Buds stereo: %w", err)
+	if disable {
+		if err := setStereoState(set, dev, windows.DICS_ENABLE); err != nil {
+			return fmt.Errorf("enable Buds stereo: %w", err)
+		}
 	}
 	current, err := stereoINF(set, dev)
 	if err != nil {

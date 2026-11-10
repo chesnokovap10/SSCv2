@@ -29,7 +29,7 @@ func TestPipe(t *testing.T) {
 					done <- err
 					return
 				}
-				serveConn(h)
+				serveConn(h, true)
 				done <- nil
 			}()
 			r, err := callPipeAt(pipe, windows.GetCurrentProcessId(), test.req)

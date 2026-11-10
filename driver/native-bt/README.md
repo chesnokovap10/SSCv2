@@ -1,4 +1,56 @@
-# SSCv2 native Bluetooth probe
+# SSCv2 native Bluetooth drivers
+
+- `src/` contains shared KMDF sources for both driver builds.
+- `SscAvdtpLocal.inf` is the source INF for the tray's experimental Bluetooth route.
+- `local-package/` holds the signed driver and public certificate embedded in the SSCv2 executable.
+- `diagnostics/` contains the legacy probe INF, unsigned development binary, and test script.
+
+## Tray driver
+
+`SscAvdtpLocal` is the shared driver for AAC (192 kbit/s) and SSC
+(24-bit, 48 kHz, 128 kbit/s) in Windows test mode. The tray reads 48 kHz PCM from the Buds WaveRT output. Enable Windows test mode in the tray settings and restart. The helper
+installs the embedded package and registers the Bluetooth profile after
+Windows boots in test mode. Clearing the setting stops the native stream,
+restores Windows A2DP, and removes the driver package. The helper removes
+certificate trust entries it added and leaves pre-existing entries in place.
+
+Use the build script with `-LocalProfile -Package` to generate a fresh
+unsigned package under the chosen output directory's `local-package/`.
+Build into a separate output directory to preserve an existing signed package.
+
+## Buds stereo render driver prototype
+
+`src/render` contains the complete WaveRT driver sources and INF, adapted
+from Microsoft's SimpleAudioSample at Windows-driver-samples revision
+`d49bb7d72f3651952b2b6e4ad28d14fe2247eb69` under the included MS-PL.
+Run `./driver/native-bt/build-render.ps1 -Package` from the repository root.
+The package goes to `bin/SscBudsRender/package` by default.
+
+`-Package` generates an unsigned INF, SYS and catalog. The INF creates a separate root-enumerated WaveRT render device. The render filter exposes a bounded
+PCM queue through a diagnostic KS property restricted to administrators.
+
+On a test system with the signed WaveRT device installed and
+the local AVDTP profile active, run the following command from an elevated
+console. Pass the render filter's KS device interface path. SSCv2 uses the
+Buds address from its settings and requires its Windows test-mode option.
+
+```powershell
+ssc.exe native-render aac $waveInterface 20
+```
+
+Select the Buds render output in Windows and play audio during the diagnostic.
+Use `ssc` to select the SSC encoder.
+
+For tray use, provision the test-signed INF, SYS and CAT in
+`%ProgramFiles%\SSCv2\native-bt` and trust the test signer on the machine.
+Update both the tray and its helper service to the same build. Run SSCv2 as
+administrator to access the restricted PCM property. Choosing a codec in
+test mode registers the WaveRT device on first use, selects its output and
+releases the configured Buds A2DP session to the worker. Off stops the worker,
+restores the Windows A2DP service and returns the previous audio output. The
+WaveRT device stays installed for subsequent switches.
+
+## Legacy diagnostic probe
 
 This experimental x64 KMDF 1.31 driver targets Windows 10 version 2004 and later, including Windows 11. It opens AVDTP signaling (L2CAP PSM 0x0019) on
 the remote device identified by its Bluetooth service devnode. The unsigned
@@ -28,7 +80,7 @@ by the test machine and boot Windows into test-signing mode. With the Go CGO C/C
 PowerShell with the signed package and probe executable:
 
 ```powershell
-./driver/native-bt/test-probe.ps1 -InfPath $signedInf -ProbePath $probeExe
+./driver/native-bt/diagnostics/test-probe.ps1 -InfPath $signedInf -ProbePath $probeExe
 ```
 
 The script requires exactly one enabled matching stereo device. It temporarily
@@ -54,11 +106,4 @@ INF, SYS and CAT under the SSCv2 installation directory in its native-bt
 subfolder. Use ssc.exe native-stereo bind to switch the sole supported stereo
 devnode, and ssc.exe native-stereo restore to remove the test binding and
 verify that Microsoft A2DP is back. The helper accepts no package path from
-the caller. The tray does not invoke these commands yet.
-
-The tray preference selects the Windows Bluetooth stack. AAC on this path requires Windows to have booted with test signing active. SSC and SSC UHQ are unavailable on this path. It
-requires the provisioned package and a 48 kHz default render endpoint. The
-experimental route uses 192 kbit/s, captures the default output, and leaves
-local playback audible. The probe INF grants local interactive users read
-and write access to its device interface so that the AAC worker can run
-without elevation. Driver switching still requires the helper.
+the caller. These commands belong to the legacy probe workflow.

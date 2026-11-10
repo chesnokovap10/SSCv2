@@ -17,10 +17,10 @@ package main
 import (
 	"context"
 	"fmt"
-	"io"
 	"os"
 	"strconv"
 	"strings"
+	"time"
 
 	"golang.org/x/sys/windows"
 
@@ -54,6 +54,16 @@ func main() {
 		if err := install.Install(); err != nil {
 			logx.Printf("install: %v", err)
 			os.Exit(1)
+		}
+		if installed, _ := helper.ServiceState(); !installed {
+			sid := owner()
+			if sid == "" {
+				sid = helper.CurrentUserSID()
+			}
+			if err := helper.InstallService(sid); err != nil {
+				logx.Printf("install helper: %v", err)
+				os.Exit(1)
+			}
 		}
 	case "uninstall-system":
 		pid := 0
@@ -105,15 +115,58 @@ func main() {
 			os.Exit(1)
 		}
 		fmt.Fprintln(out, "native-stereo:", args[1], "complete")
-	case "native-aac-worker":
+	case "native-aac-local":
+		out := console()
+		var err error
+		switch {
+		case len(args) == 2 && (args[1] == "enable" || args[1] == "disable"):
+			err = driver.SetLocalProfile(args[1] == "enable")
+		case len(args) == 3 && args[1] == "probe":
+			err = nativebt.ProbeLocalProfile(context.Background(), args[2], out)
+		case len(args) == 3 && args[1] == "handoff":
+			err = nativebt.ProbeLocalHandoff(context.Background(), args[2], out)
+		default:
+			err = fmt.Errorf("usage: ssc.exe native-aac-local enable|disable|probe ADDRESS|handoff ADDRESS")
+		}
+		if err != nil {
+			fmt.Fprintln(out, err)
+			os.Exit(1)
+		}
+	case "native-render":
+		out := console()
+		if len(args) != 4 {
+			fmt.Fprintln(out, "usage: ssc.exe native-render aac|ssc WAVE_INTERFACE SECONDS")
+			os.Exit(2)
+		}
+		seconds, err := strconv.Atoi(args[3])
+		if err != nil || seconds < 1 || seconds > 3600 {
+			fmt.Fprintln(out, "stream duration must be 1 to 3600 seconds")
+			os.Exit(2)
+		}
+		settings, err := config.Load()
+		if err != nil || !settings.WindowsTestSigning || settings.Headphones == nil {
+			fmt.Fprintln(out, "native-render requires the SSCv2 Windows test-mode option and configured headphones")
+			os.Exit(1)
+		}
 		ctx, cancel := context.WithCancel(context.Background())
-		defer cancel()
-		go func() {
-			_, _ = io.Copy(io.Discard, os.Stdin)
-			cancel()
-		}()
-		if err := nativebt.RunLive(ctx, os.Stdout); err != nil {
-			fmt.Fprintln(os.Stdout, "native-aac:", err)
+		timer := time.AfterFunc(time.Duration(seconds)*time.Second, cancel)
+		err = nativebt.RunRenderDiagnostic(ctx, settings.Headphones.Addr, args[2], out, config.Mode(args[1]))
+		timer.Stop()
+		cancel()
+		if err != nil {
+			fmt.Fprintln(out, "native-render:", err)
+			os.Exit(1)
+		}
+	case "native-aac-worker", "native-ssc-worker", "native-ssc_uhq-worker":
+		mode := config.ModeAAC
+		switch args[0] {
+		case "native-ssc-worker":
+			mode = config.ModeSSC
+		case "native-ssc_uhq-worker":
+			mode = config.ModeSSCUHQ
+		}
+		if err := nativebt.RunWorker(os.Stdin, os.Stdout, args[1:], mode); err != nil {
+			fmt.Fprintf(os.Stdout, "native worker: %v\n", err)
 			os.Exit(1)
 		}
 	case "native-aac":

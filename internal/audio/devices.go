@@ -114,12 +114,20 @@ func List(capture bool, states uint32) []Endpoint {
 
 // DefaultRender returns the default output endpoint.
 func DefaultRender() (Endpoint, error) {
+	return DefaultRenderRole(eConsole)
+}
+
+func DefaultRenderRole(role int) (Endpoint, error) {
 	en, err := enumerator()
 	if err != nil {
 		return Endpoint{}, err
 	}
 	defer release(en)
-	dev, err := defaultDevice(en, eRender)
+	var dev uintptr
+	err = hr(vcall(en, 4, eRender, uintptr(role), uintptr(unsafe.Pointer(&dev))))
+	if err == hresult(0x80070490) {
+		return Endpoint{}, nil
+	}
 	if err != nil {
 		return Endpoint{}, err
 	}
@@ -129,4 +137,36 @@ func DefaultRender() (Endpoint, error) {
 
 func containsFold(s, sub string) bool {
 	return strings.Contains(strings.ToLower(s), strings.ToLower(sub))
+}
+
+// SetDefaultRenderRole switches the Windows audio policy for one output role.
+func SetDefaultRenderRole(id string, role int) error {
+	return setRenderPolicy(id, 13, uintptr(role))
+}
+
+// SetRenderVisible controls endpoint availability without restarting the PnP driver.
+func SetRenderVisible(id string, visible bool) error {
+	var value uintptr
+	if visible {
+		value = 1
+	}
+	return setRenderPolicy(id, 14, value)
+}
+
+func setRenderPolicy(id string, method int, value uintptr) error {
+	if err := InitCOM(); err != nil {
+		return err
+	}
+	clsid := guid("{870AF99C-171D-4F9E-AF0D-E63DF40C2BC9}")
+	iid := guid("{F8679F50-850A-41CF-9C72-430F290290C8}")
+	policy, err := coCreate(&clsid, &iid)
+	if err != nil {
+		return err
+	}
+	defer release(policy)
+	name, err := windows.UTF16PtrFromString(id)
+	if err != nil {
+		return err
+	}
+	return hr(vcall(policy, method, uintptr(unsafe.Pointer(name)), value))
 }

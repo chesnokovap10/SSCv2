@@ -18,6 +18,7 @@ import (
 type Item struct {
 	SubRevision string `json:"-"`
 	LiveLabel   bool   `json:"-"`
+	MinWidth    int32  `json:"-"`
 	Slider      bool
 	Text        string
 	ID          int

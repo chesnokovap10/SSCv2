@@ -240,18 +240,105 @@ func HeadphonesVolume(name string) (level float32, muted bool, ok bool) {
 	if !ok {
 		return 0, false, false
 	}
-	vol, err := endpointVolume(e.ID)
+	level, muted, err := EndpointVolume(e.ID)
+	return level, muted, err == nil
+}
+
+// EndpointVolume reads the level and mute state of one Windows output.
+func EndpointVolume(id string) (float32, bool, error) {
+	vol, err := endpointVolume(id)
 	if err != nil {
-		return 0, false, false
+		return 0, false, err
 	}
 	defer release(vol)
-	level, err = getScalar(vol)
+	level, err := getScalar(vol)
 	if err != nil {
-		return 0, false, false
+		return 0, false, err
 	}
 	var mute int32
 	err = hr(vcall(vol, 15, uintptr(unsafe.Pointer(&mute))))
-	return level, mute != 0, err == nil
+	return level, mute != 0, err
+}
+
+// SetEndpointVolume updates the Windows output controls used by the tray and mixer.
+func SetEndpointVolume(id string, level float32, muted bool) error {
+	vol, err := endpointVolume(id)
+	if err != nil {
+		return err
+	}
+	defer release(vol)
+	if current, err := getScalar(vol); err != nil || ScalarTo127(current) != ScalarTo127(level) {
+		if err := setScalar(vol, level, &trayContext); err != nil {
+			return err
+		}
+	}
+	var mute uintptr
+	if muted {
+		mute = 1
+	}
+	return hr(vcall(vol, 14, mute, uintptr(unsafe.Pointer(&trayContext))))
+}
+
+// WatchEndpointPCMGain tracks hardware controls that Windows delegates to WaveRT.
+// The returned reader is used by one encoder at a time.
+func WatchEndpointPCMGain(id string) (read func() float32, stop func(), err error) {
+	vol, err := endpointVolume(id)
+	if err != nil {
+		return nil, nil, err
+	}
+	var changed atomic.Bool
+	cb := newVolCallback(func(windows.GUID, bool, float32) { changed.Store(true) })
+	if err := hr(vcall(vol, 3, uintptr(unsafe.Pointer(cb)))); err != nil {
+		release(vol)
+		liveCbs.Delete(cb)
+		return nil, nil, err
+	}
+	stop = func() {
+		cb.on.Store(nil)
+		vcall(vol, 4, uintptr(unsafe.Pointer(cb)))
+		release(vol)
+		liveCbs.Delete(cb)
+	}
+	gain, err := endpointPCMGain(vol)
+	if err != nil {
+		stop()
+		return nil, nil, err
+	}
+	return func() float32 {
+		if changed.Swap(false) {
+			if current, err := endpointPCMGain(vol); err == nil {
+				gain = current
+			} else {
+				changed.Store(true)
+			}
+		}
+		return gain
+	}, stop, nil
+}
+
+func endpointPCMGain(vol uintptr) (float32, error) {
+	var support uint32
+	if err := hr(vcall(vol, 19, uintptr(unsafe.Pointer(&support)))); err != nil {
+		return 0, err
+	}
+	const hardwareVolume, hardwareMute = 1, 2
+	if support&hardwareMute != 0 {
+		var muted int32
+		if err := hr(vcall(vol, 15, uintptr(unsafe.Pointer(&muted)))); err != nil {
+			return 0, err
+		}
+		if muted != 0 {
+			return 0, nil
+		}
+	}
+	if support&hardwareVolume == 0 {
+		return 1, nil
+	}
+	var db float32
+	if err := hr(vcall(vol, 8, uintptr(unsafe.Pointer(&db)))); err != nil {
+		return 0, err
+	}
+	return float32(math.Pow(10, float64(db)/20)), nil
 }
 
 // SetLevel sets an endpoint's master level (0..1).

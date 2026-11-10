@@ -6,6 +6,7 @@ import (
 	"sscv2/internal/i18n"
 	"strconv"
 
+	"sscv2/internal/audio"
 	"sscv2/internal/bt"
 	"sscv2/internal/codec/aac"
 	"sscv2/internal/codec/ssc"
@@ -71,7 +72,7 @@ func newAAC(sampleRate, mtu int) (Encoder, error) {
 // capture upsampled 2x (up != nil): then one Encode takes 432 capture frames.
 type sscEnc struct {
 	e  *ssc.Encoder
-	up *upsampler2x
+	up *audio.Upsampler2x
 }
 
 // framePerPacket: SSC packets like the phone (a2dp_vendor_ssc_send_frames),
@@ -95,7 +96,7 @@ func (s *sscEnc) FrameLen() int {
 
 func (s *sscEnc) Encode(pcm []float32) ([]byte, error) {
 	if s.up != nil {
-		return s.e.Encode(s.up.process(pcm))
+		return s.e.Encode(s.up.Process(pcm))
 	}
 	return s.e.Encode(pcm)
 }
@@ -228,7 +229,7 @@ func newSSC(sampleRate, mtu int) (Encoder, error) {
 	}
 	s := &sscEnc{e: e}
 	if rate != sampleRate {
-		s.up = newUpsampler2x()
+		s.up = audio.NewUpsampler2x()
 	}
 	// experiments: SSCV2_SSC_SHIFT=8 feeds full scale 2^31 instead of 2^23
 	if v, err := strconv.Atoi(os.Getenv("SSCV2_SSC_SHIFT")); err == nil && v > 0 && v <= 8 {

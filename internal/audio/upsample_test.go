@@ -1,4 +1,4 @@
-package engine
+package audio
 
 import (
 	"math"
@@ -12,7 +12,7 @@ func TestUpsample(t *testing.T) {
 		hz     float64
 		minSNR float64
 	}{{1000, 100}, {10000, 100}, {18000, 80}, {20000, 75}} {
-		u := newUpsampler2x()
+		u := NewUpsampler2x()
 		const block = 432
 		var got []float32
 		for b := 0; b < 20; b++ {
@@ -21,7 +21,7 @@ func TestUpsample(t *testing.T) {
 				v := float32(0.5 * math.Sin(2*math.Pi*c.hz*float64(b*block+i)/48000))
 				in[2*i], in[2*i+1] = v, v
 			}
-			got = append(got, u.process(in)...)
+			got = append(got, u.Process(in)...)
 		}
 		delay := upTaps // output samples at 96 kHz: out[2i] = in[i-upTaps/2]
 		var sig, noise float64

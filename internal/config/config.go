@@ -66,7 +66,12 @@ type Settings struct {
 	HeadphonesVolume   *uint8 `json:"headphonesVolume,omitempty"`
 	HeadphonesMuted    bool   `json:"headphonesMuted,omitempty"`
 	WindowsTestSigning bool   `json:"windowsTestSigning,omitempty"`
-	DisableAnimations  bool   `json:"disableAnimations,omitempty"`
+	// NativeA2DPAddress and NativeRenderBound record how to restore stock A2DP.
+	NativeRenderBound     bool     `json:"nativeRenderBound,omitempty"`
+	NativeRenderEndpoint  string   `json:"nativeRenderEndpoint,omitempty"`
+	NativePreviousOutputs []string `json:"nativePreviousOutputs,omitempty"`
+	NativeA2DPAddress     string   `json:"nativeA2dpAddress,omitempty"`
+	DisableAnimations     bool     `json:"disableAnimations,omitempty"`
 	// Debug: detailed journal (logs\debug.log) of switches, device
 	// exchanges and volume.
 	Debug bool `json:"debug,omitempty"`

@@ -65,6 +65,31 @@ func Handle(req ipc.Request) (resp ipc.Response) {
 			return fail(err)
 		}
 		resp.OK = true
+	case "native-render-ensure":
+		if err := driver.EnsureBudsRender(); err != nil {
+			return fail(err)
+		}
+		resp.OK = true
+	case "native-render-bind", "native-render-restore":
+		if err := driver.SwitchBudsRender(req.Op == "native-render-bind", req.Device); err != nil {
+			return fail(err)
+		}
+		resp.OK = true
+	case "native-avrcp-release":
+		if err := driver.ReleaseNativeAVRCP(req.Device); err != nil {
+			return fail(err)
+		}
+		resp.OK = true
+	case "native-a2dp-release", "native-a2dp-resume":
+		if req.Op == "native-a2dp-resume" {
+			if err := driver.RestoreNativeAVRCP(); err != nil {
+				return fail(err)
+			}
+		}
+		if err := driver.SetNativeStereoService(req.Device, req.Op == "native-a2dp-resume"); err != nil {
+			return fail(err)
+		}
+		resp.OK = true
 	case "native-stereo-reconnect":
 		if err := driver.ReconnectNativeStereo(); err != nil {
 			return fail(err)
@@ -74,7 +99,12 @@ func Handle(req ipc.Request) (resp ipc.Response) {
 		if req.TestSigning == nil {
 			return fail(fmt.Errorf("test-signing requires an explicit state"))
 		}
-		if err := driver.SetTestSigning(*req.TestSigning); err != nil {
+		if err := driver.ConfigureNativeProfile(*req.TestSigning); err != nil {
+			return fail(err)
+		}
+		resp.OK = true
+	case "native-profile-sync":
+		if err := driver.SyncNativeProfile(true); err != nil {
 			return fail(err)
 		}
 		resp.OK = true

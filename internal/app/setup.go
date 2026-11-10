@@ -61,7 +61,7 @@ func installOrUpdate() bool {
 		}
 		time.Sleep(300 * time.Millisecond)
 	}
-	code, err := helper.RunElevated("install")
+	code, err := helper.RunElevated("install --owner " + helper.CurrentUserSID())
 	if err == nil && code != 0 {
 		err = fmt.Errorf(T("код %d, см. журнал helper.log", "code %d, see helper.log"), code)
 	}

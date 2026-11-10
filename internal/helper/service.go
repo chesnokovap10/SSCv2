@@ -16,6 +16,7 @@ import (
 	"golang.org/x/sys/windows/svc/mgr"
 
 	"sscv2/internal/config"
+	"sscv2/internal/driver"
 	"sscv2/internal/i18n"
 	"sscv2/internal/ipc"
 	"sscv2/internal/logx"
@@ -35,6 +36,16 @@ func (h handler) Execute(args []string, req <-chan svc.ChangeRequest, st chan<- 
 	st <- svc.Status{State: svc.StartPending}
 	errc := make(chan error, 1)
 	go func() { errc <- Serve(h.owner) }()
+	go func() {
+		for attempt := 0; attempt < 6; attempt++ {
+			if err := driver.SyncNativeProfile(false); err != nil {
+				logx.Printf("initialize native Bluetooth: %v", err)
+				time.Sleep(5 * time.Second)
+			} else {
+				return
+			}
+		}
+	}()
 	st <- svc.Status{State: svc.Running, Accepts: svc.AcceptStop | svc.AcceptShutdown}
 	logx.Printf("service running (owner %s)", h.owner)
 	for {

@@ -16,6 +16,7 @@ var (
 
 type menuInfoRow struct {
 	text          string
+	minWidth      int32
 	scrollPeriod  int32
 	informational bool
 	radio         bool
@@ -39,8 +40,8 @@ func (t *Tray) infoMessage(msg, lp uintptr) bool {
 	switch msg {
 	case wmMeasureItem:
 		it := (*measureMenuItem)(unsafe.Pointer(lp))
-		if it.kind == 1 && t.infoRows[uint32(it.data)] != nil {
-			it.width = uint32(t.menuPixels(infoWidth))
+		if row := t.infoRows[uint32(it.data)]; it.kind == 1 && row != nil {
+			it.width = uint32(t.menuPixels(max(infoWidth, row.minWidth)))
 			it.height = uint32(t.menuPixels(22))
 			return true
 		}
@@ -82,10 +83,13 @@ func (t *Tray) drawInfoRow(it *drawMenuItem, row *menuInfoRow) {
 	color, _, _ := getSysColor.Call(foreground)
 	oldColor, _, _ := setTextColor.Call(it.dc, color)
 	oldMode, _, _ := setBkMode.Call(it.dc, 1)
-	if row.radio && row.checked {
+	if row.checked {
 		mark := it.rect
 		mark.right = r.left
-		dot := uint16('●')
+		dot := uint16('✓')
+		if row.radio {
+			dot = '●'
+		}
 		drawText.Call(it.dc, uintptr(unsafe.Pointer(&dot)), 1, uintptr(unsafe.Pointer(&mark)), textFlags|0x5) // DT_CENTER | DT_VCENTER
 	}
 	if t.infoHover.id == uint32(it.data) && row.scrollPeriod > 0 {

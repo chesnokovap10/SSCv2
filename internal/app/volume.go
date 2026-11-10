@@ -28,11 +28,11 @@ func (a *App) volumeKey(key uint32) {
 func (a *App) adjustVolume(action int) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	if a.eng == nil || !a.mode.Streaming() {
+	levelValue, muted, available := a.sliderVolumeLocked()
+	if !available {
 		return
 	}
-	level := int(a.volumeLocked())
-	muted := a.s.HeadphonesMuted
+	level := int(levelValue)
 	switch action {
 	case idVolDown:
 		level = max(0, level-4)
@@ -48,18 +48,43 @@ func (a *App) adjustVolume(action int) {
 func (a *App) sliderVolume() (uint8, bool, bool) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
+	return a.sliderVolumeLocked()
+}
+
+func (a *App) sliderVolumeLocked() (uint8, bool, bool) {
+	if id := a.nativeVolumeEndpointLocked(); id != "" {
+		level, muted, err := audio.EndpointVolume(id)
+		return audio.ScalarTo127(level), muted, err == nil
+	}
 	return a.volumeLocked(), a.s.HeadphonesMuted, a.eng != nil && a.mode.Streaming()
+}
+
+func (a *App) nativeVolumeEndpointLocked() string {
+	if a.native != nil && a.mode.Streaming() {
+		return a.s.NativeRenderEndpoint
+	}
+	return ""
 }
 
 func (a *App) setSliderVolume(value uint8) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	if a.eng != nil && a.mode.Streaming() && (a.volumeLocked() != value || a.s.HeadphonesMuted) {
+	if level, muted, available := a.sliderVolumeLocked(); available && (level != value || muted) {
 		a.setVolumeLocked(value, false)
 	}
 }
 
 func (a *App) setVolumeLocked(value uint8, muted bool) {
+	if id := a.nativeVolumeEndpointLocked(); id != "" {
+		if err := audio.SetEndpointVolume(id, float32(value)/127, muted); err != nil {
+			logf("Buds volume: %v", err)
+			return
+		}
+		if !a.s.DisableAnimations {
+			a.t.PulseVolume()
+		}
+		return
+	}
 	changed := a.volumeLocked() != value || a.s.HeadphonesMuted != muted
 	if err := a.eng.in.Write(ipc.Command{Cmd: "volume", Volume: value, On: muted}); err != nil {
 		logf("headphone volume: %v", err)

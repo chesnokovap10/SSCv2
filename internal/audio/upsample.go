@@ -1,12 +1,12 @@
-package engine
+package audio
 
 import "math"
 
-// upsampler2x doubles the rate of interleaved stereo float PCM (48 -> 96 kHz
+// Upsampler2x doubles the rate of interleaved stereo float PCM (48 -> 96 kHz
 // for SSC UHQ): a half-band FIR, so even outputs are the input samples and
 // odd outputs are interpolated with a Blackman-windowed sinc (64 taps per
 // side of the phase, passband to ~21 kHz, ~-75 dB images).
-type upsampler2x struct {
+type Upsampler2x struct {
 	h    []float32 // odd-phase taps, h[k] for input offset k-half+1 .. k-half
 	hist [2][]float32
 	out  []float32
@@ -14,8 +14,8 @@ type upsampler2x struct {
 
 const upTaps = 64
 
-func newUpsampler2x() *upsampler2x {
-	u := &upsampler2x{h: make([]float32, upTaps)}
+func NewUpsampler2x() *Upsampler2x {
+	u := &Upsampler2x{h: make([]float32, upTaps)}
 	half := upTaps / 2
 	n := float64(2 * upTaps)
 	var sum float64
@@ -39,9 +39,9 @@ func newUpsampler2x() *upsampler2x {
 	return u
 }
 
-// process upsamples `in` (interleaved stereo, n frames) into 2n frames; the
+// Process upsamples `in` (interleaved stereo, n frames) into 2n frames; the
 // result is reused by the next call. Delay: upTaps/2 input samples.
-func (u *upsampler2x) process(in []float32) []float32 {
+func (u *Upsampler2x) Process(in []float32) []float32 {
 	n := len(in) / 2
 	u.out = u.out[:0]
 	if cap(u.out) < 4*n {

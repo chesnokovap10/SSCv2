@@ -12,9 +12,11 @@ import (
 	"golang.org/x/sys/windows"
 
 	"sscv2/internal/audio"
+	"sscv2/internal/codec/ssc"
+	"sscv2/internal/config"
 )
 
-func sendAACLoopback(ctx context.Context, media io.Writer, out io.Writer, duration time.Duration) error {
+func sendLoopback(ctx context.Context, media io.Writer, out io.Writer, duration time.Duration, mode config.Mode) error {
 
 	if err := audio.InitCOM(); err != nil {
 		return err
@@ -54,14 +56,13 @@ func sendAACLoopback(ctx context.Context, media io.Writer, out io.Writer, durati
 	interval := 5 * time.Second
 	if live {
 		interval = 100 * time.Millisecond
-		fmt.Fprintln(out, "native-aac-ready")
 	}
 	timeout := time.NewTimer(interval)
 	defer timeout.Stop()
 	var pending []float32
 	var peak float32
 	channels := capture.Format.Channels
-	err = sendAAC(media, out, int(duration/time.Second)*48000, "WASAPI loopback", live, func(pcm []int16, _ int) error {
+	fill := func(pcm []float32, frameLen int) error {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
@@ -79,7 +80,7 @@ func sendAACLoopback(ctx context.Context, media io.Writer, out io.Writer, durati
 				case <-timeout.C:
 					if live {
 						clear(pcm[i:])
-						timeout.Reset(time.Second * 1024 / 48000)
+						timeout.Reset(time.Second * time.Duration(frameLen) / 48000)
 						return nil
 					}
 					return fmt.Errorf("timed out waiting for WASAPI samples")
@@ -88,12 +89,13 @@ func sendAACLoopback(ctx context.Context, media io.Writer, out io.Writer, durati
 			for ch := 0; ch < 2; ch++ {
 				sample := pending[min(ch, channels-1)]
 				peak = max(peak, sample, -sample)
-				pcm[i+ch] = int16(max(-1, min(1, sample)) * 32767)
+				pcm[i+ch] = sample
 			}
 			pending = pending[channels:]
 		}
 		return nil
-	})
+	}
+	err = sendPCM(media, out, mode, int(duration/time.Second)*48000, "WASAPI loopback", live, fill)
 	if err != nil {
 		return err
 	}
@@ -103,6 +105,77 @@ func sendAACLoopback(ctx context.Context, media io.Writer, out io.Writer, durati
 	fmt.Fprintf(out, "WASAPI capture peak %.4f\n", peak)
 	return nil
 }
+
+// sendPCM encodes interleaved 48 kHz stereo PCM independently of its source.
+func sendPCM(media io.Writer, out io.Writer, mode config.Mode, frames int, source string, pace bool, fill func([]float32, int) error) error {
+	if mode == config.ModeSSC || mode == config.ModeSSCUHQ {
+		return sendSSCLive(media, out, mode, fill)
+	}
+	var stereo []float32
+	return sendAAC(media, out, frames, source, pace, func(pcm []int16, _ int) error {
+		if stereo == nil {
+			stereo = make([]float32, len(pcm))
+		}
+		if err := fill(stereo, len(pcm)/2); err != nil {
+			return err
+		}
+		for i, sample := range stereo {
+			pcm[i] = int16(max(-1, min(1, sample)) * 32767)
+		}
+		return nil
+	})
+}
+
+// SSC uses one raw frame per RTP packet, with a packet-count timestamp.
+func sendSSCLive(media io.Writer, out io.Writer, mode config.Mode, fill func([]float32, int) error) error {
+	rate, kbps, frames := 48000, SSCProbeKbps, ssc.FrameLen
+	var up *audio.Upsampler2x
+	if mode == config.ModeSSCUHQ {
+		rate, kbps, frames = 96000, SSCUHQKbps, ssc.FrameLen/2
+		up = audio.NewUpsampler2x()
+	}
+	encoder, err := ssc.New(rate, kbps*1000)
+	if err != nil {
+		return err
+	}
+	defer encoder.Close()
+
+	pcm := make([]float32, 2*frames)
+	packet := make([]byte, 12, 12+ssc.FrameBytes(rate, kbps*1000))
+	packet[0], packet[1] = 0x80, 0x60
+	binary.BigEndian.PutUint32(packet[8:12], 1)
+	for count := uint32(0); ; count++ {
+		if err := fill(pcm, frames); err != nil {
+			return err
+		}
+		samples := pcm
+		if up != nil {
+			samples = up.Process(pcm)
+		}
+		frame, err := encoder.Encode(samples)
+		if err != nil {
+			return err
+		}
+		binary.BigEndian.PutUint16(packet[2:4], uint16(count))
+		binary.BigEndian.PutUint32(packet[4:8], count+1)
+		packet = append(packet[:12], frame...)
+		n, err := media.Write(packet)
+		if err != nil {
+			return fmt.Errorf("write SSC packet %d: %w", count, err)
+		}
+		if n != len(packet) {
+			return io.ErrShortWrite
+		}
+		if count == 0 {
+			fmt.Fprintf(out, "native-%s-ready\n", mode)
+		}
+	}
+}
+
+const (
+	SSCProbeKbps = 128
+	SSCUHQKbps   = 152
+)
 
 // Render a fixture to the default output so WASAPI must capture it before AAC encoding.
 func playLoopbackTone() bool {

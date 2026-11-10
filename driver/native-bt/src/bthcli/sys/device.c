@@ -25,7 +25,11 @@ Environment:
 #include "clisrv.h"
 #include "device.h"
 
+#ifdef SSC_LOCAL_PROFILE
+static const GUID SscAvdtpProbeInterface = {0xc713148a, 0x3218, 0x4755, {0xb1, 0x03, 0x7a, 0xee, 0x51, 0xc9, 0xd3, 0x13}};
+#else
 static const GUID SscAvdtpProbeInterface = {0x105bdfd9, 0x73ce, 0x4bcf, {0xb2, 0xe9, 0xc5, 0xd6, 0x11, 0xf6, 0x9a, 0x23}};
+#endif
 #include "client.h"
 #include "queue.h"
 
@@ -271,11 +275,14 @@ Return Value:
         goto exit;
     }
 
+#ifndef SSC_LOCAL_PROFILE
     status = BthEchoCliRetrieveServerBthAddress(devCtx);
     if (!NT_SUCCESS(status))
     {
         goto exit;
     }
+
+#endif
 
 exit:
     return status;
@@ -310,6 +317,69 @@ Return Value:
     return STATUS_SUCCESS;
 }
 
+#ifdef SSC_LOCAL_PROFILE
+static PVOID volatile SscIncomingHandle;
+static volatile LONG SscProbeBusy;
+
+NTSTATUS SscAcceptIncoming(PBTHECHOSAMPLE_CLIENT_CONTEXT dev, WDFFILEOBJECT file,
+    WDFREQUEST request, BTH_ADDR address, L2CAP_CHANNEL_HANDLE handle);
+
+static VOID SscProbeIncoming(PVOID context, INDICATION_CODE code, PINDICATION_PARAMETERS parameters)
+{
+    UNREFERENCED_PARAMETER(context);
+    if (code == IndicationRemoteConnect && parameters != NULL) {
+        InterlockedCompareExchangePointer(&SscIncomingHandle, parameters->ConnectionHandle, NULL);
+    }
+}
+
+static NTSTATUS SscProbeRegistration(PBTHECHOSAMPLE_CLIENT_CONTEXT dev, WDFFILEOBJECT file, BTH_ADDR address)
+{
+    if (InterlockedCompareExchange(&SscProbeBusy, 1, 0)) {
+        return STATUS_DEVICE_BUSY;
+    }
+    WDFREQUEST request;
+    NTSTATUS status = WdfRequestCreate(WDF_NO_OBJECT_ATTRIBUTES, dev->Header.IoTarget, &request);
+    if (!NT_SUCCESS(status)) {
+        InterlockedExchange(&SscProbeBusy, 0);
+        return status;
+    }
+
+    union {
+        struct _BRB_L2CA_REGISTER_SERVER reg;
+        struct _BRB_L2CA_UNREGISTER_SERVER unreg;
+    } brb;
+    dev->Header.ProfileDrvInterface.BthInitializeBrb((PBRB)&brb, BRB_L2CA_REGISTER_SERVER);
+    brb.reg.BtAddress = address;
+    brb.reg.PSM = 0x0017;
+    brb.reg.IndicationCallback = SscProbeIncoming;
+    brb.reg.ReferenceObject = WdfDeviceWdmGetDeviceObject(dev->Header.Device);
+    InterlockedExchangePointer(&SscIncomingHandle, NULL);
+    status = BthEchoSharedSendBrbSynchronously(dev->Header.IoTarget, request, (PBRB)&brb, sizeof(brb.reg));
+    if (NT_SUCCESS(status)) {
+        L2CAP_SERVER_HANDLE server = brb.reg.ServerHandle;
+        LARGE_INTEGER interval;
+        interval.QuadPart = -1000000;
+        L2CAP_CHANNEL_HANDLE incoming = NULL;
+        for (ULONG i = 0; i < 80; i++) {
+            incoming = InterlockedCompareExchangePointer(&SscIncomingHandle, NULL, NULL);
+            if (incoming != NULL) {
+                break;
+            }
+            KeDelayExecutionThread(KernelMode, FALSE, &interval);
+        }
+        status = incoming == NULL ? STATUS_IO_TIMEOUT : SscAcceptIncoming(dev, file, request, address, incoming);
+        dev->Header.ProfileDrvInterface.BthInitializeBrb((PBRB)&brb, BRB_L2CA_UNREGISTER_SERVER);
+        brb.unreg.BtAddress = address;
+        brb.unreg.Psm = 0x0017;
+        brb.unreg.ServerHandle = server;
+        BthEchoSharedSendBrbSynchronously(dev->Header.IoTarget, request, (PBRB)&brb, sizeof(brb.unreg));
+    }
+    WdfObjectDelete(request);
+    InterlockedExchange(&SscProbeBusy, 0);
+    return status;
+}
+#endif
+
 VOID
 BthEchoCliEvtDeviceFileCreate(
     _In_ WDFDEVICE  Device,
@@ -337,6 +407,46 @@ Arguments:
 
     PAGED_CODE();
 
+#ifdef SSC_LOCAL_PROFILE
+    // Each handle selects its peer with a twelve-digit hexadecimal suffix.
+    const UNICODE_STRING *name = WdfFileObjectGetFileName(FileObject);
+    BTH_ADDR address = 0;
+    if (!name || (name->Length != 13 * sizeof(WCHAR) && name->Length != 15 * sizeof(WCHAR)) || name->Buffer[0] != L'\\')
+    {
+        WdfRequestComplete(Request, STATUS_OBJECT_NAME_INVALID);
+        return;
+    }
+    for (USHORT i = 1; i < 13; i++)
+    {
+        WCHAR digit = name->Buffer[i];
+        if (digit >= L'0' && digit <= L'9')
+            digit -= L'0';
+        else if (digit >= L'A' && digit <= L'F')
+            digit = digit - L'A' + 10;
+        else
+        {
+            WdfRequestComplete(Request, STATUS_OBJECT_NAME_INVALID);
+            return;
+        }
+        address = (address << 4) | digit;
+    }
+    if (!address)
+    {
+        WdfRequestComplete(Request, STATUS_INVALID_PARAMETER);
+        return;
+    }
+    fileCtx->ServerBthAddress = address;
+    if (name->Length == 15 * sizeof(WCHAR)) {
+        if (name->Buffer[13] != L'-' || name->Buffer[14] != L'R') {
+            WdfRequestComplete(Request, STATUS_OBJECT_NAME_INVALID);
+            return;
+        }
+        WdfRequestComplete(Request, SscProbeRegistration(devCtx, FileObject, address));
+        return;
+    }
+#else
+    fileCtx->ServerBthAddress = devCtx->ServerBthAddress;
+#endif
     fileCtx->ServerPsm = 0x0019;
     status = BthEchoCliOpenRemoteConnection(devCtx, FileObject, Request);
 
@@ -374,7 +484,10 @@ Arguments:
 
     devCtx = GetClientDeviceContext(WdfFileObjectGetDevice(FileObject));
 
-    connection =  GetFileContext(FileObject)->Connection;
+    connection = GetFileContext(FileObject)->Connection;
+    if (connection == NULL) {
+        return;
+    }
 
     //
     // Since this routine is called at passive level we can disconnect

@@ -738,6 +738,57 @@ Return Value:
 }
 
 
+#ifdef SSC_LOCAL_PROFILE
+static VOID SscClassicIndication(PVOID context, INDICATION_CODE code, PINDICATION_PARAMETERS parameters)
+{
+    UNREFERENCED_PARAMETER(parameters);
+    BthEchoCliIndicationCallback(context, code, NULL);
+}
+
+NTSTATUS SscAcceptIncoming(PBTHECHOSAMPLE_CLIENT_CONTEXT dev, WDFFILEOBJECT file,
+    WDFREQUEST request, BTH_ADDR address, L2CAP_CHANNEL_HANDLE handle)
+{
+    WDFOBJECT object;
+    NTSTATUS status = BthEchoConnectionObjectCreate(&dev->Header, file, &object);
+    if (!NT_SUCCESS(status)) {
+        return status;
+    }
+    PBTHECHO_CONNECTION connection = GetConnectionObjectContext(object);
+    connection->ConnectionState = ConnectionStateConnecting;
+    struct _BRB_L2CA_OPEN_CHANNEL brb = {0};
+    dev->Header.ProfileDrvInterface.BthInitializeBrb((PBRB)&brb, BRB_L2CA_OPEN_CHANNEL_RESPONSE);
+    brb.ChannelHandle = handle;
+    brb.BtAddress = address;
+    brb.Psm = 0x0017;
+    brb.Response = CONNECT_RSP_RESULT_SUCCESS;
+    brb.ChannelFlags = CF_ROLE_EITHER;
+    brb.ConfigOut.Flags = CFG_MTU;
+    brb.ConfigOut.Mtu.Min = L2CAP_MIN_MTU;
+    brb.ConfigOut.Mtu.Preferred = L2CAP_DEFAULT_MTU;
+    brb.ConfigOut.Mtu.Max = L2CAP_DEFAULT_MTU;
+    brb.ConfigIn.Flags = CFG_MTU;
+    brb.ConfigIn.Mtu.Max = L2CAP_DEFAULT_MTU;
+    brb.ConfigIn.Mtu.Min = L2CAP_MIN_MTU;
+    brb.ConfigIn.Mtu.Preferred = L2CAP_DEFAULT_MTU;
+    brb.CallbackFlags = CALLBACK_DISCONNECT;
+    brb.Callback = SscClassicIndication;
+    brb.CallbackContext = connection;
+    brb.ReferenceObject = WdfDeviceWdmGetDeviceObject(dev->Header.Device);
+    brb.IncomingQueueDepth = 10;
+    status = BthEchoSharedSendBrbSynchronously(dev->Header.IoTarget, request, (PBRB)&brb, sizeof(brb));
+    if (!NT_SUCCESS(status)) {
+        connection->ConnectionState = ConnectionStateConnectFailed;
+        return status;
+    }
+    connection->OutMTU = brb.OutResults.Params.Mtu;
+    connection->InMTU = brb.InResults.Params.Mtu;
+    connection->ChannelHandle = brb.ChannelHandle;
+    connection->RemoteAddress = brb.BtAddress;
+    connection->ConnectionState = ConnectionStateConnected;
+    return BthEchoCliConnectionStateConnected(file, connection);
+}
+#endif
+
 _IRQL_requires_same_
 NTSTATUS
 BthEchoCliOpenRemoteConnection(
@@ -811,7 +862,7 @@ Return Value:
         );
     
     brb->Hdr.ClientContext[0] = connection;
-    brb->BtAddress = DevCtx->ServerBthAddress;
+    brb->BtAddress = fileCtx->ServerBthAddress;
     brb->Psm = fileCtx->ServerPsm;
 
     brb->ChannelFlags = CF_ROLE_EITHER;
@@ -1135,7 +1186,7 @@ Return Value:
         );
     
     brb->Hdr.ClientContext[0] = connection;
-    brb->BtAddress = DevCtx->ServerBthAddress;
+    brb->BtAddress = fileCtx->ServerBthAddress;
     brb->Psm = fileCtx->ServerPsm;
 
     brb->ChannelFlags = CF_ROLE_EITHER;

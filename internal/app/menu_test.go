@@ -42,6 +42,24 @@ func TestMenu(t *testing.T) {
 	dump(t, a.menu(), 0)
 }
 
+func TestNativeCodecMenuWhileRestoringA2DP(t *testing.T) {
+	t.Setenv("APPDATA", t.TempDir())
+	a := &App{
+		mode: config.ModeSSC,
+		s:    &config.Settings{Mode: config.ModeSSC, WindowsTestSigning: true},
+	}
+	// The worker has stopped, but Off is published only after A2DP restores.
+	items := a.menu()
+	if len(items[3].Sub) != 4 || items[4].Sub != nil || !strings.Contains(items[4].Text, "128 kbps") {
+		t.Fatalf("unexpected codec and bitrate rows during restore: %+v", items[3:5])
+	}
+	a.mode = config.ModeOff
+	items = a.menu()
+	if len(items[3].Sub) != 4 || !items[3].Sub[0].Checked || items[4].Sub != nil {
+		t.Fatalf("unexpected codec and bitrate rows in Off: %+v", items[3:5])
+	}
+}
+
 func TestMenuEnglishUHQ(t *testing.T) {
 	t.Setenv("APPDATA", t.TempDir())
 	i18n.Set(i18n.EN)

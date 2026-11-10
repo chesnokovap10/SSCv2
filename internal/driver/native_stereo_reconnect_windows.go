@@ -12,12 +12,13 @@ import (
 )
 
 var (
-	stereoBthProps   = windows.NewLazySystemDLL("bthprops.cpl")
-	stereoFindRadio  = stereoBthProps.NewProc("BluetoothFindFirstRadio")
-	stereoNextRadio  = stereoBthProps.NewProc("BluetoothFindNextRadio")
-	stereoCloseFind  = stereoBthProps.NewProc("BluetoothFindRadioClose")
-	stereoGetDevice  = stereoBthProps.NewProc("BluetoothGetDeviceInfo")
-	stereoSetService = stereoBthProps.NewProc("BluetoothSetServiceState")
+	stereoBthProps     = windows.NewLazySystemDLL("bthprops.cpl")
+	stereoFindRadio    = stereoBthProps.NewProc("BluetoothFindFirstRadio")
+	stereoNextRadio    = stereoBthProps.NewProc("BluetoothFindNextRadio")
+	stereoCloseFind    = stereoBthProps.NewProc("BluetoothFindRadioClose")
+	stereoGetDevice    = stereoBthProps.NewProc("BluetoothGetDeviceInfo")
+	stereoSetService   = stereoBthProps.NewProc("BluetoothSetServiceState")
+	stereoEnumServices = stereoBthProps.NewProc("BluetoothEnumerateInstalledServices")
 )
 
 type stereoBluetoothDevice struct {
@@ -69,10 +70,23 @@ func ReconnectNativeStereo() error {
 	if err != nil || address == 0 {
 		return errors.New("invalid Buds Bluetooth address")
 	}
-	return reconnectStereoService(address)
+	return withStereoService(address, cycleA2DP)
 }
 
-func reconnectStereoService(address uint64) error {
+// SetNativeStereoService changes the stock A2DP service for the given paired device.
+func SetNativeStereoService(device string, enabled bool) error {
+	stereoMu.Lock()
+	defer stereoMu.Unlock()
+	address, err := strconv.ParseUint(strings.ReplaceAll(device, ":", ""), 16, 48)
+	if err != nil || address == 0 {
+		return errors.New("invalid Buds Bluetooth address")
+	}
+	return withStereoService(address, func(radio windows.Handle, info *stereoBluetoothDevice) error {
+		return setA2DP(radio, info, enabled)
+	})
+}
+
+func withStereoService(address uint64, update func(windows.Handle, *stereoBluetoothDevice) error) error {
 	params := uint32(4)
 	var radio windows.Handle
 	find, _, callErr := stereoFindRadio.Call(uintptr(unsafe.Pointer(&params)), uintptr(unsafe.Pointer(&radio)))
@@ -85,7 +99,7 @@ func reconnectStereoService(address uint64) error {
 		info.Size = uint32(unsafe.Sizeof(info))
 		result, _, _ := stereoGetDevice.Call(uintptr(radio), uintptr(unsafe.Pointer(&info)))
 		if result == 0 && info.Authenticated != 0 {
-			err := cycleA2DP(radio, &info)
+			err := update(radio, &info)
 			windows.CloseHandle(radio)
 			return err
 		}
@@ -97,19 +111,42 @@ func reconnectStereoService(address uint64) error {
 	}
 }
 
-func cycleA2DP(radio windows.Handle, info *stereoBluetoothDevice) error {
+func setA2DP(radio windows.Handle, info *stereoBluetoothDevice, enabled bool) error {
 	sink := windows.GUID{Data1: 0x110b, Data3: 0x1000, Data4: [8]byte{0x80, 0, 0, 0x80, 0x5f, 0x9b, 0x34, 0xfb}}
-	set := func(enabled uintptr) windows.Errno {
-		result, _, _ := stereoSetService.Call(uintptr(radio), uintptr(unsafe.Pointer(info)), uintptr(unsafe.Pointer(&sink)), enabled)
+	var state uintptr
+	if enabled {
+		state = 1
+	}
+	result, _, _ := stereoSetService.Call(uintptr(radio), uintptr(unsafe.Pointer(info)), uintptr(unsafe.Pointer(&sink)), state)
+	if result == uintptr(windows.ERROR_INVALID_PARAMETER) {
+		// Verify the actual state before accepting the error as an idempotent update.
+		var services [32]windows.GUID
+		count := uint32(len(services))
+		code, _, _ := stereoEnumServices.Call(uintptr(radio), uintptr(unsafe.Pointer(info)), uintptr(unsafe.Pointer(&count)), uintptr(unsafe.Pointer(&services[0])))
+		if code == 0 && count <= uint32(len(services)) {
+			installed := false
+			for _, service := range services[:count] {
+				installed = installed || service == sink
+			}
+			if installed == enabled {
+				return nil
+			}
+		}
+	}
+	if result != 0 && uint32(result) != 0x80070057 {
 		return windows.Errno(result)
 	}
-	if result := set(0); result != 0 && uint32(result) != 0x80070057 {
-		return fmt.Errorf("disable Buds A2DP: %w", result)
+	return nil
+}
+
+func cycleA2DP(radio windows.Handle, info *stereoBluetoothDevice) error {
+	if err := setA2DP(radio, info, false); err != nil {
+		return fmt.Errorf("disable Buds A2DP: %w", err)
 	}
-	if result := set(1); result != 0 && uint32(result) != 0x80070057 {
+	if err := setA2DP(radio, info, true); err != nil {
 		time.Sleep(500 * time.Millisecond)
-		if retry := set(1); retry != 0 && uint32(retry) != 0x80070057 {
-			return fmt.Errorf("re-enable Buds A2DP: %w", retry)
+		if err := setA2DP(radio, info, true); err != nil {
+			return fmt.Errorf("re-enable Buds A2DP: %w", err)
 		}
 	}
 	return nil

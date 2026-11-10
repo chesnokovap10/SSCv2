@@ -75,8 +75,7 @@ var bitrates = map[config.Mode][]int{
 type App struct {
 	t *tray.Tray
 
-	opMu        sync.Mutex // one mode switch / privileged op at a time
-	nativeBound bool       // guarded by opMu
+	opMu sync.Mutex // one mode switch / privileged op at a time
 
 	mu           sync.Mutex
 	s            *config.Settings
@@ -135,7 +134,7 @@ func Run() int {
 	}
 	a.t = &tray.Tray{Menu: a.menu, Command: a.command, Resume: a.onResume, DismissBefore: func(id int) bool {
 		switch id {
-		case idExit, idInfo, idLangRU, idLangEN, idRepository, idTestSigning:
+		case idExit, idInfo, idRepository, idTestSigning:
 			return true
 		default:
 			return false
@@ -193,9 +192,26 @@ func (a *App) startup() {
 	st := a.refreshAdapter()
 	_, svcRunning := helper.ServiceState()
 	a.mu.Lock()
-	want := a.s.Mode
+	want, restoreA2DP, nativeRequested := a.s.Mode, a.s.NativeA2DPAddress != "", a.s.WindowsTestSigning
 	a.mu.Unlock()
 	logf("adapter %s mode %s, saved mode %s, service running %v", st.ID, st.Mode, want, svcRunning)
+
+	if restoreA2DP || want == config.ModeOff {
+		a.opMu.Lock()
+		if err := a.resumeNativeStereo(); err != nil {
+			a.nativeError(err)
+			want = config.ModeOff
+		}
+		a.opMu.Unlock()
+	}
+
+	if nativeRequested && svcRunning {
+		if active, err := driver.TestSigning(); err == nil && active {
+			if _, err := helper.Call(ipc.Request{Op: "native-profile-sync"}); err != nil {
+				logf("initialize native Bluetooth: %v", err)
+			}
+		}
+	}
 
 	switch {
 	case st.Mode == driver.NotPresent:
@@ -271,10 +287,10 @@ func (a *App) stateLocked() (tray.Color, string) {
 		return tray.Red, T("адаптер не найден", "adapter not found")
 	}
 	if a.native != nil {
-		if a.native.ready.Load() {
-			return tray.Green, "AAC (Windows Bluetooth)"
+		if a.native.ready {
+			return tray.Green, modeName(a.native.mode) + " (Windows Bluetooth)"
 		}
-		return tray.Amber, "AAC (Windows Bluetooth)..."
+		return tray.Amber, modeName(a.native.mode) + " (Windows Bluetooth)..."
 	}
 	if a.mode == config.ModeOff {
 		if a.adapter.Mode == driver.WinUSB {
@@ -348,15 +364,15 @@ func (a *App) enable(m config.Mode) {
 	cur, eng, streaming, pendingUHQ := a.mode, a.eng, a.st.Streaming, a.pendingUHQ
 	native, preferNative, quitting := a.native, a.s.WindowsTestSigning, a.quitting
 	a.mu.Unlock()
-	if preferNative && m != config.ModeAAC {
-		a.t.Balloon("SSCv2", T("Этот кодек пока недоступен через Bluetooth Windows.", "This codec is not yet available through Windows Bluetooth."), 1)
-		return
-	}
-	if quitting || pendingUHQ || preferNative && native != nil ||
+	if quitting || pendingUHQ || preferNative && native != nil && native.mode == m ||
 		!preferNative && cur == m && eng != nil && eng.running() {
 		return
 	}
-	if err := a.stopNativeAAC(); err != nil {
+	if preferNative && native != nil {
+		a.switchNativeCodec(native, m)
+		return
+	}
+	if err := a.stopNativeAudio(); err != nil {
 		a.nativeError(err)
 		return
 	}
@@ -371,7 +387,7 @@ func (a *App) enable(m config.Mode) {
 				return
 			}
 		}
-		a.startNativeAAC()
+		a.startNativeAudio(m)
 		return
 	}
 	a.mu.Lock()
@@ -533,13 +549,17 @@ func (a *App) startEngineLocked() {
 func (a *App) disable() {
 	a.opMu.Lock()
 	defer a.opMu.Unlock()
+	a.disableLocked()
+}
+
+func (a *App) disableLocked() {
 	defer a.setBusy("")
 	if a.stopVolumeRestore != nil {
 		a.stopVolumeRestore()
 		a.stopVolumeRestore = nil
 	}
 
-	if err := a.stopNativeAAC(); err != nil {
+	if err := a.stopNativeAudio(); err != nil {
 		a.nativeError(err)
 		return
 	}
@@ -1167,14 +1187,19 @@ func (a *App) menu() []tray.Item {
 	codecs := []tray.Item{
 		{Text: T("Выкл (Bluetooth Windows)", "Off (Windows Bluetooth)"), ID: idModeOff, Radio: true, Checked: mode == config.ModeOff, Disabled: busy},
 		{Text: "AAC", ID: idModeAAC, Radio: true, Checked: mode == config.ModeAAC, Disabled: busy},
-		{Text: T("SSC (24 бит / 48 кГц)", "SSC (24 bit / 48 kHz)"), ID: idModeSSC, Radio: true, Checked: mode == config.ModeSSC, Disabled: busy || a.s.WindowsTestSigning},
-		{Text: T("SSC UHQ (96 кГц)", "SSC UHQ (96 kHz)"), ID: idModeUHQ, Radio: true, Checked: mode == config.ModeSSCUHQ, Disabled: busy || a.s.WindowsTestSigning || a.uhqUnavailable()},
+		{Text: T("SSC (24 бит / 48 кГц)", "SSC (24 bit / 48 kHz)"), ID: idModeSSC, Radio: true, Checked: mode == config.ModeSSC, Disabled: busy},
+		{Text: T("SSC UHQ (96 кГц)", "SSC UHQ (96 kHz)"), ID: idModeUHQ, Radio: true, Checked: mode == config.ModeSSCUHQ, Disabled: busy || a.uhqUnavailable()},
 	}
 	items = append(items, tray.Item{Text: T("Кодек: ", "Codec: ") + modeName(mode), Sub: codecs, LiveLabel: true})
-	if a.noBitrate(mode) {
+	if mode.Streaming() && (a.s.WindowsTestSigning || a.native != nil) {
+		// The worker can already be gone while Windows restores A2DP.
+		// Keep the row in place so that refresh doesn't reopen the codec popup.
+		items = append(items, tray.Item{
+			Text:      fmt.Sprintf("%s (Windows Bluetooth), %d kbps", modeName(mode), nativeBitrateKbps(mode)),
+			LiveLabel: true,
+		})
+	} else if a.noBitrate(mode) {
 		items = append(items, tray.Item{Text: T("Битрейт: — (", "Bitrate: - (") + a.unsupportedText(mode) + ")", LiveLabel: true})
-	} else if a.native != nil {
-		items = append(items, tray.Item{Text: "AAC (Windows Bluetooth), 192 kbps"})
 	} else if mode.Streaming() {
 		cur := a.bitrateFor(mode)
 		label := T("Битрейт: ", "Bitrate: ") + bitrateText(cur)
@@ -1259,8 +1284,8 @@ func (a *App) menu() []tray.Item {
 		pair = append(pair, tray.Item{Text: "    " + nz(c.Name, c.Addr) + T(" (классическая)", " (classic)"),
 			ID: a.menuDeviceID(menuClassicMouse, c.Addr, c.Name), Radio: true, Checked: sel})
 	}
-	items = append(items, tray.Item{Text: T("Сопрячь устройство", "Pair a device"), Sub: pair})
-	items = append(items, tray.Item{Text: T("Инфо об устройствах…", "Device info…"), ID: idInfo})
+	items = append(items, tray.Item{Text: T("Сопрячь устройство", "Pair a device"), Sub: pair, LiveLabel: true})
+	items = append(items, tray.Item{Text: T("Инфо об устройствах…", "Device info…"), ID: idInfo, LiveLabel: true})
 	items = append(items, tray.Item{Separator: true})
 
 	// settings submenu
@@ -1283,27 +1308,30 @@ func (a *App) menu() []tray.Item {
 		}
 	}
 	settings := []tray.Item{
-		{Text: T("Язык", "Language"), Sub: []tray.Item{
-			{Text: "Русский", ID: idLangRU, Radio: true, Checked: lang == i18n.RU},
-			{Text: "English", ID: idLangEN, Radio: true, Checked: lang == i18n.EN},
+		{LiveLabel: true, MinWidth: 370, Text: T("Язык", "Language"), Sub: []tray.Item{
+			{Text: "Русский", ID: idLangRU, LiveLabel: true, Checked: lang == i18n.RU},
+			{Text: "English", ID: idLangEN, LiveLabel: true, Checked: lang == i18n.EN},
 		}},
-		{Text: T("Запускать при входе в Windows", "Start when signing in to Windows"), ID: idAutoStart, Checked: autoStart, Disabled: autoStartErr != nil},
-		{Text: T("Макс. MTU для Samsung Galaxy Buds2 Pro (1017 байт)", "Max MTU for Samsung Galaxy Buds2 Pro (1017 bytes)"), ID: idMaxMTU, Checked: a.s.MaxMTU, Disabled: busy},
-		{Text: T("Все битрейты (не только проверенные на этих наушниках)", "All bitrates (not only those checked on these headphones)"), ID: idAllBitrates, Checked: a.s.AllBitrates, Disabled: busy},
-		{Text: T("Тестовый режим Windows…", "Windows test mode…"), ID: idTestSigning, Checked: a.s.WindowsTestSigning, Disabled: busy},
-		{Text: T("Текущая тестовая подпись Windows: ", "Current Windows test signing: ") + testSigningState, Disabled: true},
-		{Text: T("Анимации", "Animations"), ID: idAnimations, Checked: !a.s.DisableAnimations},
-		{Text: T("Отладка и API интерфейса", "Debug and UI API"), ID: idDebug, Checked: a.s.Debug},
-		{Text: T("Открыть папку журналов", "Open the log folder"), ID: idOpenLogs},
+		{LiveLabel: true, MinWidth: 370, Text: T("Запускать при входе в Windows", "Start at Windows sign-in"), ID: idAutoStart, Checked: autoStart, Disabled: autoStartErr != nil},
+		{LiveLabel: true, MinWidth: 370, Text: T("Анимации", "Animations"), ID: idAnimations, Checked: !a.s.DisableAnimations},
 		{Separator: true},
-		{Text: T("Служба: ", "Service: ") + svcState},
-		{Text: T("Запустить службу", "Start the service"), ID: idSvcInstall, Disabled: busy || running},
-		{Text: T("Удалить службу", "Remove the service"), ID: idSvcRemove, Disabled: busy || !installed},
+		{LiveLabel: true, MinWidth: 370, Text: T("Макс. MTU для Samsung Galaxy Buds2 Pro (1017 байт)", "Max MTU for Samsung Galaxy Buds2 Pro (1017 bytes)"), ID: idMaxMTU, Checked: a.s.MaxMTU, Disabled: busy},
+		{LiveLabel: true, MinWidth: 370, Text: T("Показывать все битрейты", "Show all bitrates"), ID: idAllBitrates, Checked: a.s.AllBitrates, Disabled: busy},
 		{Separator: true},
-		{Text: T("Удалить программу…", "Uninstall…"), ID: idUninstall, Disabled: busy},
+		{LiveLabel: true, MinWidth: 370, Text: T("Тестовый режим Windows…", "Windows test mode…"), ID: idTestSigning, Checked: a.s.WindowsTestSigning, Disabled: busy},
+		{LiveLabel: true, MinWidth: 370, Text: T("Текущая тестовая подпись Windows: ", "Current Windows test signing: ") + testSigningState, Disabled: true},
+		{Separator: true},
+		{LiveLabel: true, MinWidth: 370, Text: T("Отладка и API интерфейса", "Debug and UI API"), ID: idDebug, Checked: a.s.Debug},
+		{LiveLabel: true, MinWidth: 370, Text: T("Открыть папку журналов", "Open the log folder"), ID: idOpenLogs},
+		{Separator: true},
+		{LiveLabel: true, MinWidth: 370, Text: T("Служба: ", "Service: ") + svcState},
+		{LiveLabel: true, MinWidth: 370, Text: T("Запустить службу", "Start the service"), ID: idSvcInstall, Disabled: busy || running},
+		{LiveLabel: true, MinWidth: 370, Text: T("Удалить службу", "Remove the service"), ID: idSvcRemove, Disabled: busy || !installed},
+		{Separator: true},
+		{LiveLabel: true, MinWidth: 370, Text: T("Удалить программу…", "Uninstall…"), ID: idUninstall, Disabled: busy},
 	}
-	items = append(items, tray.Item{Text: T("Настройки", "Settings"), Sub: settings})
-	items = append(items, tray.Item{Text: T("Выход", "Exit"), ID: idExit})
+	items = append(items, tray.Item{Text: T("Настройки", "Settings"), LiveLabel: true, Sub: settings})
+	items = append(items, tray.Item{Text: T("Выход", "Exit"), ID: idExit, LiveLabel: true})
 
 	a.menuText = map[int]string{}
 	var walk func([]tray.Item)

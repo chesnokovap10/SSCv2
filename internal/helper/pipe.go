@@ -43,7 +43,7 @@ func Serve(ownerSID string) error {
 			continue
 		}
 		first = false
-		go serveConn(h)
+		go serveConn(h, ownerSID != "")
 	}
 }
 
@@ -66,7 +66,7 @@ func newPipeInstance(pipe, ownerSID string, first bool) (windows.Handle, error) 
 	return h, nil
 }
 
-func serveConn(h windows.Handle) {
+func serveConn(h windows.Handle, allowPCM bool) {
 	f := os.NewFile(uintptr(h), "pipe")
 	defer func() {
 		windows.FlushFileBuffers(h)
@@ -82,6 +82,12 @@ func serveConn(h windows.Handle) {
 	resp := ipc.Response{}
 	if err := json.Unmarshal(line, &req); err != nil {
 		resp.Error = "bad request"
+	} else if req.Op == budsPCMOperation {
+		if allowPCM {
+			serveBudsPCM(f, r)
+			return
+		}
+		resp.Error = "Buds PCM requires a configured service owner"
 	} else {
 		resp = Handle(req)
 	}
@@ -106,32 +112,11 @@ func callPipe(req ipc.Request) (ipc.Response, error) {
 }
 
 func callPipeAt(pipe string, servicePID uint32, req ipc.Request) (ipc.Response, error) {
-	name := windows.StringToUTF16Ptr(pipe)
-	var h windows.Handle
-	var err error
-	for i := 0; i < 20; i++ {
-		h, err = windows.CreateFile(name, windows.GENERIC_READ|windows.FILE_WRITE_DATA, 0, nil, windows.OPEN_EXISTING,
-			windows.SECURITY_SQOS_PRESENT|windows.SECURITY_IDENTIFICATION, 0)
-		if err == nil {
-			break
-		}
-		if err != windows.ERROR_PIPE_BUSY && err != windows.ERROR_FILE_NOT_FOUND {
-			return ipc.Response{}, ErrNoService
-		}
-		time.Sleep(100 * time.Millisecond)
-	}
+	f, err := connectPipe(pipe, servicePID)
 	if err != nil {
-		return ipc.Response{}, ErrNoService
+		return ipc.Response{}, err
 	}
-	f := os.NewFile(uintptr(h), "pipe")
 	defer f.Close()
-	var pid uint32
-	if err := windows.GetNamedPipeServerProcessId(h, &pid); err != nil {
-		return ipc.Response{}, fmt.Errorf("GetNamedPipeServerProcessId: %w", err)
-	}
-	if pid == 0 || pid != servicePID {
-		return ipc.Response{}, errUnexpectedPipeServer
-	}
 	b, _ := json.Marshal(req)
 	if _, err := f.Write(append(b, '\n')); err != nil {
 		return ipc.Response{}, err
@@ -143,4 +128,36 @@ func callPipeAt(pipe string, servicePID uint32, req ipc.Request) (ipc.Response, 
 	var resp ipc.Response
 	err = json.Unmarshal(line, &resp)
 	return resp, err
+}
+
+func connectPipe(pipe string, servicePID uint32) (*os.File, error) {
+	name := windows.StringToUTF16Ptr(pipe)
+	var h windows.Handle
+	var err error
+	for i := 0; i < 20; i++ {
+		h, err = windows.CreateFile(name, windows.GENERIC_READ|windows.FILE_WRITE_DATA, 0, nil, windows.OPEN_EXISTING,
+			windows.SECURITY_SQOS_PRESENT|windows.SECURITY_IDENTIFICATION, 0)
+		if err == nil {
+			break
+		}
+		if err != windows.ERROR_PIPE_BUSY && err != windows.ERROR_FILE_NOT_FOUND {
+			return nil, ErrNoService
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	if err != nil {
+		return nil, ErrNoService
+	}
+	f := os.NewFile(uintptr(h), "pipe")
+
+	var pid uint32
+	if err := windows.GetNamedPipeServerProcessId(h, &pid); err != nil {
+		f.Close()
+		return nil, fmt.Errorf("GetNamedPipeServerProcessId: %w", err)
+	}
+	if pid == 0 || pid != servicePID {
+		f.Close()
+		return nil, errUnexpectedPipeServer
+	}
+	return f, nil
 }
