@@ -4,6 +4,7 @@
 //
 //	ssc.exe                         tray (default; a copy outside Program Files installs/updates itself first)
 //	ssc.exe install                 copy to Program Files (elevated, from the first run)
+//	ssc.exe --update                update from this build without prompts (already elevated)
 //	ssc.exe uninstall [--yes]       uninstall (through the running tray)
 //	ssc.exe uninstall-system --pid N   machine-wide part of uninstall (elevated)
 //	ssc.exe engine                  streaming process (started by the tray)
@@ -49,6 +50,27 @@ func main() {
 		return ""
 	}
 	switch args[0] {
+	case "--update":
+		if len(args) != 1 {
+			fmt.Fprintln(console(), "usage: ssc.exe --update")
+			os.Exit(2)
+		}
+		if !windows.GetCurrentProcessToken().IsElevated() {
+			fmt.Fprintln(console(), "update requires an elevated process")
+			os.Exit(5)
+		}
+		if !install.Installed() {
+			fmt.Fprintln(console(), "SSCv2 is not installed")
+			os.Exit(1)
+		}
+		logx.Open(config.LogDir(), "helper.log", "helper")
+		if !install.UpToDate() {
+			if err := install.Install(); err != nil {
+				logx.Printf("update: %v", err)
+				fmt.Fprintln(console(), "update:", err)
+				os.Exit(1)
+			}
+		}
 	case "install":
 		logx.Open(config.LogDir(), "helper.log", "helper")
 		if err := install.Install(); err != nil {

@@ -25,6 +25,7 @@ import (
 	"sscv2/internal/keys"
 	"sscv2/internal/logx"
 	"sscv2/internal/mtk"
+	"sscv2/internal/nativebt"
 	"sscv2/internal/tray"
 )
 
@@ -828,23 +829,33 @@ func (a *App) codecChange(m config.Mode) ipc.CodecChange {
 }
 
 func (a *App) setBitrate(kbps int) {
+	a.opMu.Lock()
 	a.mu.Lock()
 	m := a.mode
 	if !m.Streaming() || !a.offered(m, kbps) || a.s.Bitrate(m) == kbps {
 		a.mu.Unlock()
+		a.opMu.Unlock()
 		return
 	}
 	a.s.SetBitrate(m, kbps)
 	_ = config.Save(a.s)
 	defer a.t.RefreshMenu()
+	if p := a.native; p != nil {
+		a.mu.Unlock()
+		a.switchNativeCodec(p, m)
+		a.opMu.Unlock()
+		return
+	}
 	codec, eng, streaming := a.codecChange(m), a.eng, a.st.Streaming
 	if eng != nil && eng.running() && streaming {
 		if err := eng.in.Write(ipc.Command{Cmd: "codec", Codec: &codec}); err == nil {
 			a.mu.Unlock()
+			a.opMu.Unlock()
 			return
 		}
 	}
 	a.mu.Unlock()
+	a.opMu.Unlock()
 	a.restartEngine()
 }
 
@@ -1118,7 +1129,15 @@ func (a *App) workingMax(m config.Mode) (int, string) {
 // (unless "All bitrates") it is not above the headphones' working maximum.
 // a.mu held.
 func (a *App) offered(m config.Mode, kbps int) bool {
-	if !engine.BitrateFits(string(m), kbps, a.s.MaxMTU) {
+	native := a.s.WindowsTestSigning || a.native != nil
+	if native && a.s.AllBitrates {
+		return engine.BitrateFits(string(m), kbps, true)
+	}
+	maxMTU := a.s.MaxMTU && !native
+	if native && m == config.ModeAAC && kbps > nativebt.MaxAACKbps {
+		return false
+	}
+	if !engine.BitrateFits(string(m), kbps, maxMTU) {
 		return false
 	}
 	lim, _ := a.workingMax(m)
@@ -1191,21 +1210,20 @@ func (a *App) menu() []tray.Item {
 		{Text: T("SSC UHQ (96 кГц)", "SSC UHQ (96 kHz)"), ID: idModeUHQ, Radio: true, Checked: mode == config.ModeSSCUHQ, Disabled: busy || a.uhqUnavailable()},
 	}
 	items = append(items, tray.Item{Text: T("Кодек: ", "Codec: ") + modeName(mode), Sub: codecs, LiveLabel: true})
-	if mode.Streaming() && (a.s.WindowsTestSigning || a.native != nil) {
-		// The worker can already be gone while Windows restores A2DP.
-		// Keep the row in place so that refresh doesn't reopen the codec popup.
-		items = append(items, tray.Item{
-			Text:      fmt.Sprintf("%s (Windows Bluetooth), %d kbps", modeName(mode), nativeBitrateKbps(mode)),
-			LiveLabel: true,
-		})
-	} else if a.noBitrate(mode) {
+	if a.noBitrate(mode) {
 		items = append(items, tray.Item{Text: T("Битрейт: — (", "Bitrate: - (") + a.unsupportedText(mode) + ")", LiveLabel: true})
 	} else if mode.Streaming() {
 		cur := a.bitrateFor(mode)
 		label := T("Битрейт: ", "Bitrate: ") + bitrateText(cur)
 		autoRate := ""
-		if a.st.Streaming && a.st.Codec == modeName(mode) && a.st.BitrateKbps > 0 && cur == 0 {
-			autoRate = fmt.Sprintf(T("%d кбит/с", "%d kbps"), a.st.BitrateKbps)
+		var activeRate int
+		if p := a.native; p != nil && p.mode == mode && p.ready {
+			activeRate = p.kbps
+		} else if a.st.Streaming && a.st.Codec == modeName(mode) {
+			activeRate = a.st.BitrateKbps
+		}
+		if activeRate > 0 && cur == 0 {
+			autoRate = fmt.Sprintf(T("%d кбит/с", "%d kbps"), activeRate)
 			label += " (" + autoRate + ")"
 		}
 		var sub []tray.Item
@@ -1224,11 +1242,14 @@ func (a *App) menu() []tray.Item {
 			t := bitrateText(b)
 			if b == 0 {
 				hint := autoRate
-				if hint == "" {
+				if hint == "" && a.s.WindowsTestSigning {
+					hint = fmt.Sprintf(T("%d кбит/с", "%d kbps"), a.nativeAutoBitrateLocked(mode))
+				} else if hint == "" {
 					hint = autoHint(mode, a.s.MaxMTU, lim, model, showLimit)
 				}
 				t += " (" + hint + ")"
-			} else if lim > 0 && b > lim || lim < 0 {
+			} else if lim > 0 && b > lim || lim < 0 ||
+				(a.s.WindowsTestSigning || a.native != nil) && (!engine.BitrateFits(string(mode), b, false) || mode == config.ModeAAC && b > nativebt.MaxAACKbps) {
 				t += T(" - не проверен", " - not checked")
 			}
 			sub = append(sub, tray.Item{Text: t, ID: idBitrateBase + b, Radio: true, Checked: b == cur, Disabled: busy})

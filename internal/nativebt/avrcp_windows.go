@@ -6,8 +6,6 @@ import (
 	"io"
 	"os"
 	"time"
-
-	"sscv2/internal/audio"
 )
 
 type avrcpPacket struct {
@@ -20,13 +18,19 @@ func avrcpFrame(header, ctype, pdu byte, data ...byte) []byte {
 }
 
 // runAVRCP keeps the incoming control channel alive independently of AVDTP.
-func runAVRCP(ctx context.Context, path, endpoint string, ready func(), out io.Writer) error {
+func runAVRCP(ctx context.Context, path string, out io.Writer) error {
 	link, err := os.OpenFile(path+"-R", os.O_RDWR, 0)
 	if err != nil {
 		return fmt.Errorf("accept Buds AVRCP: %w", err)
 	}
 	defer link.Close()
 	fmt.Fprintln(out, "Buds AVRCP channel accepted")
+	send := func(data []byte) error { _, err := link.Write(data); return err }
+	// Send before posting a blocking read on the synchronous device handle.
+	const volumeHeader = 0x20
+	if err := send(avrcpFrame(volumeHeader, 0, 0x50, 127)); err != nil {
+		return fmt.Errorf("set Buds AVRCP volume: %w", err)
+	}
 	packets := make(chan avrcpPacket, 1)
 	go func() {
 		for {
@@ -42,44 +46,15 @@ func runAVRCP(ctx context.Context, path, endpoint string, ready func(), out io.W
 			}
 		}
 	}()
-	send := func(data []byte) error { _, err := link.Write(data); return err }
-	if err := send(avrcpFrame(0x10, 1, 0x10, 3)); err != nil {
-		return err
-	}
-	ticker := time.NewTicker(25 * time.Millisecond)
-	defer ticker.Stop()
-	capability := false
-	pending := false
-	last := -1
-	label := byte(1)
-	var deadline time.Time
+	timeout := time.NewTimer(time.Second)
+	defer timeout.Stop()
+	confirmation := timeout.C
 	for {
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
-		case <-ticker.C:
-			if pending && time.Now().After(deadline) {
-				return fmt.Errorf("Buds did not confirm AVRCP volume")
-			}
-			if !capability || pending {
-				continue
-			}
-			scalar, muted, err := audio.EndpointVolume(endpoint)
-			if err != nil {
-				return err
-			}
-			level := int(audio.ScalarTo127(scalar))
-			if muted {
-				level = 0
-			}
-			if level == last {
-				continue
-			}
-			label = (label + 1) & 15
-			if err := send(avrcpFrame(label<<4, 0, 0x50, byte(level))); err != nil {
-				return err
-			}
-			last, pending, deadline = level, true, time.Now().Add(time.Second)
+		case <-confirmation:
+			return fmt.Errorf("Buds did not confirm AVRCP volume")
 		case packet := <-packets:
 			if packet.err != nil {
 				return fmt.Errorf("Buds AVRCP read: %w", packet.err)
@@ -120,15 +95,11 @@ func runAVRCP(ctx context.Context, path, endpoint string, ready func(), out io.W
 				}
 				continue
 			}
-			if p[0] == 0x12 && p[9] == 0x10 && p[3] == 0x0c {
-				capability = true
-			}
-			if p[0] == (label<<4|2) && p[9] == 0x50 && pending {
+			if p[0] == volumeHeader|2 && p[9] == 0x50 && confirmation != nil {
 				if p[3] != 0x09 || len(p) < 14 {
 					return fmt.Errorf("Buds rejected AVRCP volume")
 				}
-				pending = false
-				ready()
+				confirmation = nil
 				fmt.Fprintf(out, "AVRCP volume acknowledged: %d\n", p[13])
 			}
 		}

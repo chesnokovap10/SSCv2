@@ -6,34 +6,54 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"slices"
+	"strconv"
 	"strings"
 	"time"
 
 	"sscv2/internal/audio"
 	"sscv2/internal/config"
 	"sscv2/internal/driver"
+	"sscv2/internal/engine"
 	"sscv2/internal/helper"
 	"sscv2/internal/ipc"
 	"sscv2/internal/nativebt"
 )
 
 type nativeProcess struct {
-	mode    config.Mode
-	process *os.Process
-	input   io.WriteCloser
-	done    chan struct{}
-	started chan struct{}
-	ready   bool
+	mode        config.Mode
+	kbps        int
+	process     *os.Process
+	input       io.WriteCloser
+	done        chan struct{}
+	started     chan struct{}
+	ready       bool
+	lastAACKbps int
 }
 
-func nativeBitrateKbps(mode config.Mode) int {
-	if mode == config.ModeSSCUHQ {
-		return nativebt.SSCUHQKbps
+// nativeBitrateLocked resolves Auto to the native transport's default.
+func (a *App) nativeBitrateLocked(mode config.Mode) int {
+	if kbps := a.bitrateFor(mode); kbps != 0 {
+		return kbps
 	}
-	if mode == config.ModeSSC {
-		return nativebt.SSCProbeKbps
+	return a.nativeAutoBitrateLocked(mode)
+}
+
+func (a *App) nativeAutoBitrateLocked(mode config.Mode) int {
+	if mode == config.ModeAAC {
+		return nativebt.MaxAACKbps
 	}
-	return 192
+	limit, _ := a.workingMax(mode)
+	best := 0
+	for _, kbps := range bitrates[mode] {
+		if kbps > best && (limit <= 0 || kbps <= limit) && engine.BitrateFits(string(mode), kbps, false) {
+			best = kbps
+		}
+	}
+	if best == 0 {
+		return nativebt.DefaultBitrate(mode)
+	}
+	return best
 }
 
 // startNativeAudio runs with opMu held.
@@ -109,14 +129,23 @@ func (a *App) startNativeAudio(mode config.Mode) {
 			time.Sleep(50 * time.Millisecond)
 		}
 	}
+	var stereoVolume *config.StereoVolume
+	stereo := budsStereoOutput(audio.List(false, audio.StateActive), output, budsName)
+	if stereo != "" {
+		if level, muted, err := audio.EndpointVolume(stereo); err == nil {
+			stereoVolume = &config.StereoVolume{Level: level, Muted: muted}
+		}
+	}
 	// Persist the route before changing defaults or releasing Windows A2DP.
 	a.mu.Lock()
 	a.s.NativeA2DPAddress, a.s.NativeRenderEndpoint = address, output
 	a.s.NativePreviousOutputs = previous
+	a.s.NativeStereoVolume = stereoVolume
 	err = config.Save(a.s)
 	if err != nil {
 		a.s.NativeA2DPAddress, a.s.NativeRenderEndpoint = "", ""
 		a.s.NativePreviousOutputs = nil
+		a.s.NativeStereoVolume = nil
 	}
 	a.mu.Unlock()
 	if err != nil {
@@ -138,20 +167,22 @@ func (a *App) startNativeAudio(mode config.Mode) {
 	}
 
 	if _, err := helper.Call(ipc.Request{Op: "native-avrcp-release", Device: address}); err != nil {
-		a.nativeError(errors.Join(err, a.stopNativeAudio()))
-		return
+		logf("Buds AVRCP release: %v", err)
 	}
-	a.startNativeWorker(mode, path, output, address)
+	a.startNativeWorker(mode, path, output, address, stereo)
 }
 
-func (a *App) startNativeWorker(mode config.Mode, path, endpoint, address string) {
-	process, input, output, err := startWorker(selfPath(), "native-"+string(mode)+"-worker", path, endpoint, address)
+func (a *App) startNativeWorker(mode config.Mode, path, endpoint, address, stereo string) {
+	a.mu.Lock()
+	kbps := a.nativeBitrateLocked(mode)
+	a.mu.Unlock()
+	process, input, output, err := startWorker(selfPath(), "native-"+string(mode)+"-worker", path, endpoint, address, stereo, strconv.Itoa(kbps))
 	if err != nil {
 		a.nativeError(errors.Join(err, a.stopNativeAudio()))
 		return
 	}
 
-	p := &nativeProcess{mode: mode, process: process, input: input, done: make(chan struct{}), started: make(chan struct{})}
+	p := &nativeProcess{mode: mode, kbps: kbps, process: process, input: input, done: make(chan struct{}), started: make(chan struct{})}
 	a.mu.Lock()
 	a.native = p
 	a.mu.Unlock()
@@ -171,13 +202,18 @@ func (a *App) switchNativeCodec(p *nativeProcess, mode config.Mode) {
 	}
 	started := make(chan struct{})
 	a.mu.Lock()
-	p.mode, p.ready, p.started = mode, false, started
+	kbps := a.nativeBitrateLocked(mode)
+	if p.mode == mode && p.kbps == kbps {
+		a.mu.Unlock()
+		return
+	}
+	p.mode, p.kbps, p.ready, p.started = mode, kbps, false, started
 	a.mu.Unlock()
-	if _, err := fmt.Fprintln(p.input, mode); err != nil {
+	if _, err := fmt.Fprintln(p.input, mode, kbps); err != nil {
 		a.nativeError(errors.Join(err, a.stopNativeAudio()))
 		return
 	}
-	logf("native worker: switching to %s on PID %d", mode, p.process.Pid)
+	logf("native worker: switching to %s at %d kbps on PID %d", mode, kbps, p.process.Pid)
 	go a.watchNativeStartup(p, started)
 	a.setMode(mode)
 }
@@ -203,15 +239,19 @@ func (a *App) watchNativeAudio(p *nativeProcess, output io.ReadCloser) {
 	for scanner.Scan() {
 		line := scanner.Text()
 		a.mu.Lock()
-		mode := p.mode
+		mode, kbps := p.mode, p.kbps
 		ready := line == "native-"+string(mode)+"-ready"
 		if ready && !p.ready {
 			p.ready = true
+			if mode == config.ModeAAC {
+				p.lastAACKbps = kbps
+			}
 			close(p.started)
 		}
 		a.mu.Unlock()
 		if ready {
 			logf("native %s: ready", mode)
+			logf("native %s: streaming at %d kbps", mode, kbps)
 			a.refresh()
 		} else {
 			last = line
@@ -239,6 +279,26 @@ func (a *App) watchNativeAudio(p *nativeProcess, output io.ReadCloser) {
 	}
 	if last != "" {
 		err = fmt.Errorf("%w: %s", err, last)
+	}
+	if p.mode == config.ModeAAC && !p.ready {
+		fallback := p.lastAACKbps
+		if fallback == 0 && p.kbps > nativebt.MaxAACKbps {
+			fallback = nativebt.MaxAACKbps
+		}
+		if fallback != 0 && fallback != p.kbps {
+			logf("native AAC: %d kbps failed, retrying at %d kbps: %v", p.kbps, fallback, err)
+			if cleanupErr := a.stopNativeAudio(); cleanupErr != nil {
+				a.nativeError(errors.Join(err, cleanupErr))
+				return
+			}
+			a.mu.Lock()
+			a.s.SetBitrate(config.ModeAAC, fallback)
+			a.mu.Unlock()
+			a.t.Balloon("SSCv2", fmt.Sprintf(T("AAC %d кбит/с не запустился. Повторная попытка на %d кбит/с.", "AAC %d kbps failed to start. Retrying at %d kbps."), p.kbps, fallback), 2)
+			a.startNativeAudio(config.ModeAAC)
+			a.setBusy("")
+			return
+		}
 	}
 	a.nativeError(errors.Join(err, a.stopNativeAudio()))
 }
@@ -270,6 +330,7 @@ func (a *App) resumeNativeStereo() error {
 	a.mu.Lock()
 	address, render := a.s.NativeA2DPAddress, a.s.NativeRenderBound
 	output, previous := a.s.NativeRenderEndpoint, a.s.NativePreviousOutputs
+	stereoVolume := a.s.NativeStereoVolume
 	var budsName string
 	if a.s.Headphones != nil {
 		budsName = a.s.Headphones.Name
@@ -283,30 +344,45 @@ func (a *App) resumeNativeStereo() error {
 		}
 		wasDefault[role] = output != "" && current.ID == output
 	}
-	for _, endpoint := range audio.List(false, audio.StateActive) {
-		if isBudsRender(endpoint) {
-			if err := audio.SetRenderVisible(endpoint.ID, false); err != nil {
-				return err
-			}
-		}
-	}
 	if address == "" {
-		return nil
+		return hideNativeRender()
 	}
 	op := "native-a2dp-resume"
 	if render {
 		op = "native-render-restore"
+	}
+	if stereoVolume != nil && budsName != "" {
+		settled, cancel, done := make(chan struct{}), make(chan struct{}), make(chan struct{})
+		go func() {
+			defer close(done)
+			audio.RestoreHeadphonesVolume(budsName, stereoVolume.Level, stereoVolume.Muted, 8*time.Second, logf, settled, cancel)
+		}()
+		defer func() { close(cancel); <-done }()
 	}
 	if _, err := helper.Call(ipc.Request{Op: op, Device: address}); err != nil {
 		return err
 	}
 	if output != "" {
 		endpoints := audio.List(false, audio.StateActive)
+		buds := budsStereoOutput(endpoints, output, budsName)
+		for deadline := time.Now().Add(3 * time.Second); (stereoVolume != nil || slices.Contains(wasDefault, true)) && budsName != "" && buds == "" && time.Now().Before(deadline); {
+			time.Sleep(50 * time.Millisecond)
+			endpoints = audio.List(false, audio.StateActive)
+			buds = budsStereoOutput(endpoints, output, budsName)
+		}
+		if buds != "" && stereoVolume != nil {
+			if err := audio.SetEndpointVolume(buds, stereoVolume.Level, stereoVolume.Muted); err != nil {
+				return err
+			}
+		}
 		for role, id := range previous {
 			if !wasDefault[role] {
 				continue
 			}
-			target := previousRenderOutput(endpoints, output, id, budsName)
+			target := buds
+			if target == "" {
+				target = previousRenderOutput(endpoints, output, id, budsName)
+			}
 			if target != "" {
 				if err := audio.SetDefaultRenderRole(target, role); err != nil {
 					return err
@@ -314,16 +390,45 @@ func (a *App) resumeNativeStereo() error {
 			}
 		}
 	}
+	if err := hideNativeRender(); err != nil {
+		return err
+	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.s.NativeA2DPAddress, a.s.NativeRenderBound = "", false
 	a.s.NativeRenderEndpoint, a.s.NativePreviousOutputs = "", nil
+	a.s.NativeStereoVolume = nil
 	if err := config.Save(a.s); err != nil {
 		a.s.NativeA2DPAddress, a.s.NativeRenderBound = address, render
 		a.s.NativeRenderEndpoint, a.s.NativePreviousOutputs = output, previous
+		a.s.NativeStereoVolume = stereoVolume
 		return err
 	}
 	return nil
+}
+
+func hideNativeRender() error {
+	for _, endpoint := range audio.List(false, audio.StateActive) {
+		if isBudsRender(endpoint) {
+			if err := audio.SetRenderVisible(endpoint.ID, false); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func budsStereoOutput(endpoints []audio.Endpoint, waveID, budsName string) string {
+	name := strings.ToLower(budsName)
+	if name == "" {
+		return ""
+	}
+	for _, endpoint := range endpoints {
+		if endpoint.ID != waveID && strings.Contains(strings.ToLower(endpoint.Name), name) {
+			return endpoint.ID
+		}
+	}
+	return ""
 }
 
 func isBudsRender(endpoint audio.Endpoint) bool {

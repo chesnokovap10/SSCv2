@@ -46,12 +46,19 @@ func TestNativeCodecMenuWhileRestoringA2DP(t *testing.T) {
 	t.Setenv("APPDATA", t.TempDir())
 	a := &App{
 		mode: config.ModeSSC,
-		s:    &config.Settings{Mode: config.ModeSSC, WindowsTestSigning: true},
+		s:    &config.Settings{Mode: config.ModeSSC, WindowsTestSigning: true, Headphones: &config.Device{Name: "Buds2 Pro"}},
 	}
 	// The worker has stopped, but Off is published only after A2DP restores.
 	items := a.menu()
-	if len(items[3].Sub) != 4 || items[4].Sub != nil || !strings.Contains(items[4].Text, "128 kbps") {
+	if len(items[3].Sub) != 4 || items[4].SubRevision != string(config.ModeSSC) ||
+		len(items[4].Sub) == 0 || !items[4].Sub[0].Checked || !strings.Contains(items[4].Sub[0].Text, "229") {
 		t.Fatalf("unexpected codec and bitrate rows during restore: %+v", items[3:5])
+	}
+	a.s.SSCBitrate = 192
+	items = a.menu()
+	item, found := findMenuItem(items, idBitrateBase+192)
+	if !found || !item.Checked || !strings.Contains(items[4].Text, "192") {
+		t.Fatalf("native SSC bitrate selection was not reflected in the menu: %+v", items[4])
 	}
 	a.mode = config.ModeOff
 	items = a.menu()

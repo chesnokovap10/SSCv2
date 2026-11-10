@@ -81,7 +81,7 @@ func (p *probe) command(signal byte, payload ...byte) ([]byte, error) {
 	}
 }
 
-func inspect(ctx context.Context, link io.ReadWriter, out io.Writer, openMedia func() (io.WriteCloser, error), send func(io.Writer, io.Writer) error, mode config.Mode) error {
+func inspect(ctx context.Context, link io.ReadWriter, out io.Writer, openMedia func() (io.WriteCloser, error), send func(io.Writer, io.Writer) error, mode config.Mode, kbps int) error {
 	p := probe{link: link}
 	endpoints, err := p.command(discover)
 	if err != nil {
@@ -118,7 +118,7 @@ func inspect(ctx context.Context, link io.ReadWriter, out io.Writer, openMedia f
 				}
 				fmt.Fprintf(out, "  media type %#x, codec %#02x, data % x\n", value[0]>>4, value[1], value[2:])
 				if selectedSEID == 0 && endpoints[i]&2 == 0 && openMedia != nil {
-					selectedCodec = probeCodecConfiguration(mode, value)
+					selectedCodec = probeCodecConfiguration(mode, value, kbps)
 					if selectedCodec != nil {
 						selectedSEID = seid
 					}
@@ -142,16 +142,19 @@ func inspect(ctx context.Context, link io.ReadWriter, out io.Writer, openMedia f
 // MPEG-2 AAC LC, 48 kHz, stereo, constant 192 kbit/s.
 const probeAACBitrate = 192000
 
-func supportsProbeAAC(codec []byte) bool {
+// MaxAACKbps keeps AAC frames within the Windows Bluetooth media channel.
+const MaxAACKbps = 224
+
+func supportsProbeAAC(codec []byte, bitrate int) bool {
 	if len(codec) != 8 || codec[0]>>4 != 0 || codec[1] != 2 ||
 		codec[2]&0x80 == 0 || codec[4]&0x84 != 0x84 {
 		return false
 	}
 	maxBitrate := int(codec[5]&0x7f)<<16 | int(codec[6])<<8 | int(codec[7])
-	return maxBitrate == 0 || maxBitrate >= probeAACBitrate
+	return maxBitrate == 0 || maxBitrate >= bitrate
 }
 
-func probeCodecConfiguration(mode config.Mode, codec []byte) []byte {
+func probeCodecConfiguration(mode config.Mode, codec []byte, kbps int) []byte {
 	if mode == config.ModeSSC || mode == config.ModeSSCUHQ {
 		rateFlag := byte(0x04)
 		if mode == config.ModeSSCUHQ {
@@ -164,10 +167,10 @@ func probeCodecConfiguration(mode config.Mode, codec []byte) []byte {
 		}
 		return []byte{0, 0xff, 0x75, 0, 0, 0, 0x03, 0x01, rateFlag | codec[8]&0x08}
 	}
-	if !supportsProbeAAC(codec) {
+	bitrate := uint32(kbps * 1000)
+	if !supportsProbeAAC(codec, int(bitrate)) {
 		return nil
 	}
-	bitrate := uint32(probeAACBitrate)
 	return []byte{0, 2, 0x80, 0, 0x84, byte(bitrate >> 16), byte(bitrate >> 8), byte(bitrate)}
 }
 
@@ -208,7 +211,7 @@ func (p *probe) checkConfiguration(ctx context.Context, out io.Writer, seid byte
 }
 
 func sendAACTone(media io.Writer, out io.Writer) error {
-	return sendAAC(media, out, 2*48000, "440 Hz test tone", true, func(pcm []int16, offset int) error {
+	return sendAAC(media, out, probeAACBitrate/1000, 2*48000, "440 Hz test tone", true, func(pcm []int16, offset int) error {
 		for i := 0; i < len(pcm)/2; i++ {
 			sample := toneSample(offset+i, 2*48000)
 			pcm[2*i], pcm[2*i+1] = sample, sample
@@ -222,16 +225,20 @@ func toneSample(index, samples int) int16 {
 	return int16(2600 * envelope * math.Sin(2*math.Pi*440*float64(index)/48000))
 }
 
-func sendAAC(media io.Writer, out io.Writer, samples int, source string, pace bool, fill func([]int16, int) error) error {
+func sendAAC(media io.Writer, out io.Writer, kbps, samples int, source string, pace bool, fill func([]int16, int) error) error {
 	const sampleRate = 48000
-	encoder, err := aac.New(sampleRate, 2, probeAACBitrate, 600)
+	budget := 600
+	if kbps > MaxAACKbps {
+		budget = 1005
+	}
+	encoder, err := aac.New(sampleRate, 2, kbps*1000, budget)
 	if err != nil {
 		return fmt.Errorf("initialize AAC tone encoder: %w", err)
 	}
 	defer encoder.Close()
 
 	pcm := make([]int16, encoder.FrameLen*2)
-	var packet [612]byte
+	packet := make([]byte, 12+budget)
 	packet[0], packet[1] = 0x80, 0xe0 // RTP v2, marker, dynamic payload type 96.
 	binary.BigEndian.PutUint32(packet[8:12], 1)
 	started := time.Now()
@@ -264,7 +271,7 @@ func sendAAC(media io.Writer, out io.Writer, samples int, source string, pace bo
 		size := 12 + len(payload)
 		n, err := media.Write(packet[:size])
 		if err != nil {
-			return fmt.Errorf("write AAC packet %d: %w", sequence, err)
+			return fmt.Errorf("write AAC packet %d (%d bytes): %w", sequence, size, err)
 		}
 		if n != size {
 			return io.ErrShortWrite
@@ -342,28 +349,34 @@ func runWithRender(ctx context.Context, args []string, out io.Writer, live bool,
 			return err
 		}
 	}
+	connectStarted := time.Now()
 	link, err := openChannel(ctx, path, live)
 	if err != nil {
 		return err
 	}
 	defer link.Close()
+	fmt.Fprintf(out, "AVDTP signaling opened in %v\n", time.Since(connectStarted).Round(time.Millisecond))
 	var openMedia func() (io.WriteCloser, error)
 	if checkAAC {
 		openMedia = func() (io.WriteCloser, error) {
 			return openChannel(ctx, path, live)
 		}
 	}
+	kbps := DefaultBitrate(mode)
+	if render != nil {
+		kbps = render.kbps
+	}
 	send := sendAACTone
 	if render != nil {
 		send = func(media io.Writer, out io.Writer) error {
-			return sendPCM(media, out, mode, 0, "Buds WaveRT", true, func(pcm []float32, _ int) error {
+			return sendPCM(media, out, mode, kbps, 0, "Buds WaveRT", true, func(pcm []float32, _ int) error {
 				return render.fill(ctx, pcm)
 			})
 		}
 	} else if loopback != 0 {
 		send = func(media io.Writer, out io.Writer) error { return sendLoopback(ctx, media, out, loopback, mode) }
 	}
-	return inspect(ctx, link, out, openMedia, send, mode)
+	return inspect(ctx, link, out, openMedia, send, mode, kbps)
 }
 
 func openChannel(ctx context.Context, path string, live bool) (*os.File, error) {

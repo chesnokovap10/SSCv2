@@ -95,7 +95,7 @@ func sendLoopback(ctx context.Context, media io.Writer, out io.Writer, duration 
 		}
 		return nil
 	}
-	err = sendPCM(media, out, mode, int(duration/time.Second)*48000, "WASAPI loopback", live, fill)
+	err = sendPCM(media, out, mode, DefaultBitrate(mode), int(duration/time.Second)*48000, "WASAPI loopback", live, fill)
 	if err != nil {
 		return err
 	}
@@ -107,12 +107,12 @@ func sendLoopback(ctx context.Context, media io.Writer, out io.Writer, duration 
 }
 
 // sendPCM encodes interleaved 48 kHz stereo PCM independently of its source.
-func sendPCM(media io.Writer, out io.Writer, mode config.Mode, frames int, source string, pace bool, fill func([]float32, int) error) error {
+func sendPCM(media io.Writer, out io.Writer, mode config.Mode, kbps, frames int, source string, pace bool, fill func([]float32, int) error) error {
 	if mode == config.ModeSSC || mode == config.ModeSSCUHQ {
-		return sendSSCLive(media, out, mode, fill)
+		return sendSSCLive(media, out, mode, kbps, fill)
 	}
 	var stereo []float32
-	return sendAAC(media, out, frames, source, pace, func(pcm []int16, _ int) error {
+	return sendAAC(media, out, kbps, frames, source, pace, func(pcm []int16, _ int) error {
 		if stereo == nil {
 			stereo = make([]float32, len(pcm))
 		}
@@ -127,11 +127,11 @@ func sendPCM(media io.Writer, out io.Writer, mode config.Mode, frames int, sourc
 }
 
 // SSC uses one raw frame per RTP packet, with a packet-count timestamp.
-func sendSSCLive(media io.Writer, out io.Writer, mode config.Mode, fill func([]float32, int) error) error {
-	rate, kbps, frames := 48000, SSCProbeKbps, ssc.FrameLen
+func sendSSCLive(media io.Writer, out io.Writer, mode config.Mode, kbps int, fill func([]float32, int) error) error {
+	rate, frames := 48000, ssc.FrameLen
 	var up *audio.Upsampler2x
 	if mode == config.ModeSSCUHQ {
-		rate, kbps, frames = 96000, SSCUHQKbps, ssc.FrameLen/2
+		rate, frames = 96000, ssc.FrameLen/2
 		up = audio.NewUpsampler2x()
 	}
 	encoder, err := ssc.New(rate, kbps*1000)
@@ -144,6 +144,8 @@ func sendSSCLive(media io.Writer, out io.Writer, mode config.Mode, fill func([]f
 	packet := make([]byte, 12, 12+ssc.FrameBytes(rate, kbps*1000))
 	packet[0], packet[1] = 0x80, 0x60
 	binary.BigEndian.PutUint32(packet[8:12], 1)
+	var started time.Time
+	frameDuration := time.Second * time.Duration(ssc.FrameLen) / time.Duration(rate)
 	for count := uint32(0); ; count++ {
 		if err := fill(pcm, frames); err != nil {
 			return err
@@ -159,6 +161,10 @@ func sendSSCLive(media io.Writer, out io.Writer, mode config.Mode, fill func([]f
 		binary.BigEndian.PutUint16(packet[2:4], uint16(count))
 		binary.BigEndian.PutUint32(packet[4:8], count+1)
 		packet = append(packet[:12], frame...)
+		if count == 0 {
+			started = time.Now()
+		}
+		time.Sleep(time.Until(started.Add(time.Duration(count) * frameDuration)))
 		n, err := media.Write(packet)
 		if err != nil {
 			return fmt.Errorf("write SSC packet %d: %w", count, err)
@@ -200,4 +206,15 @@ func playLoopbackTone() bool {
 	result, _, _ := play.Call(uintptr(unsafe.Pointer(&wav[0])), 0, 0x0006) // SND_MEMORY | SND_NODEFAULT
 	runtime.KeepAlive(wav)
 	return result != 0
+}
+
+func DefaultBitrate(mode config.Mode) int {
+	switch mode {
+	case config.ModeSSC:
+		return SSCProbeKbps
+	case config.ModeSSCUHQ:
+		return SSCUHQKbps
+	default:
+		return probeAACBitrate / 1000
+	}
 }

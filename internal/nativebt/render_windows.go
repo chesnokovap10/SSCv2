@@ -12,6 +12,7 @@ import (
 )
 
 type renderPCM struct {
+	kbps   int
 	gain   func() float32
 	read   func([]byte) (int, error)
 	buffer [4096]byte
@@ -35,11 +36,11 @@ func runRender(ctx context.Context, args []string, wavePath string, out io.Write
 		return err
 	}
 	defer device.Close()
-	return runRenderPCM(ctx, args, out, mode, device.Read, nil)
+	return runRenderPCM(ctx, args, out, mode, DefaultBitrate(mode), device.Read, nil)
 }
 
-func runRenderPCM(ctx context.Context, args []string, out io.Writer, mode config.Mode, read func([]byte) (int, error), gain func() float32) error {
-	render := &renderPCM{read: read, gain: gain}
+func runRenderPCM(ctx context.Context, args []string, out io.Writer, mode config.Mode, kbps int, read func([]byte) (int, error), gain func() float32) error {
+	render := &renderPCM{kbps: kbps, read: read, gain: gain}
 	if _, err := render.read(render.buffer[:4]); err != nil {
 		return err
 	}
