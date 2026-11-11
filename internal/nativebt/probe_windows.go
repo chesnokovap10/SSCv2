@@ -242,6 +242,8 @@ func sendAAC(media io.Writer, out io.Writer, kbps, samples int, source string, p
 	packet[0], packet[1] = 0x80, 0xe0 // RTP v2, marker, dynamic payload type 96.
 	binary.BigEndian.PutUint32(packet[8:12], 1)
 	started := time.Now()
+	var pacer packetPacer
+	frameDuration := time.Second * time.Duration(encoder.FrameLen) / sampleRate
 	var sequence uint16
 	var timestamp uint64
 	if samples == 0 {
@@ -264,9 +266,8 @@ func sendAAC(media io.Writer, out io.Writer, kbps, samples int, source string, p
 		binary.BigEndian.PutUint16(packet[2:4], sequence)
 		binary.BigEndian.PutUint32(packet[4:8], uint32(timestamp))
 		copy(packet[12:], payload)
-		deadline := started.Add(time.Duration(timestamp) * time.Second / sampleRate)
 		if pace {
-			time.Sleep(time.Until(deadline))
+			pacer.wait(frameDuration)
 		}
 		size := 12 + len(payload)
 		n, err := media.Write(packet[:size])
@@ -285,7 +286,11 @@ func sendAAC(media io.Writer, out io.Writer, kbps, samples int, source string, p
 	if timestamp == 0 {
 		return fmt.Errorf("AAC encoder produced no packets")
 	}
-	time.Sleep(time.Until(started.Add(time.Duration(timestamp)*time.Second/sampleRate + 150*time.Millisecond)))
+	finished := started.Add(time.Duration(timestamp) * time.Second / sampleRate)
+	if pace {
+		finished = pacer.next
+	}
+	time.Sleep(time.Until(finished.Add(150 * time.Millisecond)))
 	fmt.Fprintf(out, "Sent %d AAC RTP packets (%s)\n", timestamp/uint64(encoder.FrameLen), source)
 	return nil
 }

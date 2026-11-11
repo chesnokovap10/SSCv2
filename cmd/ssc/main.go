@@ -187,7 +187,7 @@ func main() {
 		case "native-ssc_uhq-worker":
 			mode = config.ModeSSCUHQ
 		}
-		if err := nativebt.RunWorker(os.Stdin, os.Stdout, args[1:], mode); err != nil {
+		if err := nativebt.RunWorker(os.Stdin, os.Stdout, args[1:], mode, engine.HandleMediaKey); err != nil {
 			fmt.Fprintf(os.Stdout, "native worker: %v\n", err)
 			os.Exit(1)
 		}

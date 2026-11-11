@@ -18,7 +18,7 @@ import (
 
 // RunWorker keeps the process alive across codec changes. Each change releases
 // the old AVDTP stream before negotiating the next one.
-func RunWorker(input io.Reader, out io.Writer, args []string, mode config.Mode) error {
+func RunWorker(input io.Reader, out io.Writer, args []string, mode config.Mode, handleMediaKey func(int)) error {
 	if len(args) != 5 || args[1] == "" {
 		return errors.New("native worker requires a profile path, render endpoint, device address, stereo endpoint and bitrate")
 	}
@@ -30,11 +30,7 @@ func RunWorker(input io.Reader, out io.Writer, args []string, mode config.Mode) 
 	args = args[:1]
 	controlCtx, stopControl := context.WithCancel(context.Background())
 	defer stopControl()
-	go func() {
-		if err := runAVRCP(controlCtx, args[0], out); err != nil && !errors.Is(err, context.Canceled) {
-			fmt.Fprintf(out, "Buds AVRCP unavailable: %v\n", err)
-		}
-	}()
+	go watchAVRCP(controlCtx, args[0], out, handleMediaKey)
 	started := time.Now()
 	released := make(chan error, 1)
 	go func(completed chan<- error) {

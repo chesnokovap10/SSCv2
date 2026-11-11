@@ -126,6 +126,21 @@ func sendPCM(media io.Writer, out io.Writer, mode config.Mode, kbps, frames int,
 	})
 }
 
+// packetPacer keeps the sample clock during small scheduling delays. Rebase
+// after a larger stall so queued packets are not sent in a burst.
+type packetPacer struct {
+	next time.Time
+}
+
+func (p *packetPacer) wait(period time.Duration) {
+	time.Sleep(time.Until(p.next))
+	now := time.Now()
+	if p.next.IsZero() || now.Sub(p.next) >= period/2 {
+		p.next = now
+	}
+	p.next = p.next.Add(period)
+}
+
 // SSC uses one raw frame per RTP packet, with a packet-count timestamp.
 func sendSSCLive(media io.Writer, out io.Writer, mode config.Mode, kbps int, fill func([]float32, int) error) error {
 	rate, frames := 48000, ssc.FrameLen
@@ -144,7 +159,7 @@ func sendSSCLive(media io.Writer, out io.Writer, mode config.Mode, kbps int, fil
 	packet := make([]byte, 12, 12+ssc.FrameBytes(rate, kbps*1000))
 	packet[0], packet[1] = 0x80, 0x60
 	binary.BigEndian.PutUint32(packet[8:12], 1)
-	var started time.Time
+	var pacer packetPacer
 	frameDuration := time.Second * time.Duration(ssc.FrameLen) / time.Duration(rate)
 	for count := uint32(0); ; count++ {
 		if err := fill(pcm, frames); err != nil {
@@ -161,10 +176,7 @@ func sendSSCLive(media io.Writer, out io.Writer, mode config.Mode, kbps int, fil
 		binary.BigEndian.PutUint16(packet[2:4], uint16(count))
 		binary.BigEndian.PutUint32(packet[4:8], count+1)
 		packet = append(packet[:12], frame...)
-		if count == 0 {
-			started = time.Now()
-		}
-		time.Sleep(time.Until(started.Add(time.Duration(count) * frameDuration)))
+		pacer.wait(frameDuration)
 		n, err := media.Write(packet)
 		if err != nil {
 			return fmt.Errorf("write SSC packet %d: %w", count, err)

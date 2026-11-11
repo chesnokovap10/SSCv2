@@ -4,6 +4,8 @@ import (
 	"unsafe"
 
 	"golang.org/x/sys/windows"
+
+	"sscv2/internal/bt"
 )
 
 var procSendInput = windows.NewLazySystemDLL("user32.dll").NewProc("SendInput")
@@ -41,3 +43,17 @@ func pressKey(vk uint16) {
 // mediaPlayPause presses the system Play/Pause media key (browsers and
 // players pause on it, like when Bluetooth headphones go into their case).
 func mediaPlayPause() { pressKey(vkMediaPlayPause) }
+
+// HandleMediaKey routes a headset button to the current Windows player.
+func HandleMediaKey(key int) {
+	switch key {
+	case bt.MediaNext:
+		mediaTrackCommand(mediaNextTrack)
+	case bt.MediaPrev:
+		mediaTrackCommand(mediaPreviousTrack)
+	case bt.MediaPlayPause:
+		mediaPlayPause()
+	case bt.MediaStop:
+		pressKey(vkMediaStop)
+	}
+}

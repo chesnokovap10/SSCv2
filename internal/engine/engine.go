@@ -724,16 +724,7 @@ func (e *engine) btEvents() {
 		case bt.EvMouse:
 			e.update(func(s *ipc.EngineStatus) { s.MouseState = ev.Mouse })
 		case bt.EvMediaKey:
-			switch ev.Media {
-			case bt.MediaNext:
-				mediaTrackCommand(mediaNextTrack)
-			case bt.MediaPrev:
-				mediaTrackCommand(mediaPreviousTrack)
-			case bt.MediaPlayPause:
-				mediaPlayPause()
-			case bt.MediaStop:
-				pressKey(vkMediaStop)
-			}
+			HandleMediaKey(ev.Media)
 		}
 	}
 }
