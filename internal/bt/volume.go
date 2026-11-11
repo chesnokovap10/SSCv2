@@ -24,10 +24,11 @@ func errFromStatus(st uint8) error {
 // dozens of values per second; only the latest wanted value is kept and it
 // is sent when the previous SET_ABSOLUTE_VOLUME is answered (or after 1 s).
 type volPump struct {
-	desired  atomic.Int32 // -1 = none
-	remote   atomic.Uint32
-	kick     atomic.Bool
-	inFlight bool // BTstack thread only
+	desired       atomic.Int32 // -1 = none
+	remote        atomic.Uint32
+	kick          atomic.Bool
+	hardwareAfter atomic.Int64 // Unix milliseconds, zero until an accepted level
+	inFlight      bool         // BTstack thread only
 	// ready: our level (from Windows) was confirmed by the headphones. Until
 	// then their own reports (e.g. the interim answer to the notification
 	// subscription, often 100 % after reconnect) are not mirrored to Windows.
@@ -38,9 +39,34 @@ type volPump struct {
 }
 
 func (v *volPump) reset() {
+	v.hardwareAfter.Store(0)
 	v.inFlight = false
 	v.sent = -1
 	v.ready = false
+	v.readyAt = time.Time{}
+}
+
+const volumeStepTolerance = 2
+
+func matchesVolume(actual uint8, want int) bool {
+	return want >= 0 && actual <= 127 && int(actual) >= want-volumeStepTolerance &&
+		int(actual) <= want+volumeStepTolerance && (actual == 0) == (want == 0)
+}
+
+func (v *volPump) accept(actual uint8) bool {
+	if !matchesVolume(actual, v.sent) {
+		v.hardwareAfter.Store(0)
+		return false
+	}
+	// Buds can briefly restore their own level immediately after connecting.
+	v.hardwareAfter.CompareAndSwap(0, time.Now().Add(250*time.Millisecond).UnixMilli())
+	return true
+}
+
+// HardwareVolumeActive reports that the headphones can apply volume directly.
+func HardwareVolumeActive() bool {
+	after := stack.vol.hardwareAfter.Load()
+	return after != 0 && time.Now().UnixMilli() >= after
 }
 
 func (v *volPump) isEcho(vol uint8) bool {
@@ -52,11 +78,16 @@ func (v *volPump) pump(s *stackT) {
 	if s.avrcpCid == 0 {
 		return
 	}
+	if v.inFlight {
+		if time.Since(v.sentAt) < time.Second {
+			return
+		}
+		v.inFlight = false
+		v.hardwareAfter.Store(0)
+		s.logf("volume: headphones did not confirm %d/127", v.sent)
+	}
 	want := int(v.desired.Load())
 	if want < 0 || want == v.sent {
-		return
-	}
-	if v.inFlight && time.Since(v.sentAt) < time.Second {
 		return
 	}
 	if C.avrcp_controller_set_absolute_volume(C.uint16_t(s.avrcpCid), C.uint8_t(want)) == 0 {
@@ -67,6 +98,7 @@ func (v *volPump) pump(s *stackT) {
 		v.inFlight = true
 		v.sent = want
 		v.sentAt = time.Now()
+		C.ssc_timer_set(timerVolRetry, 1001)
 		return
 	}
 	C.ssc_timer_set(timerVolRetry, 150) // AVRCP busy: retry shortly

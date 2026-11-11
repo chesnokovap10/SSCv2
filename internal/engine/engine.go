@@ -49,10 +49,9 @@ type engine struct {
 	cap           *audio.Capture
 	stopMuteGuard func()
 
-	srate    int
-	unmuteAt atomic.Int64 // unix ms when the pipeline may play again
-	keep     atomic.Bool  // stopped for a restart: leave the audio routing
-	carried  bool         // the routing came from the previous engine (not set up here yet)
+	srate   int
+	keep    atomic.Bool // stopped for a restart: leave the audio routing
+	carried bool        // the routing came from the previous engine (not set up here yet)
 }
 
 func logf(f string, a ...any) { logx.Printf(f, a...) }
@@ -100,7 +99,7 @@ func Run(in io.Reader, stdout *os.File) int {
 	logf("engine start %s: codec=%s uhq=%v bitrate aac=%d ssc=%d maxmtu=%v headphones=%q mouse=%q adapter=%04X:%04X debug=%v lang=%s",
 		ipc.Version, e.cfg.Codec, e.cfg.SSCUHQ, e.cfg.AACBitrate, e.cfg.SSCBitrate, e.cfg.MaxMTU, e.cfg.Headphones, e.cfg.Mouse,
 		e.cfg.VID, e.cfg.PID, e.cfg.Debug, i18n.Lang())
-	e.pipe.setVolume(e.cfg.Volume, e.cfg.HeadphonesMuted)
+	e.setVolume(e.cfg.Volume, e.cfg.HeadphonesMuted)
 	e.target = e.cfg.Headphones
 	if c := e.cfg.Carry; c != nil {
 		// the previous engine left the routing in place: own it from now on
@@ -142,7 +141,7 @@ func (e *engine) commands(r *ipc.Reader) {
 		case "scan":
 			go e.scan()
 		case "volume":
-			e.pipe.setVolume(c.Volume, c.On)
+			e.setVolume(c.Volume, c.On)
 		case "codec":
 			if c.Codec != nil && (c.Codec.Codec == "aac" || c.Codec.Codec == "ssc") {
 				// Keep the latest request if the previous switch is still in progress.
@@ -505,14 +504,11 @@ func (e *engine) session(addrStr string) error {
 	if err := e.startAudio(); err != nil {
 		return err
 	}
-	// Silence until the headphones settled on the reference level (Galaxy Buds
-	// jump to their own, often 100 %, level right after connecting).
-	e.pipe.muted.Store(true)
-	e.unmuteAt.Store(time.Now().Add(4 * time.Second).UnixMilli())
-	go e.unmuteWhenSettled()
+	// Give AVRCP time to settle the selected level before playing. If it
+	// remains unavailable, the encoder can safely use software attenuation.
+	e.pipe.volumeStartedAt.Store(time.Now().UnixMilli())
 	e.installEncoder(enc, mtu, codec)
 	defer e.pipe.set(nil, 0, false)
-	bt.SetVolume(127)
 
 	for {
 		select {
@@ -617,20 +613,12 @@ func (e *engine) installEncoder(enc Encoder, mtu int, codec bt.Codec) {
 	})
 }
 
-func (e *engine) unmuteWhenSettled() {
-	start := time.Now()
-	for e.pipe.muted.Load() {
-		if time.Now().UnixMilli() >= e.unmuteAt.Load() || time.Since(start) > 6*time.Second {
-			e.pipe.muted.Store(false)
-			logf("volume: settled, audio on after %.1f s", time.Since(start).Seconds())
-			return
-		}
-		select {
-		case <-e.ctx.Done():
-			return
-		case <-time.After(50 * time.Millisecond):
-		}
+func (e *engine) setVolume(level uint8, muted bool) {
+	e.pipe.setVolume(level, muted)
+	if muted {
+		level = 0
 	}
+	bt.SetVolume(level)
 }
 
 // openAudio reads the output format for codec negotiation without muting it.
@@ -675,7 +663,9 @@ func (e *engine) startAudio() error {
 	if err != nil {
 		return err
 	}
-	if err := cp.Start(func(samples []float32, frames int) { e.pipe.onCapture(samples, frames, cp.Format.Channels) }); err != nil {
+	if err := cp.Start(func(samples []float32, frames int, discontinuity bool) {
+		e.pipe.onCapture(samples, frames, cp.Format.Channels, cp.Format.SampleRate, discontinuity)
+	}); err != nil {
 		stopMuteGuard()
 		if !muted {
 			_ = audio.SetMute(id, false)
@@ -712,11 +702,6 @@ func (e *engine) btEvents() {
 			case e.incoming <- incomingEv{kind: ev.Kind, addr: ev.Addr.String()}:
 			default:
 			}
-		case bt.EvVolumeApplied:
-			// Give the confirmed headphone volume time to settle.
-			e.unmuteAt.Store(time.Now().Add(250 * time.Millisecond).UnixMilli())
-		case bt.EvAVRCPConnected:
-			bt.SetVolume(127)
 		case bt.EvLinkKey:
 			logf("new link key for %s", ev.Addr)
 			_ = e.out.Write(ipc.Event{Ev: "linkkey", Addr: ev.Addr.String(),

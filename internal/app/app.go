@@ -206,7 +206,7 @@ func (a *App) startup() {
 		a.opMu.Unlock()
 	}
 
-	if nativeRequested && svcRunning {
+	if nativeRequested && svcRunning && want == config.ModeOff && st.Mode == driver.BthUSB {
 		if active, err := driver.TestSigning(); err == nil && active {
 			if _, err := helper.Call(ipc.Request{Op: "native-profile-sync"}); err != nil {
 				logf("initialize native Bluetooth: %v", err)

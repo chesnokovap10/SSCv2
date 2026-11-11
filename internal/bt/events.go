@@ -163,6 +163,7 @@ func (s *stackT) onPacket(src int, ptype uint8, channel uint16, p []byte, cp *C.
 		}
 		s.logf("bt: headphones link down (0x%02X %s)", reason, hciErr(reason))
 		s.aclHandle.Store(0xFFFF)
+		s.vol.hardwareAfter.Store(0)
 		if s.connected.Load() || s.streaming.Load() {
 			s.streaming.Store(false)
 			s.connected.Store(false)
@@ -323,6 +324,8 @@ func (s *stackT) onA2DP(cp *C.uint8_t, p []byte) {
 			C.avrcp_disconnect(C.uint16_t(s.avrcpCid))
 			s.avrcpCid = 0
 			s.avrcpUp.Store(false)
+			s.vol.reset()
+			C.ssc_timer_stop(timerVolRetry)
 		}
 		sig(s.releaseCh, ErrNotReady)
 		sig(s.discCh, nil)
@@ -375,12 +378,12 @@ func (s *stackT) onAVRCP(cp *C.uint8_t, p []byte) {
 		case !s.vol.ready:
 			// the headphones' own level before ours was applied: ignore
 			s.logf("volume: headphones report %d/127 before the Windows level was applied - ignored", v)
-		case int(v) != s.vol.sent && s.vol.sent >= 0 && time.Since(s.vol.readyAt) < 5*time.Second:
+		case !s.vol.inFlight && !matchesVolume(v, s.vol.sent) && s.vol.sent >= 0 && time.Since(s.vol.readyAt) < 5*time.Second:
 			// Buds jump to their own level (often 100 %) right after
 			// accepting ours: Windows stays the source of truth.
 			s.logf("volume: headphones jumped to %d/127 right after connect - restoring %d/127", v, s.vol.sent)
+			s.vol.hardwareAfter.Store(0)
 			s.vol.sent = -1
-			s.vol.inFlight = false
 			s.vol.pump(s)
 		case s.vol.isEcho(v):
 			// echo of our own SET_ABSOLUTE_VOLUME
@@ -409,10 +412,20 @@ func (s *stackT) onAVRCP(cp *C.uint8_t, p []byte) {
 		s.emit(Event{Kind: EvMediaKey, Addr: s.remote, Media: key})
 
 	case C.AVRCP_SUBEVENT_SET_ABSOLUTE_VOLUME_RESPONSE:
+		if !s.vol.inFlight || s.avrcpCid != uint16(C.avrcp_subevent_set_absolute_volume_response_get_avrcp_cid(cp)) {
+			return
+		}
+		C.ssc_timer_stop(timerVolRetry)
 		v := uint8(C.avrcp_subevent_set_absolute_volume_response_get_absolute_volume(cp))
 		s.vol.inFlight = false
+		if C.avrcp_subevent_set_absolute_volume_response_get_command_type(cp) != C.AVRCP_CTYPE_RESPONSE_ACCEPTED || !s.vol.accept(v) {
+			s.vol.hardwareAfter.Store(0)
+			s.logf("volume: headphones did not accept %d/127 (reported %d/127)", s.vol.sent, v)
+			s.vol.pump(s)
+			return
+		}
 		s.vol.remote.Store(uint32(v))
-		if !s.vol.ready {
+		if s.vol.readyAt.IsZero() {
 			s.vol.ready = true
 			s.vol.readyAt = time.Now()
 			C.ssc_timer_stop(timerVolReady)

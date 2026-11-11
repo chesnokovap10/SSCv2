@@ -83,6 +83,36 @@ func EnsureBudsRender() error {
 	return installStereo(set, dev, staged, false)
 }
 
+// removeBudsRender deletes the independent render device and its staged INF versions.
+func removeBudsRender(packages []string) error {
+	stereoMu.Lock()
+	defer stereoMu.Unlock()
+	set, err := windows.SetupDiGetClassDevsEx(&mediaClass, "", 0, 0, 0, "")
+	if err != nil {
+		return err
+	}
+	defer set.Close()
+	dev, err := findBudsRender(set)
+	if err != nil {
+		return err
+	}
+	if dev != nil {
+		id, err := set.DeviceInstanceID(dev)
+		if err != nil {
+			return err
+		}
+		if err := nativePnP("/remove-device", id); err != nil {
+			return err
+		}
+	}
+	for _, name := range packages {
+		if err := nativePnP("/delete-driver", name, "/uninstall"); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // BudsRenderInterface finds the WaveRT interface on the independent Buds render device.
 func BudsRenderInterface() (string, error) {
 	set, err := windows.SetupDiGetClassDevsEx(&mediaClass, "", 0, windows.DIGCF_PRESENT, 0, "")

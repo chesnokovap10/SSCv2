@@ -21,20 +21,32 @@ func TestRenderPCMRebuffersWithoutConsumingPartialFrame(t *testing.T) {
 		return n, nil
 	}}
 	pcm := make([]float32, frames*2)
+	var previousFull bool
 	checkFrame := func(audible int) {
 		t.Helper()
 		if err := render.fill(context.Background(), pcm); err != nil {
 			t.Fatal(err)
 		}
+		fade := min(audible, renderFadeFrames)
 		for i, sample := range pcm {
+			frame := i / 2
 			var want float32
-			if i < audible*2 {
+			if frame < audible {
 				want = 0.5
+				if !previousFull && frame < fade {
+					want *= float32(frame) / float32(fade)
+				}
+				if audible < frames && frame >= audible-fade {
+					want *= float32(audible-frame-1) / float32(fade)
+				}
+			} else if audible == 0 && previousFull && frame < renderFadeFrames {
+				want = 0.5 * float32(renderFadeFrames-frame-1) / renderFadeFrames
 			}
 			if sample != want {
 				t.Fatalf("sample %d = %v, want %v", i, sample, want)
 			}
 		}
+		previousFull = audible == frames
 	}
 
 	appendFrames(frames / 2)

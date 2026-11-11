@@ -109,6 +109,7 @@ func (a *App) startNativeAudio(mode config.Mode) {
 			previous[role] = previousRenderOutput(audio.List(false, audio.StateActive), endpoint.ID, "", budsName)
 		}
 	}
+	existingRender := slices.ContainsFunc(audio.List(false, audio.StateActive|audio.StateDisabled), isBudsRender)
 	if _, err := helper.Call(ipc.Request{Op: "native-render-ensure"}); err != nil {
 		a.nativeError(err)
 		return
@@ -155,6 +156,19 @@ func (a *App) startNativeAudio(mode config.Mode) {
 	if err := audio.SetRenderVisible(output, true); err != nil {
 		a.nativeError(errors.Join(err, a.stopNativeAudio()))
 		return
+	}
+	if !existingRender {
+		// A freshly installed WaveRT endpoint can start at 100%.
+		a.mu.Lock()
+		level, muted := float32(a.volumeLocked())/127, a.s.HeadphonesMuted
+		a.mu.Unlock()
+		if stereoVolume != nil && stereoVolume.Level < 0.99 {
+			level, muted = stereoVolume.Level, stereoVolume.Muted
+		}
+		if err := audio.SetEndpointVolume(output, level, muted); err != nil {
+			a.nativeError(errors.Join(err, a.stopNativeAudio()))
+			return
+		}
 	}
 	for role, id := range previous {
 		if id == "" && role != 0 {
@@ -379,10 +393,7 @@ func (a *App) resumeNativeStereo() error {
 			if !wasDefault[role] {
 				continue
 			}
-			target := buds
-			if target == "" {
-				target = previousRenderOutput(endpoints, output, id, budsName)
-			}
+			target := previousRenderOutput(endpoints, output, id, budsName)
 			if target != "" {
 				if err := audio.SetDefaultRenderRole(target, role); err != nil {
 					return err
@@ -424,11 +435,17 @@ func budsStereoOutput(endpoints []audio.Endpoint, waveID, budsName string) strin
 		return ""
 	}
 	for _, endpoint := range endpoints {
-		if endpoint.ID != waveID && strings.Contains(strings.ToLower(endpoint.Name), name) {
+		if endpoint.ID != waveID && !isBudsRender(endpoint) && !isHandsFreeOutput(endpoint) &&
+			strings.Contains(strings.ToLower(endpoint.Name), name) {
 			return endpoint.ID
 		}
 	}
 	return ""
+}
+
+func isHandsFreeOutput(endpoint audio.Endpoint) bool {
+	return strings.Contains(strings.ToLower(endpoint.Name), "hands-free") ||
+		strings.Contains(strings.ToLower(endpoint.AdapterName), "hands-free")
 }
 
 func isBudsRender(endpoint audio.Endpoint) bool {
@@ -437,22 +454,19 @@ func isBudsRender(endpoint audio.Endpoint) bool {
 }
 
 func previousRenderOutput(endpoints []audio.Endpoint, waveID, previousID, budsName string) string {
-	var buds, fallback string
+	var fallback string
 	for _, endpoint := range endpoints {
-		if endpoint.ID == waveID {
+		if endpoint.ID == waveID || isBudsRender(endpoint) || isHandsFreeOutput(endpoint) {
 			continue
 		}
 		if endpoint.ID == previousID {
 			return previousID
 		}
-		if budsName != "" && strings.Contains(strings.ToLower(endpoint.Name), strings.ToLower(budsName)) {
-			buds = endpoint.ID
-		}
 		if fallback == "" {
 			fallback = endpoint.ID
 		}
 	}
-	if buds != "" {
+	if buds := budsStereoOutput(endpoints, waveID, budsName); buds != "" {
 		return buds
 	}
 	return fallback

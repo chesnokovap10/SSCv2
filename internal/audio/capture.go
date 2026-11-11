@@ -64,8 +64,9 @@ func (f Format) String() string {
 }
 
 // Callback receives interleaved samples converted to float32 (len =
-// frames*channels). The slice is reused after the call returns.
-type Callback func(samples []float32, frames int)
+// frames*channels). The slice is reused after the call returns. A discontinuity
+// marks a gap between this packet and the preceding packet.
+type Callback func(samples []float32, frames int, discontinuity bool)
 
 // Capture is a WASAPI shared-mode capture: loopback on a render endpoint,
 // direct capture on a recording endpoint (e.g. the cable's "CABLE Output").
@@ -225,15 +226,17 @@ func (c *Capture) loop(cb Callback) error {
 				return fmt.Errorf("capture: ReleaseBuffer: %w", err)
 			}
 			now := time.Now()
+			discontinuity := flags&bufferDiscontinuity != 0
 			if !lastPacket.IsZero() {
 				gap := now.Sub(lastPacket)
-				if flags&bufferDiscontinuity != 0 || gap >= 80*time.Millisecond {
+				discontinuity = discontinuity || gap >= 80*time.Millisecond
+				if discontinuity {
 					logx.Dbgf("audio", "capture: packet gap=%v flags=0x%x device frame=%d", gap.Round(time.Millisecond), flags, devPos)
 				}
 			}
 			lastPacket = now
 			if out != nil {
-				cb(out, int(frames))
+				cb(out, int(frames), discontinuity)
 			}
 		}
 	}

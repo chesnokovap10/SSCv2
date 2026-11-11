@@ -87,11 +87,19 @@ func SyncNativeProfile(adopt bool) error {
 		if adopt {
 			return errors.New("native Bluetooth driver is disabled")
 		}
-		return nil
+		// An earlier version could leave the WaveRT device installed after
+		// recording an explicit disable. Finish the cleanup on service startup.
+		return removeNativeProfile(key)
 	}
 	active, err := TestSigning()
 	if err != nil || !active {
 		return err
+	}
+	if adapter, ok := FindAdapter(USBID{}); ok && adapter.Mode == WinUSB {
+		if !adopt {
+			return nil // the tray will sync after handing the radio back to Windows
+		}
+		return errors.New("the adapter is still in WinUSB mode")
 	}
 	if !profileStaged {
 		if err := stageNativeProfile(key); err != nil {
@@ -103,7 +111,15 @@ func SyncNativeProfile(adopt bool) error {
 	if err != nil || len(paths) > 0 {
 		return err
 	}
-	return SetLocalProfile(true)
+	// The USB driver can be restored before Windows exposes its Bluetooth radio.
+	deadline := time.Now().Add(3 * time.Second)
+	for {
+		err := SetLocalProfile(true)
+		if (!errors.Is(err, windows.ERROR_BAD_UNIT) && !errors.Is(err, windows.ERROR_DEVICE_NOT_CONNECTED)) || time.Now().After(deadline) {
+			return err
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
 }
 
 func stageNativeProfile(key registry.Key) error {
@@ -135,7 +151,15 @@ func stageNativeProfile(key registry.Key) error {
 			return err
 		}
 	}
-	return nativePnP("/add-driver", filepath.Join(dir, profileINF), "/install")
+	path := filepath.Join(dir, profileINF)
+	err = nativePnP("/add-driver", path, "/install")
+	var exit *exec.ExitError
+	if errors.As(err, &exit) && exit.ExitCode() == int(windows.ERROR_NO_MORE_ITEMS) {
+		// The package can be staged while there is no matching PnP node to
+		// install on. Registering the Bluetooth profile creates that node.
+		return nativePnP("/add-driver", path)
+	}
+	return err
 }
 
 func removeNativeProfile(key registry.Key) error {
@@ -149,7 +173,7 @@ func removeNativeProfile(key registry.Key) error {
 	if err != nil {
 		return err
 	}
-	var packages []string
+	var packages, renderPackages []string
 	for _, file := range files {
 		if !oemINF.MatchString(file.Name()) {
 			continue
@@ -165,6 +189,12 @@ func removeNativeProfile(key registry.Key) error {
 			strings.Contains(inf, "addservice=sscavdtplocal,") {
 			packages = append(packages, file.Name())
 		}
+		if strings.Contains(inf, strings.ToLower(budsRenderID)) && strings.Contains(inf, "addservice=sscbudsrender,") {
+			renderPackages = append(renderPackages, file.Name())
+		}
+	}
+	if err := removeBudsRender(renderPackages); err != nil {
+		return err
 	}
 	if len(packages) != 0 {
 		if err := SetLocalProfile(false); err != nil {

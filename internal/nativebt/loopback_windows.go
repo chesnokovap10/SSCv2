@@ -33,7 +33,7 @@ func sendLoopback(ctx context.Context, media io.Writer, out io.Writer, duration 
 	fmt.Fprintf(out, "WASAPI loopback: %s\n", capture.Format)
 	blocks := make(chan []float32, 16)
 	overflow := make(chan struct{}, 1)
-	if err := capture.Start(func(samples []float32, _ int) {
+	if err := capture.Start(func(samples []float32, _ int, _ bool) {
 		select {
 		case blocks <- append([]float32(nil), samples...):
 		default:

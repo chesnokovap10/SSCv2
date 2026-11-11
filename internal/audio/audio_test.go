@@ -61,7 +61,7 @@ func TestListAndCapture(t *testing.T) {
 	}
 	t.Logf("format %s", c.Format)
 	frames := 0
-	if err := c.Start(func(s []float32, n int) { frames += n }); err != nil {
+	if err := c.Start(func(s []float32, n int, _ bool) { frames += n }); err != nil {
 		t.Fatal(err)
 	}
 	time.Sleep(500 * time.Millisecond)

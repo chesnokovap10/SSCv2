@@ -22,16 +22,15 @@ type Encoder interface {
 // pipeline: captured float32 -> stereo downmix (clipped to -1..1) -> encoder ->
 // MTU-sized RTP payloads -> bt.SendMedia. Called on the capture thread.
 type pipeline struct {
-	mu     sync.Mutex
-	enc    Encoder
-	maxRaw int
-	ts     uint32
-	pcm    []float32 // pending stereo samples (residual between callbacks)
-	stereo []float32
-	accum  []byte
-	active atomic.Bool
-	// muted: send silence (headphones' volume not settled yet)
-	muted atomic.Bool
+	mu              sync.Mutex
+	enc             Encoder
+	maxRaw          int
+	ts              uint32
+	pcm             []float32 // pending stereo samples (residual between callbacks)
+	stereo          []float32
+	accum           []byte
+	active          atomic.Bool
+	volumeStartedAt atomic.Int64 // Unix milliseconds at A2DP stream startup
 	// volume holds the PCM level in bits 0..6 and mute in bit 7.
 	volume atomic.Uint32
 	// frag: split frames larger than one packet (RFC 3016)
@@ -79,7 +78,7 @@ func clip(v float32) float32 {
 func clamp16(v float32) int16 { return int16(clip(v) * 32767) }
 
 // onCapture receives `frames` interleaved frames of `ch` channels.
-func (p *pipeline) onCapture(s []float32, frames, ch int) {
+func (p *pipeline) onCapture(s []float32, frames, ch, rate int, discontinuity bool) {
 	p.frames.Add(uint64(frames))
 	for _, v := range s[:frames*ch] {
 		if v > 0.003 || v < -0.003 { // above ~-50 dB: something is playing
@@ -94,6 +93,10 @@ func (p *pipeline) onCapture(s []float32, frames, ch int) {
 	defer p.mu.Unlock()
 	if p.enc == nil {
 		return
+	}
+	if discontinuity {
+		// The residual belongs to the stream before the capture gap.
+		p.pcm = p.pcm[:0]
 	}
 
 	// Downmix to stereo (ITU-R BS.775, LFE at -6 dB) so centre/surround are
@@ -125,6 +128,14 @@ func (p *pipeline) onCapture(s []float32, frames, ch int) {
 			l := c[0] + 0.707107*fc + 0.707107*(at(4)+at(6)) + 0.5*lfe
 			r := c[1] + 0.707107*fc + 0.707107*(at(5)+at(7)) + 0.5*lfe
 			p.pcm = append(p.pcm, clip(l), clip(r))
+		}
+	}
+	if discontinuity {
+		fade := min(frames, rate*2/1000)
+		for frame := range fade {
+			level := float32(frame) / float32(fade)
+			p.pcm[2*frame] *= level
+			p.pcm[2*frame+1] *= level
 		}
 	}
 	if peak > math.Float32frombits(p.peak.Load()) {
@@ -198,14 +209,28 @@ func (p *pipeline) setVolume(level uint8, muted bool) {
 	p.volume.Store(state)
 }
 
-func (p *pipeline) encode(pcm []float32) ([]byte, error) {
+func (p *pipeline) pcmGain(hardware bool, now int64) float32 {
+	elapsed := now - p.volumeStartedAt.Load()
+	if elapsed < 250 {
+		return 0
+	}
+	if hardware {
+		return 1
+	}
 	level := p.volume.Load()
-	switch {
-	case p.muted.Load() || level >= 128 || level == 0:
+	if elapsed < 4000 || level >= 128 {
+		return 0
+	}
+	gain := float32(level) / 127
+	return gain * gain
+}
+
+func (p *pipeline) encode(pcm []float32) ([]byte, error) {
+	switch gain := p.pcmGain(bt.HardwareVolumeActive(), time.Now().UnixMilli()); gain {
+	case 0:
 		clear(pcm)
-	case level < 127:
-		gain := float32(level) / 127
-		gain *= gain
+	case 1:
+	default:
 		for i := range pcm {
 			pcm[i] *= gain
 		}

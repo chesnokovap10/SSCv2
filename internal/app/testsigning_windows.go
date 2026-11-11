@@ -79,21 +79,26 @@ func (a *App) toggleTestSigning() {
 	active, err := driver.TestSigning()
 	// Keep the current codec and USB driver until Windows has booted with test signing.
 	if enable && err == nil && active {
-		if _, syncErr := helper.Call(ipc.Request{Op: "native-profile-sync"}); syncErr != nil {
-			tray.Info(title, syncErr.Error())
-			return
-		}
 		a.mu.Lock()
 		mode, legacyRunning := a.mode, a.eng != nil
 		a.mu.Unlock()
-		if legacyRunning && (mode == config.ModeAAC || mode == config.ModeSSC) {
+		winUSB := a.refreshAdapter().Mode == driver.WinUSB
+		if (legacyRunning || winUSB) && (mode == config.ModeAAC || mode == config.ModeSSC) {
+			// enable returns the adapter to Windows before startNativeAudio
+			// registers the local profile on the radio.
 			go a.enable(mode)
-		} else if legacyRunning || a.refreshAdapter().Mode == driver.WinUSB {
+			return
+		}
+		if legacyRunning || winUSB {
 			a.disableLocked()
 			if a.refreshAdapter().Mode == driver.WinUSB {
 				return
 			}
 			a.setBusy(title)
+		}
+		if _, syncErr := helper.Call(ipc.Request{Op: "native-profile-sync"}); syncErr != nil {
+			tray.Info(title, syncErr.Error())
+			return
 		}
 	}
 	if err == nil && active == enable {

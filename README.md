@@ -24,7 +24,7 @@ SSCv2 uses the MediaTek adapter in WinUSB mode while a codec is active. Windows 
 ### Volume and mute
 
 - Use the **Headphone volume** slider, its mute button or the keyboard volume keys in codec mode. The scale is **0–127**, with a keyboard step of **4**. The slider stays visible while the stream starts and in **Off** mode.
-- With native Bluetooth, SSCv2 sends Windows volume changes to the headphones over AVRCP and applies volume to PCM until the headphones confirm the requested level. In WinUSB mode, SSCv2 applies volume and mute before encoding and initializes the headphones' hardware volume to 127. Volume changes made on the headphones are independent of the SSCv2 slider.
+- SSCv2 sends volume changes to the headphones over AVRCP in both native Bluetooth and WinUSB modes. If the headphones do not confirm the requested level, SSCv2 can apply volume to PCM before encoding. Volume changes made on the headphones are independent of the SSCv2 slider.
 - SSCv2 captures the default Windows output through WASAPI loopback and keeps that output muted while it is in use. If Windows unmutes it, SSCv2 reasserts mute. When SSCv2 releases the output, it restores the mute state it took ownership of.
 - SSCv2 carries the headphone level and mute between codec mode and Windows when the Windows stereo endpoint is available. On reconnect, Windows may briefly expose the endpoint before SSCv2 can apply the saved level.
 - If the headphone link drops during playback, SSCv2 sends Play/Pause and releases the physical output while waiting for the headphones. Headphone media controls are forwarded to Windows.
