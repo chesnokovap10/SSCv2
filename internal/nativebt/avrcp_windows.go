@@ -5,7 +5,11 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"runtime"
+	"syscall"
 	"time"
+
+	"golang.org/x/sys/windows"
 
 	"sscv2/internal/bt"
 )
@@ -13,6 +17,54 @@ import (
 type avrcpPacket struct {
 	data []byte
 	err  error
+}
+
+type avrcpDevice struct {
+	*os.File
+	raw syscall.RawConn
+}
+
+// os.File serializes reads and writes for Windows device handles, even with
+// overlapped I/O. Write directly while the Go reader waits for AVRCP traffic.
+func (link avrcpDevice) Write(data []byte) (int, error) {
+	event, err := windows.CreateEvent(nil, 1, 0, nil)
+	if err != nil {
+		return 0, err
+	}
+	defer windows.CloseHandle(event)
+	// The low bit suppresses IOCP notification for this operation. Its
+	// completion is consumed here, independently of Go's runtime poller.
+	op := windows.Overlapped{HEvent: event | 1}
+	var pin runtime.Pinner
+	pin.Pin(&op)
+	if len(data) != 0 {
+		pin.Pin(&data[0])
+	}
+	defer pin.Unpin()
+	var written uint32
+	var writeErr error
+	err = link.raw.Control(func(fd uintptr) {
+		handle := windows.Handle(fd)
+		writeErr = windows.WriteFile(handle, data, &written, &op)
+		if writeErr != windows.ERROR_IO_PENDING {
+			return
+		}
+		status, waitErr := windows.WaitForSingleObject(event, 1000)
+		if waitErr == nil && status == windows.WAIT_OBJECT_0 {
+			writeErr = windows.GetOverlappedResult(handle, &op, &written, false)
+			return
+		}
+		_ = windows.CancelIoEx(handle, &op)
+		_ = windows.GetOverlappedResult(handle, &op, &written, true)
+		writeErr = waitErr
+		if writeErr == nil {
+			writeErr = os.ErrDeadlineExceeded
+		}
+	})
+	if err != nil {
+		return 0, err
+	}
+	return int(written), writeErr
 }
 
 func avrcpFrame(header, ctype, pdu byte, data ...byte) []byte {
@@ -47,7 +99,7 @@ func avrcpButton(p []byte) (response []byte, key int) {
 	return response, key
 }
 
-func watchAVRCP(ctx context.Context, path string, out io.Writer, handleMediaKey func(int)) {
+func watchAVRCP(ctx context.Context, path string, out io.Writer, handleMediaKey func(int), volume *budsVolume) {
 	keys := make(chan int, 8)
 	go func() {
 		for ctx.Err() == nil {
@@ -61,7 +113,7 @@ func watchAVRCP(ctx context.Context, path string, out io.Writer, handleMediaKey 
 	}()
 	var lastError string
 	for ctx.Err() == nil {
-		err := runAVRCP(ctx, path, out, keys)
+		err := runAVRCP(ctx, path, out, keys, volume)
 		if ctx.Err() != nil {
 			return
 		}
@@ -78,19 +130,27 @@ func watchAVRCP(ctx context.Context, path string, out io.Writer, handleMediaKey 
 }
 
 // runAVRCP keeps the incoming control channel alive independently of AVDTP.
-func runAVRCP(ctx context.Context, path string, out io.Writer, keys chan<- int) error {
-	link, err := os.OpenFile(path+"-R", os.O_RDWR, 0)
+func runAVRCP(ctx context.Context, path string, out io.Writer, keys chan<- int, volume *budsVolume) error {
+	// Volume changes must be able to write while a read waits for a button.
+	link, err := os.OpenFile(path+"-R", os.O_RDWR|windows.O_FILE_FLAG_OVERLAPPED, 0)
 	if err != nil {
 		return fmt.Errorf("accept Buds AVRCP: %w", err)
 	}
 	defer link.Close()
+	raw, err := link.SyscallConn()
+	if err != nil {
+		return err
+	}
+	stopClose := context.AfterFunc(ctx, func() { _ = link.Close() })
+	defer stopClose()
 	fmt.Fprintln(out, "Buds AVRCP channel accepted")
-	return serveAVRCP(ctx, link, out, keys)
+	return serveAVRCP(ctx, avrcpDevice{File: link, raw: raw}, out, keys, volume)
 }
 
-func serveAVRCP(ctx context.Context, link io.ReadWriter, out io.Writer, keys chan<- int) error {
+func serveAVRCP(ctx context.Context, link io.ReadWriter, out io.Writer, keys chan<- int, volume *budsVolume) error {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
+	defer volume.hardware.Store(false)
 	send := func(data []byte) error {
 		n, err := link.Write(data)
 		if err == nil && n != len(data) {
@@ -98,10 +158,24 @@ func serveAVRCP(ctx context.Context, link io.ReadWriter, out io.Writer, keys cha
 		}
 		return err
 	}
-	// Send before posting a blocking read on the synchronous device handle.
-	const volumeHeader = 0x20
-	if err := send(avrcpFrame(volumeHeader, 0, 0x50, 127)); err != nil {
-		return fmt.Errorf("set Buds AVRCP volume: %w", err)
+	var volumeHeader byte
+	attempted := int32(-1)
+	timeout := time.NewTimer(time.Second)
+	timeout.Stop()
+	defer timeout.Stop()
+	var confirmation <-chan time.Time
+	sendVolume := func(level int32) error {
+		attempted = level
+		volumeHeader += 0x10 // next AVCTP transaction label
+		if err := send(avrcpFrame(volumeHeader, 0, 0x50, byte(level))); err != nil {
+			return fmt.Errorf("set Buds AVRCP volume: %w", err)
+		}
+		timeout.Reset(time.Second)
+		confirmation = timeout.C
+		return nil
+	}
+	if err := sendVolume(volume.target()); err != nil {
+		return err
 	}
 	packets := make(chan avrcpPacket, 1)
 	go func() {
@@ -118,15 +192,19 @@ func serveAVRCP(ctx context.Context, link io.ReadWriter, out io.Writer, keys cha
 			}
 		}
 	}()
-	timeout := time.NewTimer(time.Second)
-	defer timeout.Stop()
-	confirmation := timeout.C
 	for {
+		if target := volume.target(); confirmation == nil && target != attempted {
+			if err := sendVolume(target); err != nil {
+				return err
+			}
+		}
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
+		case <-volume.wake:
 		case <-confirmation:
 			confirmation = nil
+			volume.hardware.Store(false)
 			fmt.Fprintln(out, "Buds did not confirm AVRCP volume")
 		case packet := <-packets:
 			if packet.err != nil {
@@ -183,12 +261,21 @@ func serveAVRCP(ctx context.Context, link io.ReadWriter, out io.Writer, keys cha
 				continue
 			}
 			if p[0] == volumeHeader|2 && p[9] == 0x50 && confirmation != nil {
+				timeout.Stop()
 				confirmation = nil
 				if p[3] != 0x09 || len(p) < 14 {
+					volume.hardware.Store(false)
 					fmt.Fprintln(out, "Buds rejected AVRCP volume")
 					continue
 				}
-				fmt.Fprintf(out, "AVRCP volume acknowledged: %d\n", p[13])
+				actual := int32(p[13])
+				if actual > min(attempted+budsVolumeStepTolerance, 127) || actual < attempted-budsVolumeStepTolerance || (actual == 0) != (attempted == 0) {
+					volume.hardware.Store(false)
+					fmt.Fprintf(out, "Buds AVRCP volume mismatch: requested %d, got %d\n", attempted, actual)
+					continue
+				}
+				volume.hardware.Store(true)
+				fmt.Fprintf(out, "AVRCP volume acknowledged: %d\n", actual)
 			}
 		}
 	}

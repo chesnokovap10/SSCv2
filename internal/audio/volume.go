@@ -281,65 +281,88 @@ func SetEndpointVolume(id string, level float32, muted bool) error {
 
 // WatchEndpointPCMGain tracks hardware controls that Windows delegates to WaveRT.
 // The returned reader is used by one encoder at a time.
-func WatchEndpointPCMGain(id string) (read func() float32, stop func(), err error) {
+func WatchEndpointPCMGain(id string, onHardwareVolume func(uint8)) (read func() float32, stop func(), err error) {
 	vol, err := endpointVolume(id)
 	if err != nil {
 		return nil, nil, err
 	}
-	var changed atomic.Bool
-	cb := newVolCallback(func(windows.GUID, bool, float32) { changed.Store(true) })
-	if err := hr(vcall(vol, 3, uintptr(unsafe.Pointer(cb)))); err != nil {
-		release(vol)
-		liveCbs.Delete(cb)
-		return nil, nil, err
-	}
-	stop = func() {
-		cb.on.Store(nil)
-		vcall(vol, 4, uintptr(unsafe.Pointer(cb)))
-		release(vol)
-		liveCbs.Delete(cb)
-	}
-	gain, err := endpointPCMGain(vol)
-	if err != nil {
-		stop()
-		return nil, nil, err
-	}
-	return func() float32 {
-		if changed.Swap(false) {
-			if current, err := endpointPCMGain(vol); err == nil {
-				gain = current
-			} else {
-				changed.Store(true)
-			}
-		}
-		return gain
-	}, stop, nil
-}
-
-func endpointPCMGain(vol uintptr) (float32, error) {
 	var support uint32
 	if err := hr(vcall(vol, 19, uintptr(unsafe.Pointer(&support)))); err != nil {
-		return 0, err
+		release(vol)
+		return nil, nil, err
 	}
-	const hardwareVolume, hardwareMute = 1, 2
-	if support&hardwareMute != 0 {
+	if support&(hardwareVolume|hardwareMute) == 0 {
+		release(vol)
+		return func() float32 { return 1 }, func() {}, nil
+	}
+	var gain atomic.Uint32
+	lastLevel := float32(-1)
+	var lastMute int32
+	refresh := func() error {
+		var level float32
+		if support&hardwareVolume != 0 {
+			current, err := getScalar(vol)
+			if err != nil {
+				return err
+			}
+			level = current
+		}
 		var muted int32
 		if err := hr(vcall(vol, 15, uintptr(unsafe.Pointer(&muted)))); err != nil {
-			return 0, err
+			return err
 		}
-		if muted != 0 {
-			return 0, nil
+		if level == lastLevel && muted == lastMute {
+			return nil
 		}
+		current := float32(1)
+		if muted != 0 && support&hardwareMute != 0 {
+			current = 0
+		} else if support&hardwareVolume != 0 {
+			var db float32
+			if err := hr(vcall(vol, 8, uintptr(unsafe.Pointer(&db)))); err != nil {
+				return err
+			}
+			current = float32(math.Pow(10, float64(db)/20))
+		}
+		gain.Store(math.Float32bits(current))
+		lastLevel, lastMute = level, muted
+		if support&hardwareVolume != 0 {
+			value := ScalarTo127(level)
+			if muted != 0 {
+				value = 0
+			}
+			onHardwareVolume(value)
+		}
+		return nil
 	}
-	if support&hardwareVolume == 0 {
-		return 1, nil
+	if err := refresh(); err != nil {
+		release(vol)
+		return nil, nil, err
 	}
-	var db float32
-	if err := hr(vcall(vol, 8, uintptr(unsafe.Pointer(&db)))); err != nil {
-		return 0, err
-	}
-	return float32(math.Pow(10, float64(db)/20)), nil
+	// Read the endpoint directly. Windows can report changes to the tray's
+	// subscription while the native worker's endpoint callback misses them.
+	done, stopped := make(chan struct{}), make(chan struct{})
+	go func() {
+		defer close(stopped)
+		defer release(vol)
+		ticker := time.NewTicker(20 * time.Millisecond)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-done:
+				return
+			case <-ticker.C:
+				_ = refresh()
+			}
+		}
+	}()
+	return func() float32 { return math.Float32frombits(gain.Load()) }, func() {
+		close(done)
+		<-stopped
+	}, nil
 }
+
+const hardwareVolume, hardwareMute = 1, 2
 
 // SetLevel sets an endpoint's master level (0..1).
 func SetLevel(id string, level float32) error {

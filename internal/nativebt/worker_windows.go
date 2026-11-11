@@ -28,9 +28,15 @@ func RunWorker(input io.Reader, out io.Writer, args []string, mode config.Mode, 
 	}
 	endpoint, address, stereo := args[1], args[2], args[3]
 	args = args[:1]
+	volume := newBudsVolume()
+	readGain, stopVolume, err := audio.WatchEndpointPCMGain(endpoint, volume.set)
+	if err != nil {
+		return err
+	}
+	defer stopVolume()
 	controlCtx, stopControl := context.WithCancel(context.Background())
 	defer stopControl()
-	go watchAVRCP(controlCtx, args[0], out, handleMediaKey)
+	go watchAVRCP(controlCtx, args[0], out, handleMediaKey, volume)
 	started := time.Now()
 	released := make(chan error, 1)
 	go func(completed chan<- error) {
@@ -55,11 +61,6 @@ func RunWorker(input io.Reader, out io.Writer, args []string, mode config.Mode, 
 		break
 	}
 	fmt.Fprintf(out, "A2DP endpoint released in %v\n", time.Since(started).Round(time.Millisecond))
-	readGain, stopVolume, err := audio.WatchEndpointPCMGain(endpoint)
-	if err != nil {
-		return err
-	}
-	defer stopVolume()
 	pcm, err := helper.OpenBudsPCM()
 	if err != nil {
 		return err
@@ -94,7 +95,9 @@ func RunWorker(input io.Reader, out io.Writer, args []string, mode config.Mode, 
 	for {
 		ctx, cancel := context.WithCancel(context.Background())
 		done := make(chan error, 1)
-		go func(mode config.Mode, kbps int) { done <- runRenderPCM(ctx, args, out, mode, kbps, pcm.Read, readGain) }(mode, kbps)
+		go func(mode config.Mode, kbps int) {
+			done <- runRenderPCM(ctx, args, out, mode, kbps, pcm.Read, func() float32 { return volume.gain(readGain) })
+		}(mode, kbps)
 		for {
 			select {
 			case err := <-released:
