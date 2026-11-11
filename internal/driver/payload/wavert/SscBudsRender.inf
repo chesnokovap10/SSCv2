@@ -1,0 +1,189 @@
+[Version]
+Signature   = "$Windows NT$"
+Class       = MEDIA
+Provider    = %ProviderName%
+ClassGUID   = {4d36e96c-e325-11ce-bfc1-08002be10318}
+DriverVer   = 11/11/2026, 1.0.0.5
+CatalogFile = SscBudsRender.cat
+PnpLockDown = 1
+
+[SourceDisksNames]
+222="SscBudsRender Driver Disk","",222
+
+[SourceDisksFiles]
+SscBudsRender.sys=222
+
+[Manufacturer]
+%MfgName%=SscBudsRender,NTamd64.10.0...19041
+
+[SscBudsRender.NTamd64.10.0...19041]
+%SscBudsRender_SA.DeviceDesc%=SscBudsRender_SA, ROOT\SSCBUDSRENDER
+
+[DestinationDirs]
+SscBudsRender_SA.CopyList=13 ; 13=Package's DriverStore directory
+
+;======================================================
+; SscBudsRender_SA
+;======================================================
+[SscBudsRender_SA.CopyList]
+SscBudsRender.sys
+
+[SscBudsRender_SA.AddReg]
+HKR,,AssociatedFilters,,"wdmaud,swmidi,redbook"
+HKR,,Driver,,SscBudsRender.sys
+
+;
+; For demo only, please review these power management settings for your architecture. 
+;
+HKR,PowerSettings,SingleComponentMultiFxStates,3,1,0,0,0  ; Turn on multi Fx support.
+HKR,PowerSettings,ConservationIdleTime,3,3,0,0,0          ; 3 seconds for idle power management when on battery
+HKR,PowerSettings,PerformanceIdleTime,3,3,0,0,0           ; 3 seconds for idle power management when on AC power
+HKR,PowerSettings,IdlePowerState,3,3,0,0,0                ; go to D3 for idle power management
+
+HKR,Drivers,SubClasses,,"wave,midi,mixer"
+
+HKR,Drivers\wave\wdmaud.drv,Driver,,wdmaud.drv
+HKR,Drivers\midi\wdmaud.drv,Driver,,wdmaud.drv
+HKR,Drivers\mixer\wdmaud.drv,Driver,,wdmaud.drv
+
+HKR,Drivers\wave\wdmaud.drv,Description,,%SscBudsRender_SA.DeviceDesc%
+HKR,Drivers\mixer\wdmaud.drv,Description,,%SscBudsRender_SA.DeviceDesc%
+
+;======================================================
+; capture interfaces: mic array (internal: front)
+;======================================================
+[SscBudsRender.I.WaveMicArray1]
+AddReg=SscBudsRender.I.WaveMicArray1.AddReg
+[SscBudsRender.I.WaveMicArray1.AddReg]
+HKR,,CLSID,,%Proxy.CLSID%
+HKR,,FriendlyName,,%SscBudsRender.WaveMicArray1.szPname%
+
+[SscBudsRender.I.TopologyMicArray1]
+AddReg=SscBudsRender.I.TopologyMicArray1.AddReg
+
+[SscBudsRender.I.TopologyMicArray1.AddReg]
+HKR,,CLSID,,%Proxy.CLSID%
+HKR,,FriendlyName,,%SscBudsRender.TopologyMicArray1.szPname%
+
+HKR,EP\0,%PKEY_AudioEndpoint_Association%,,%KSNODETYPE_ANY%
+
+; The following lines opt-in to pull mode.
+HKR,EP\0,%PKEY_AudioEndpoint_Supports_EventDriven_Mode%,0x00010001,0x1
+
+;======================================================
+; render interfaces: speaker (internal)
+;======================================================
+[SscBudsRender.I.WaveSpeaker]
+AddReg=SscBudsRender.I.WaveSpeaker.AddReg
+
+[SscBudsRender.I.WaveSpeaker.AddReg]
+HKR,,CLSID,,%Proxy.CLSID%
+HKR,,FriendlyName,,%SscBudsRender.WaveSpeaker.szPname%
+
+[SscBudsRender.I.TopologySpeaker]
+AddReg=SscBudsRender.I.TopologySpeaker.AddReg
+
+[SscBudsRender.I.TopologySpeaker.AddReg]
+HKR,,CLSID,,%Proxy.CLSID%
+HKR,,FriendlyName,,%SscBudsRender.TopologySpeaker.szPname%
+
+HKR,EP\0,%PKEY_AudioEndpoint_Association%,,%KSNODETYPE_ANY%
+
+; The following lines opt-in to pull mode.
+HKR,EP\0,%PKEY_AudioEndpoint_Supports_EventDriven_Mode%,0x00010001,0x1
+
+;======================================================
+; SscBudsRender_SA
+;======================================================
+[SscBudsRender_SA.NT]
+Include=ks.inf,wdmaudio.inf
+Needs=KS.Registration, WDMAUDIO.Registration
+CopyFiles=SscBudsRender_SA.CopyList
+AddReg=SscBudsRender_SA.AddReg
+
+[SscBudsRender_SA.NT.Interfaces]
+;
+; Interfaces for speaker (internal) render endpoint.
+;
+AddInterface=%KSCATEGORY_AUDIO%, %KSNAME_WaveSpeaker%, SscBudsRender.I.WaveSpeaker
+AddInterface=%KSCATEGORY_RENDER%, %KSNAME_WaveSpeaker%, SscBudsRender.I.WaveSpeaker
+AddInterface=%KSCATEGORY_REALTIME%, %KSNAME_WaveSpeaker%, SscBudsRender.I.WaveSpeaker
+AddInterface=%KSCATEGORY_AUDIO%, %KSNAME_TopologySpeaker%, SscBudsRender.I.TopologySpeaker
+AddInterface=%KSCATEGORY_TOPOLOGY%, %KSNAME_TopologySpeaker%, SscBudsRender.I.TopologySpeaker
+
+;
+; Interfaces for microphone array 1 (internal: front) capture endpoint.
+;
+
+[SscBudsRender_SA.NT.Services]
+AddService=SscBudsRender,0x00000002,SscBudsRender_Service_Inst
+
+[SscBudsRender_Service_Inst]
+DisplayName=%SscBudsRender.SvcDesc%
+ServiceType=1
+StartType=3
+ErrorControl=1
+ServiceBinary=%13%\SscBudsRender.sys
+
+[SscBudsRender_SA.NT.HW]
+AddReg = AUDIOHW.AddReg
+
+[AUDIOHW.AddReg]
+; FILE_DEVICE_SOUND
+HKR,,DeviceType,0x10001,0x0000001D
+; SDDL_DEVOBJ_SYS_ALL_ADM_RWX_WORLD_RWX_RES_RWX
+HKR,,Security,,"D:P(A;;GA;;;SY)(A;;GRGWGX;;;BA)(A;;GRGWGX;;;WD)(A;;GRGWGX;;;RC)"
+
+
+;======================================================
+; WDF
+;======================================================
+[SscBudsRender_SA.NT.Wdf]
+KmdfService = SscBudsRender, SscBudsRender_SA_WdfSect
+[SscBudsRender_SA_WdfSect]
+KmdfLibraryVersion = 1.31
+
+;======================================================
+; COMMON
+;======================================================
+[Strings]
+
+;Non-localizable
+
+KSNAME_WaveSpeaker="WaveHeadphones"
+KSNAME_TopologySpeaker="TopologyHeadphones"
+
+KSNAME_WaveMicArray1="WaveMicArray1"
+KSNAME_TopologyMicArray1="TopologyMicArray1"
+
+Proxy.CLSID="{17CCA71B-ECD7-11D0-B908-00A0C9223196}"
+KSCATEGORY_AUDIO="{6994AD04-93EF-11D0-A3CC-00A0C9223196}"
+KSCATEGORY_RENDER="{65E8773E-8F56-11D0-A3B9-00A0C9223196}"
+KSCATEGORY_CAPTURE="{65E8773D-8F56-11D0-A3B9-00A0C9223196}"
+KSCATEGORY_REALTIME ="{EB115FFC-10C8-4964-831D-6DCB02E6F23F}"
+KSCATEGORY_TOPOLOGY = "{DDA54A40-1E4C-11D1-A050-405705C10000}"
+
+KSNODETYPE_ANY   = "{00000000-0000-0000-0000-000000000000}"
+
+PKEY_AudioEndpoint_Association               = "{1DA5D803-D492-4EDD-8C23-E0C0FFEE7F0E},2"
+PKEY_AudioEndpoint_Supports_EventDriven_Mode = "{1DA5D803-D492-4EDD-8C23-E0C0FFEE7F0E},7"
+
+;Localizable
+
+ProviderName = "SSCv2"
+MfgName      = "SSCv2"
+MsCopyRight  = "TODO-Set-Copyright"
+
+SscBudsRender_SA.DeviceDesc="SSCv2 Buds WaveRT"
+SscBudsRender.SvcDesc="SSCv2 Buds Audio Driver"
+
+;; friendly names
+SscBudsRender.WaveSpeaker.szPname="SSCv2 Buds WaveRT"
+SscBudsRender.TopologySpeaker.szPname="SSCv2 Buds WaveRT"
+
+SscBudsRender.WaveMicArray1.szPname="Simple Audio Sample Wave Microphone Array - Front"
+SscBudsRender.TopologyMicArray1.szPname="Simple Audio Sample Topology Microphone Array - Front"
+
+MicArray1CustomName= "Internal Microphone Array - Front"
+
+

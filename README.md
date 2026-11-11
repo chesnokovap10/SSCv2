@@ -69,3 +69,5 @@ go test ./...
 ```
 
 `build.cmd` builds `bin\ssc.exe` using BTstack, FDK-AAC and [libssc](libssc/README.md) through cgo. The tray menu and **Device info…** display the build version and commit hash.
+
+The executable includes the AVDTP and WaveRT test-mode driver packages. See the [native driver build instructions](driver/README.md) to rebuild and sign them.

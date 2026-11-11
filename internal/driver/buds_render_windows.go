@@ -3,7 +3,6 @@ package driver
 import (
 	"errors"
 	"fmt"
-	"path/filepath"
 	"strings"
 	"unsafe"
 
@@ -12,6 +11,7 @@ import (
 
 const budsRenderID = `ROOT\SSCBUDSRENDER`
 const BudsRenderName = "SSCv2 Buds WaveRT"
+const budsRenderService = "SscBudsRender"
 
 func findBudsRender(set windows.DevInfo) (*windows.DevInfoData, error) {
 	for i := 0; ; i++ {
@@ -34,6 +34,8 @@ func findBudsRender(set windows.DevInfo) (*windows.DevInfoData, error) {
 
 // EnsureBudsRender registers the independent audio device once.
 func EnsureBudsRender() error {
+	nativeProfileMu.Lock()
+	defer nativeProfileMu.Unlock()
 	stereoMu.Lock()
 	defer stereoMu.Unlock()
 	set, err := windows.SetupDiGetClassDevsEx(&mediaClass, "", 0, windows.DIGCF_PRESENT, 0, "")
@@ -45,10 +47,14 @@ func EnsureBudsRender() error {
 	if err != nil {
 		return err
 	}
-	if dev != nil && strings.EqualFold(strProp(set, dev, windows.SPDRP_SERVICE), "SscBudsRender") {
+	version, err := waveRTPackage.version()
+	if err != nil {
+		return err
+	}
+	if dev != nil && strings.EqualFold(strProp(set, dev, windows.SPDRP_SERVICE), budsRenderService) {
 		versionKey := driverINFProperty
 		versionKey.PID = 3
-		if version, _ := windows.SetupDiGetDeviceProperty(set, dev, &versionKey); version == "1.0.0.4" {
+		if installed, _ := windows.SetupDiGetDeviceProperty(set, dev, &versionKey); installed == version {
 			return nil
 		}
 	}
@@ -59,11 +65,7 @@ func EnsureBudsRender() error {
 	if !active {
 		return errors.New("Windows must be running in test-signing mode")
 	}
-	programFiles, err := windows.KnownFolderPath(windows.FOLDERID_ProgramFiles, 0)
-	if err != nil {
-		return err
-	}
-	staged, err := stageStereoINF(filepath.Join(programFiles, "SSCv2", "native-bt", "SscBudsRender.inf"))
+	staged, err := stageBudsRender()
 	if err != nil {
 		return err
 	}
@@ -81,6 +83,24 @@ func EnsureBudsRender() error {
 		}
 	}
 	return installStereo(set, dev, staged, false)
+}
+
+func stageBudsRender() (string, error) {
+	key, err := openProfileState()
+	if err != nil {
+		return "", err
+	}
+	defer key.Close()
+	if err := installNativeDriverTrust(key); err != nil {
+		return "", err
+	}
+	var staged string
+	err = waveRTPackage.withINF(func(path string) error {
+		var err error
+		staged, err = stageStereoINF(path)
+		return err
+	})
+	return staged, err
 }
 
 // removeBudsRender deletes the independent render device and its staged INF versions.
@@ -124,7 +144,7 @@ func BudsRenderInterface() (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if dev == nil || !strings.EqualFold(strProp(set, dev, windows.SPDRP_SERVICE), "SscBudsRender") {
+	if dev == nil || !strings.EqualFold(strProp(set, dev, windows.SPDRP_SERVICE), budsRenderService) {
 		return "", errors.New("SscBudsRender is not installed")
 	}
 	id, err := set.DeviceInstanceID(dev)

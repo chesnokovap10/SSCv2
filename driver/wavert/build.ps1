@@ -1,5 +1,5 @@
 param(
-    [string] $OutputDirectory = (Join-Path $PSScriptRoot '..\..\bin\SscBudsRender'),
+    [string] $OutputDirectory = (Join-Path $PSScriptRoot '..\..\bin\driver\SscBudsRender'),
     [string] $WdkRoot,
     [string] $SdkRoot = "${env:ProgramFiles(x86)}\Windows Kits\10",
     [string] $SdkVersion = '10.0.26100.0',
@@ -9,10 +9,10 @@ param(
 $ErrorActionPreference = 'Stop'
 if (!$WdkRoot) {
     $WdkRoot = git -C $PSScriptRoot config --local --get sscv2.wdkRoot
-    if ($LASTEXITCODE -ne 0) { throw 'Pass -WdkRoot or set sscv2.wdkRoot.' }
+    if ($LASTEXITCODE -ne 0 -or !$WdkRoot) { throw 'Pass -WdkRoot or set sscv2.wdkRoot.' }
 }
 $wdk = (Resolve-Path -LiteralPath $WdkRoot).Path
-$source = Join-Path $PSScriptRoot 'src\render'
+$source = $PSScriptRoot
 $output = (New-Item -ItemType Directory -Force -Path $OutputDirectory).FullName
 $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
 $vs = & $vswhere -latest -products '*' -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath

@@ -30,30 +30,40 @@ var (
 // SwitchNativeStereo changes only the Buds2 Pro Stereo devnode. The package
 // must have been provisioned by an administrator in the SSCv2 install folder.
 func SwitchNativeStereo(enable bool) error {
-	return switchStereo(enable, probeStereoService, "SscAvdtpProbe.inf", "")
+	return switchStereo(enable, probeStereoService, "", stageProbeINF)
+}
+
+func stageProbeINF() (string, error) {
+	programFiles, err := windows.KnownFolderPath(windows.FOLDERID_ProgramFiles, 0)
+	if err != nil {
+		return "", err
+	}
+	return stageStereoINF(filepath.Join(programFiles, "SSCv2", "native-bt", "SscAvdtpProbe.inf"))
 }
 
 func SwitchBudsRender(enable bool, address string) error {
 	if address == "" {
 		return errors.New("missing Buds address")
 	}
-	return switchStereo(enable, "SscBudsRender", "SscBudsRender.inf", address)
+	nativeProfileMu.Lock()
+	defer nativeProfileMu.Unlock()
+	return switchStereo(enable, budsRenderService, address, stageBudsRender)
 }
 
-func switchStereo(enable bool, service, sourceINF, address string) error {
+func switchStereo(enable bool, service, address string, stage func() (string, error)) error {
 	stereoMu.Lock()
 	defer stereoMu.Unlock()
-	err := switchNativeStereo(enable, service, sourceINF, address)
+	err := switchNativeStereo(enable, service, address, stage)
 	if enable && errors.Is(err, errRetryStereoBind) {
 		time.Sleep(250 * time.Millisecond)
-		return switchNativeStereo(true, service, sourceINF, address)
+		return switchNativeStereo(true, service, address, stage)
 	}
 	return err
 }
 
 var errRetryStereoBind = errors.New("retry stereo driver switch after rollback")
 
-func switchNativeStereo(enable bool, service, sourceINF, address string) error {
+func switchNativeStereo(enable bool, service, address string, stage func() (string, error)) error {
 
 	set, err := windows.SetupDiGetClassDevsEx(&mediaClass, "", 0, windows.DIGCF_PRESENT, 0, "")
 	if err != nil {
@@ -98,12 +108,7 @@ func switchNativeStereo(enable bool, service, sourceINF, address string) error {
 	if !active {
 		return errors.New("Windows must be running in test-signing mode")
 	}
-	programFiles, err := windows.KnownFolderPath(windows.FOLDERID_ProgramFiles, 0)
-	if err != nil {
-		return err
-	}
-	source := filepath.Join(programFiles, "SSCv2", "native-bt", sourceINF)
-	staged, err := stageStereoINF(source)
+	staged, err := stage()
 	if err != nil {
 		return err
 	}

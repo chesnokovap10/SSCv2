@@ -1,14 +1,25 @@
 param(
     [string] $WdkRoot,
-    [Parameter(Mandatory)] [string] $OutputDirectory,
+    [string] $OutputDirectory,
     [switch] $Package,
-    [switch] $LocalProfile,
+    [switch] $Probe,
     [string] $SdkRoot = "${env:ProgramFiles(x86)}\Windows Kits\10",
     [string] $SdkVersion = '10.0.26100.0'
 )
 
 $ErrorActionPreference = 'Stop'
-$sample = Join-Path $PSScriptRoot 'src'
+$source = $PSScriptRoot
+$driverName = 'SscAvdtpLocal'
+$defines = @('/DSSC_LOCAL_PROFILE')
+$infRoot = $source
+if ($Probe) {
+    $driverName = 'SscAvdtpProbe'
+    $defines = @()
+    $infRoot = Join-Path $source '..\probe'
+}
+if (!$OutputDirectory) {
+    $OutputDirectory = Join-Path $source "..\..\bin\driver\$driverName"
+}
 if (!$WdkRoot) {
     $WdkRoot = git -C $PSScriptRoot config --local --get sscv2.wdkRoot
     if ($LASTEXITCODE -ne 0 -or !$WdkRoot) {
@@ -30,26 +41,19 @@ $includes = @(
     "$SdkRoot\Include\$SdkVersion\shared",
     "$SdkRoot\Include\$SdkVersion\um",
     "$SdkRoot\Include\$SdkVersion\ucrt",
-    "$sample\common\inc",
-    "$sample\bthcli\sys"
+    "$source\common\inc",
+    "$source\bthcli\sys"
 ) | ForEach-Object { "/I$_" }
-
-$driverName = 'SscAvdtpProbe'
-$defines = @()
-if ($LocalProfile) {
-    $driverName = 'SscAvdtpLocal'
-    $defines = @('/DSSC_LOCAL_PROFILE')
-}
 
 Push-Location -LiteralPath $output
 try {
     $sources = @(
-        "$sample\bthcli\sys\device.c",
-        "$sample\bthcli\sys\driver.c",
-        "$sample\bthcli\sys\queue.c",
-        "$sample\bthcli\sys\client.c",
-        "$sample\common\lib\clisrv.c",
-        "$sample\common\lib\connection.c"
+        "$source\bthcli\sys\device.c",
+        "$source\bthcli\sys\driver.c",
+        "$source\bthcli\sys\queue.c",
+        "$source\bthcli\sys\client.c",
+        "$source\common\lib\clisrv.c",
+        "$source\common\lib\connection.c"
     )
     & "$tools\cl.exe" /nologo /c /O2 /kernel /Zl /D_AMD64_ /D_WIN64 /DWINVER=0x0A00 /D_WIN32_WINNT=0x0A00 /DNTDDI_VERSION=0x0A000008 /DALLOC_PRAGMA /DKMDF_VERSION_MAJOR=1 /DKMDF_VERSION_MINOR=31 $defines $includes $sources
     if ($LASTEXITCODE) { throw "Driver compilation failed ($LASTEXITCODE)." }
@@ -59,14 +63,8 @@ try {
 } finally {
     Pop-Location
 }
-
-
-
-
-
 if ($Package) {
-    $packageDirectory = (New-Item -ItemType Directory -Force -Path (Join-Path $output $(if ($LocalProfile) { 'local-package' } else { 'package' }))).FullName
-    $infRoot = if ($LocalProfile) { $PSScriptRoot } else { Join-Path $PSScriptRoot 'diagnostics' }
+    $packageDirectory = (New-Item -ItemType Directory -Force -Path (Join-Path $output 'package')).FullName
     $inf = Join-Path $infRoot "$driverName.inf"
     $binary = Join-Path $output "$driverName.sys"
     Copy-Item -LiteralPath $inf, $binary -Destination $packageDirectory -Force

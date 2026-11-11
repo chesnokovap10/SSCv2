@@ -1,1 +1,2 @@
-/driver/native-bt/local-package/SscAvdtpLocal.inf -text
+# The catalog covers the exact bytes of these files.
+/internal/driver/payload/** binary

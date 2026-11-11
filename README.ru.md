@@ -69,3 +69,5 @@ go test ./...
 ```
 
 `build.cmd` собирает `bin\ssc.exe` через cgo с BTstack, FDK-AAC и [libssc](libssc/README.md). Версия и хеш коммита видны в меню и в информации об устройствах.
+
+В `ssc.exe` встроены пакеты драйверов AVDTP и WaveRT для тестового режима Windows. Сборка и подпись этих пакетов описаны в [документации драйверов](driver/README.md).

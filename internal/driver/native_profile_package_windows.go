@@ -11,18 +11,14 @@ import (
 	"strings"
 	"sync"
 	"time"
-	"unsafe"
 
 	"golang.org/x/sys/windows"
 	"golang.org/x/sys/windows/registry"
-
-	packagefiles "sscv2/driver/native-bt"
 )
 
 const (
 	nativeProfileKey = `SOFTWARE\SSCv2\NativeBluetooth`
 	profileRequested = "Requested"
-	profileINF       = "SscAvdtpLocal.inf"
 )
 
 var (
@@ -123,43 +119,18 @@ func SyncNativeProfile(adopt bool) error {
 }
 
 func stageNativeProfile(key registry.Key) error {
-	cert, err := profileCertificate()
-	if err != nil {
+	if err := installNativeDriverTrust(key); err != nil {
 		return err
 	}
-	defer windows.CertFreeCertificateContext(cert)
-	for _, store := range []string{"Root", "TrustedPublisher"} {
-		if err := manageProfileTrust(key, store, cert, true); err != nil {
-			return err
+	return avdtpPackage.withINF(func(path string) error {
+		err := nativePnP("/add-driver", path, "/install")
+		var exit *exec.ExitError
+		if errors.As(err, &exit) && exit.ExitCode() == int(windows.ERROR_NO_MORE_ITEMS) {
+			// Registering the Bluetooth profile creates the matching PnP node.
+			return nativePnP("/add-driver", path)
 		}
-	}
-	programFiles, err := windows.KnownFolderPath(windows.FOLDERID_ProgramFiles, 0)
-	if err != nil {
 		return err
-	}
-	dir, err := os.MkdirTemp(filepath.Join(programFiles, "SSCv2"), "native-driver-")
-	if err != nil {
-		return err
-	}
-	defer os.RemoveAll(dir)
-	for _, name := range []string{profileINF, "SscAvdtpLocal.sys", "sscavdtplocal.cat"} {
-		data, err := packagefiles.Files.ReadFile("local-package/" + name)
-		if err != nil {
-			return err
-		}
-		if err := os.WriteFile(filepath.Join(dir, name), data, 0600); err != nil {
-			return err
-		}
-	}
-	path := filepath.Join(dir, profileINF)
-	err = nativePnP("/add-driver", path, "/install")
-	var exit *exec.ExitError
-	if errors.As(err, &exit) && exit.ExitCode() == int(windows.ERROR_NO_MORE_ITEMS) {
-		// The package can be staged while there is no matching PnP node to
-		// install on. Registering the Bluetooth profile creates that node.
-		return nativePnP("/add-driver", path)
-	}
-	return err
+	})
 }
 
 func removeNativeProfile(key registry.Key) error {
@@ -206,15 +177,7 @@ func removeNativeProfile(key registry.Key) error {
 			}
 		}
 	}
-	cert, err := profileCertificate()
-	if err != nil {
-		return err
-	}
-	defer windows.CertFreeCertificateContext(cert)
-	return errors.Join(
-		manageProfileTrust(key, "TrustedPublisher", cert, false),
-		manageProfileTrust(key, "Root", cert, false),
-	)
+	return removeNativeDriverTrust(key)
 }
 
 func nativePnP(args ...string) error {
@@ -228,56 +191,4 @@ func nativePnP(args ...string) error {
 		return nil
 	}
 	return fmt.Errorf("pnputil %s: %w (%s)", args[0], err, strings.TrimSpace(out))
-}
-
-func profileCertificate() (*windows.CertContext, error) {
-	data, err := packagefiles.Files.ReadFile("local-package/signer.cer")
-	if err != nil {
-		return nil, err
-	}
-	return windows.CertCreateCertificateContext(windows.X509_ASN_ENCODING, &data[0], uint32(len(data)))
-}
-
-func manageProfileTrust(key registry.Key, name string, cert *windows.CertContext, enable bool) error {
-	value := "Added" + name
-	if !enable {
-		_, _, err := key.GetIntegerValue(value)
-		if errors.Is(err, registry.ErrNotExist) {
-			return nil
-		}
-		if err != nil {
-			return err
-		}
-	}
-	store, err := windows.CertOpenStore(windows.CERT_STORE_PROV_SYSTEM, 0, 0,
-		windows.CERT_SYSTEM_STORE_LOCAL_MACHINE|windows.CERT_STORE_OPEN_EXISTING_FLAG,
-		uintptr(unsafe.Pointer(windows.StringToUTF16Ptr(name))))
-	if err != nil {
-		return err
-	}
-	defer windows.CertCloseStore(store, 0)
-	if enable {
-		var added *windows.CertContext
-		err := windows.CertAddCertificateContextToStore(store, cert, windows.CERT_STORE_ADD_NEW, &added)
-		if errors.Is(err, windows.Errno(windows.CRYPT_E_EXISTS)) {
-			return nil
-		}
-		if err != nil {
-			return err
-		}
-		if err := key.SetDWordValue(value, 1); err != nil {
-			return errors.Join(err, windows.CertDeleteCertificateFromStore(added))
-		}
-		return windows.CertFreeCertificateContext(added)
-	}
-	match, err := windows.CertFindCertificateInStore(store, windows.X509_ASN_ENCODING, 0,
-		windows.CERT_FIND_EXISTING, unsafe.Pointer(cert), nil)
-	if err == nil {
-		if err := windows.CertDeleteCertificateFromStore(match); err != nil {
-			return err
-		}
-	} else if !errors.Is(err, windows.Errno(windows.CRYPT_E_NOT_FOUND)) {
-		return err
-	}
-	return key.DeleteValue(value)
 }
