@@ -28,6 +28,32 @@ type Endpoint struct {
 	Capture     bool
 }
 
+func (e Endpoint) MatchesAdapter(name string) bool {
+	return strings.EqualFold(e.AdapterName, name) || strings.Contains(e.Name, "("+name+")")
+}
+
+// FindRenderEndpoint keeps the preferred endpoint while it is present, or
+// finds its replacement when Windows republishes the adapter's output.
+func FindRenderEndpoint(adapter, preferred string, states uint32) Endpoint {
+	return findRenderEndpoint(List(false, states), adapter, preferred)
+}
+
+func findRenderEndpoint(endpoints []Endpoint, adapter, preferred string) Endpoint {
+	var match Endpoint
+	for _, endpoint := range endpoints {
+		if !endpoint.MatchesAdapter(adapter) {
+			continue
+		}
+		if endpoint.ID == preferred {
+			return endpoint
+		}
+		if match.ID == "" {
+			match = endpoint
+		}
+	}
+	return match
+}
+
 func enumerator() (uintptr, error) {
 	if err := InitCOM(); err != nil {
 		return 0, err

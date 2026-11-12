@@ -36,7 +36,6 @@ private:
 
     ULONG                               m_ulMaxSystemStreams;
     ULONG                               m_ulMaxOffloadStreams;
-    ULONG                               m_ulMaxLoopbackStreams;
 
     // weak ref of running streams.
     PCMiniportWaveRTStream            * m_SystemStreams;
@@ -63,7 +62,6 @@ private:
 protected:
     PADAPTERCOMMON                      m_pAdapterCommon;
     ULONG                               m_DeviceFlags;
-    eDeviceType                         m_DeviceType;
     PPORTEVENTS                         m_pPortEvents;
     PENDPOINT_MINIPAIR                  m_pMiniportPair;
     
@@ -94,7 +92,6 @@ public:
     NTSTATUS IsFormatSupported
     ( 
         _In_ ULONG          _ulPin,
-        _In_ BOOLEAN        _bCapture,
         _In_ PKSDATAFORMAT  _pDataFormat
     );
 
@@ -122,7 +119,6 @@ public:
     )
         :CUnknown(0),
         m_ulMaxSystemStreams(0),
-        m_DeviceType(MiniportPair->DeviceType),
         m_DeviceContext(DeviceContext),
         m_DeviceMaxChannels(MiniportPair->DeviceMaxChannels),
         m_DeviceFormatsAndModes(MiniportPair->PinDeviceFormatsAndModes),
@@ -141,27 +137,9 @@ public:
             //
             // Get the max # of pin instances.
             //
-            if (IsRenderDevice())
+            if (m_FilterDesc.PinCount > KSPIN_WAVE_RENDER3_SOURCE)
             {
-                if (m_FilterDesc.PinCount > KSPIN_WAVE_RENDER2_SOURCE)
-                {
-                    m_ulMaxSystemStreams = m_FilterDesc.Pins[KSPIN_WAVE_RENDER2_SINK_SYSTEM].MaxFilterInstanceCount;
-                    m_ulMaxLoopbackStreams = m_FilterDesc.Pins[KSPIN_WAVE_RENDER2_SINK_LOOPBACK].MaxFilterInstanceCount;
-                }
-                else if(m_FilterDesc.PinCount > KSPIN_WAVE_RENDER3_SOURCE)
-                {
-                    m_ulMaxSystemStreams = m_FilterDesc.Pins[KSPIN_WAVE_RENDER3_SINK_SYSTEM].MaxFilterInstanceCount;
-                }
-            }
-            else
-            {
-                //
-                // capture bridge pin comes first in the enumeration
-                //
-                if (m_FilterDesc.PinCount > KSPIN_WAVEIN_HOST)
-                {
-                    m_ulMaxSystemStreams = m_FilterDesc.Pins[KSPIN_WAVEIN_HOST].MaxFilterInstanceCount;
-                }
+                m_ulMaxSystemStreams = m_FilterDesc.Pins[KSPIN_WAVE_RENDER3_SINK_SYSTEM].MaxFilterInstanceCount;
             }
         }
 
@@ -226,23 +204,10 @@ private:
 
 protected:
 #pragma code_seg()
-    BOOL IsRenderDevice()
-    {
-        return m_DeviceType == eSpeakerDevice ? TRUE : FALSE;
-    }
-
     BOOL IsSystemRenderPin(ULONG nPinId);
-
-    BOOL IsSystemCapturePin(ULONG nPinId);
 
     BOOL IsBridgePin(ULONG nPinId);
 
-    // These three pins are the pins used by the audio engine for host, loopback, and offload.
-    ULONG GetSystemPinId()
-    {
-        ASSERT(IsRenderDevice());
-        return KSPIN_WAVE_RENDER2_SINK_SYSTEM;
-    }
 };
 
 typedef CMiniportWaveRT *PCMiniportWaveRT;

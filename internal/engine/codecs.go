@@ -3,13 +3,14 @@ package engine
 import (
 	"fmt"
 	"os"
-	"sscv2/internal/i18n"
 	"strconv"
 
 	"sscv2/internal/audio"
+	"sscv2/internal/bitrate"
 	"sscv2/internal/bt"
 	"sscv2/internal/codec/aac"
 	"sscv2/internal/codec/ssc"
+	"sscv2/internal/i18n"
 )
 
 type aacEnc struct {
@@ -34,7 +35,7 @@ func (a *aacEnc) Bandwidth() int   { return a.e.Bandwidth() }
 //     capped by the headphones' MTU (Galaxy Buds: 250 kbps at 48 kHz) - what
 //     Android does;
 //   - "over" (Settings > Max MTU): 256 kbps in whole frames; the media
-//     channel is treated as overMTU bytes instead of the MTU the headphones
+//     channel is treated as WinUSBExtendedMTU bytes instead of the MTU the headphones
 //     announce. Samsung Galaxy Buds2 Pro announce 679 bytes (250 kbps) but play
 //     frames of up to ~960 bytes cleanly (verified by ear). Not universal:
 //     other headphones may drop such packets - opt-in;
@@ -47,9 +48,6 @@ var aacMode = "fit"
 // aacForced: AAC bitrate from the settings (bps, 0 = as high as a packet allows).
 var aacForced int
 
-// overMTU: our own AVDTP media MTU; 256 kbps CBR frames peak at ~960 bytes.
-const overMTU = 1017
-
 func newAAC(sampleRate, mtu int) (Encoder, error) {
 	// mtu is the media payload of one packet (already raised in "over"
 	// mode), so "fit" and "over" both cap the frame to one packet.
@@ -57,7 +55,7 @@ func newAAC(sampleRate, mtu int) (Encoder, error) {
 	if aacMode == "frag" {
 		budget = 0
 	}
-	br := 256000
+	br := bitrate.MaxAACKbps * 1000
 	if aacForced > 0 && aacForced < br {
 		br = aacForced
 	}
@@ -107,10 +105,7 @@ func (s *sscEnc) Close()           { s.e.Close() }
 // - 256k in the Buds' 667-byte payload, 328k with Max MTU (1005). Headphones
 // without the "no bitrate limit" bit (0x08) get 128k, as from the phone.
 // (The phone itself sends 192k at most: SscBitrateByBusyLevel.)
-const (
-	sscBitrateFull    = 328000
-	sscBitrateLimited = 128000
-)
+const sscBitrateLimited = 128
 
 // sscRateOK: SSC goes 24-bit 48 kHz (the phone's 16-bit mode is 44.1 kHz
 // only, and we capture float).
@@ -121,17 +116,14 @@ func sscRateOK(sampleRate int) error {
 	return nil
 }
 
-// sscForced: bitrate from the settings (bps, 0 = like the phone).
+// sscForced: bitrate from the settings (kbps, 0 = like the phone).
 var sscForced int
-
-// budsMTU: the media payload Galaxy Buds announce.
-const budsMTU = 667
 
 // sscUHQMode: the SSC UHQ codec was chosen (96 kHz).
 var sscUHQMode bool
 
 // sscUHQ: stream SSC UHQ (96 kHz): chosen, or a UHQ bitrate forced.
-func sscUHQ() bool { return sscUHQMode || sscForced > 0 && ssc.Valid(96000, sscForced) }
+func sscUHQ() bool { return sscUHQMode || sscForced > 0 && ssc.Valid(96000, sscForced*1000) }
 
 // sscEncodeRate: the SSC encoder's rate for this capture rate.
 func sscEncodeRate(captureRate int) int {
@@ -141,77 +133,29 @@ func sscEncodeRate(captureRate int) int {
 	return captureRate
 }
 
-// sscWorking: highest SSC bitrate (bps) checked to work on these headphones
-// (profiles.go); "Auto" stays at or below it. 0 = not known.
+// sscWorking: highest SSC bitrate (kbps) checked to work on these headphones
+// (bitrate package); "Auto" stays at or below it. 0 = not known.
 var sscWorking int
-
-// sscMaxMTU: Settings > Max MTU is on (1005-byte payload).
-var sscMaxMTU bool
-
-// maxPayload: the media payload with Max MTU on / off (Galaxy Buds).
-func maxPayload(maxMTU bool) int {
-	if maxMTU {
-		return overMTU - 12
-	}
-	return budsMTU
-}
-
-// BitrateFits reports whether kbps can be streamed for the codec ("aac",
-// "ssc", "ssc_uhq") with Max MTU on or off: frames must fit one packet.
-func BitrateFits(codec string, kbps int, maxMTU bool) bool {
-	if kbps <= 0 {
-		return true
-	}
-	switch codec {
-	case "aac":
-		// whole frames in one packet: payload x 8 bits x 48000 / 1024 samples
-		return kbps*1000 <= maxPayload(maxMTU)*8*48000/1024
-	case "ssc_uhq":
-		return ssc.FrameBytes(96000, kbps*1000) <= maxPayload(maxMTU)
-	}
-	return ssc.FrameBytes(48000, kbps*1000) <= maxPayload(maxMTU)
-}
-
-// sscNeedsOver: a bitrate whose frames exceed the Buds' packet needs Max MTU.
-func sscNeedsOver(kbps int) bool {
-	if kbps <= 0 {
-		return false
-	}
-	rate := 48000
-	if ssc.Valid(96000, kbps*1000) {
-		rate = 96000
-	}
-	return ssc.FrameBytes(rate, kbps*1000) > budsMTU
-}
 
 // sscBitrate: the forced bitrate or the phone's choice for this
 // configuration byte, lowered if a frame (CBR, 4-byte header included)
 // would not fit one packet.
 func sscBitrate(sampleRate, mtu int, cfg uint8) (int, error) {
-	top := sscBitrateFull
-	if cfg != 0 && cfg&0x08 == 0 {
-		top = sscBitrateLimited
-	}
-	list := ssc.BasicBitrates
-	if sampleRate == 96000 {
-		list, top = ssc.UHQBitrates, ssc.UHQBitrates[len(ssc.UHQBitrates)-1]
-	}
-	if sscWorking > 0 && sampleRate != 96000 && top > sscWorking {
+	top := 0
+	if sampleRate != 96000 {
 		top = sscWorking
+		if cfg != 0 && cfg&0x08 == 0 && (top == 0 || top > sscBitrateLimited) {
+			top = sscBitrateLimited
+		}
 	}
 	if sscForced > 0 {
 		top = sscForced
 	}
-	best := 0
-	for _, b := range list {
-		if ssc.FrameBytes(sampleRate, b) <= mtu && b <= top && b > best {
-			best = b
-		}
-	}
+	best := bitrate.BestSSC(sampleRate, mtu, top)
 	if best == 0 {
 		return 0, fmt.Errorf(i18n.T("SSC: канал %d байт меньше самого малого кадра", "SSC: a %d-byte channel is smaller than the smallest frame"), mtu)
 	}
-	return best, nil
+	return best * 1000, nil
 }
 
 func newSSC(sampleRate, mtu int) (Encoder, error) {

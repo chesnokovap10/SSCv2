@@ -18,7 +18,7 @@ func (a *App) onResume() {
 	go a.recoverAfterResume(p)
 }
 
-func (a *App) recoverAfterResume(p *engineProc) {
+func (a *App) recoverAfterResume(p *workerProcess) {
 	a.opMu.Lock()
 	defer a.opMu.Unlock()
 	defer func() {
@@ -39,6 +39,6 @@ func (a *App) recoverAfterResume(p *engineProc) {
 	defer a.setBusy("")
 	// Release the physical output: the headphones may now be in their case.
 	// A fresh engine reinitializes USB, firmware, Bluetooth and WASAPI.
-	a.stopForRestart(p, false)
-	a.startEngineLocked()
+	a.stopWinUSBEngineLocked(false)
+	a.launchWinUSBLocked()
 }

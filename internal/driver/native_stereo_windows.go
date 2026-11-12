@@ -30,7 +30,7 @@ var (
 // SwitchNativeStereo changes only the Buds2 Pro Stereo devnode. The package
 // must have been provisioned by an administrator in the SSCv2 install folder.
 func SwitchNativeStereo(enable bool) error {
-	return switchStereo(enable, probeStereoService, "", stageProbeINF)
+	return switchStereo(enable, probeStereoService, "")
 }
 
 func stageProbeINF() (string, error) {
@@ -41,29 +41,31 @@ func stageProbeINF() (string, error) {
 	return stageStereoINF(filepath.Join(programFiles, "SSCv2", "native-bt", "SscAvdtpProbe.inf"))
 }
 
-func SwitchBudsRender(enable bool, address string) error {
+// RestoreBudsRender handles saved settings from installations that used a
+// WaveRT driver bound to the Bluetooth stereo device.
+func RestoreBudsRender(address string) error {
 	if address == "" {
 		return errors.New("missing Buds address")
 	}
 	nativeProfileMu.Lock()
 	defer nativeProfileMu.Unlock()
-	return switchStereo(enable, budsRenderService, address, stageBudsRender)
+	return switchStereo(false, budsRenderService, address)
 }
 
-func switchStereo(enable bool, service, address string, stage func() (string, error)) error {
+func switchStereo(enable bool, service, address string) error {
 	stereoMu.Lock()
 	defer stereoMu.Unlock()
-	err := switchNativeStereo(enable, service, address, stage)
+	err := switchNativeStereo(enable, service, address)
 	if enable && errors.Is(err, errRetryStereoBind) {
 		time.Sleep(250 * time.Millisecond)
-		return switchNativeStereo(true, service, address, stage)
+		return switchNativeStereo(true, service, address)
 	}
 	return err
 }
 
 var errRetryStereoBind = errors.New("retry stereo driver switch after rollback")
 
-func switchNativeStereo(enable bool, service, address string, stage func() (string, error)) error {
+func switchNativeStereo(enable bool, service, address string) error {
 
 	set, err := windows.SetupDiGetClassDevsEx(&mediaClass, "", 0, windows.DIGCF_PRESENT, 0, "")
 	if err != nil {
@@ -108,7 +110,7 @@ func switchNativeStereo(enable bool, service, address string, stage func() (stri
 	if !active {
 		return errors.New("Windows must be running in test-signing mode")
 	}
-	staged, err := stage()
+	staged, err := stageProbeINF()
 	if err != nil {
 		return err
 	}

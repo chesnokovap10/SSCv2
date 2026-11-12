@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -15,6 +16,7 @@ import (
 
 	"golang.org/x/sys/windows"
 
+	"sscv2/internal/bitrate"
 	"sscv2/internal/codec/ssc"
 	"sscv2/internal/config"
 	"sscv2/internal/helper"
@@ -172,7 +174,7 @@ func (a *App) ctl(args []string) string {
 		a.s.AACMode = arg(1)
 		_ = config.Save(a.s)
 		a.mu.Unlock()
-		go a.restartEngine()
+		go a.restartWinUSB()
 		return "ok: aac " + arg(1)
 	case "allbitrates":
 		switch arg(1) {
@@ -204,10 +206,8 @@ func (a *App) ctl(args []string) string {
 		kbps := 0
 		if arg(1) != "auto" {
 			n, err := strconv.Atoi(arg(1))
-			ok := false
-			for _, b := range bitrates[m] {
-				ok = ok || b == n && err == nil && n > 0
-			}
+			choices := bitrate.Choices(m)[1:]
+			ok := err == nil && slices.Contains(choices, n)
 			a.mu.Lock()
 			fits := a.offered(m, n)
 			a.mu.Unlock()
@@ -215,7 +215,7 @@ func (a *App) ctl(args []string) string {
 				return fmt.Sprintf("error: %d kbps needs maxmtu on or allbitrates on", n)
 			}
 			if !ok {
-				return fmt.Sprintf("error: bitrate auto|%v for %s", bitrates[m][1:], m)
+				return fmt.Sprintf("error: bitrate auto|%v for %s", choices, m)
 			}
 			kbps = n
 		}
@@ -227,7 +227,7 @@ func (a *App) ctl(args []string) string {
 		if arg(1) != "auto" {
 			n, err := strconv.Atoi(arg(1))
 			if err != nil || !ssc.Valid(48000, n*1000) && !ssc.Valid(96000, n*1000) {
-				return "error: ssc auto|88|96|128|192|229|256|328 or UHQ 152|250|291|308|442|584|886"
+				return fmt.Sprintf("error: ssc auto|%v or UHQ %v", bitrate.Choices(config.ModeSSC)[1:], bitrate.Choices(config.ModeSSCUHQ)[1:])
 			}
 			kbps = n
 		}
@@ -239,7 +239,7 @@ func (a *App) ctl(args []string) string {
 		}
 		_ = config.Save(a.s)
 		a.mu.Unlock()
-		go a.restartEngine()
+		go a.restartWinUSB()
 		return fmt.Sprintf("ok: ssc %d kbps (0 = auto)", kbps)
 	case "ssccap":
 		// SSC configuration byte for experiments: hex (0x0A) or "auto"
@@ -255,7 +255,7 @@ func (a *App) ctl(args []string) string {
 		a.s.SSCCap = int(v)
 		_ = config.Save(a.s)
 		a.mu.Unlock()
-		go a.restartEngine()
+		go a.restartWinUSB()
 		return fmt.Sprintf("ok: ssccap 0x%02X (0 = auto)", v)
 	case "variant":
 		a.mu.Lock()
@@ -271,13 +271,13 @@ func (a *App) ctl(args []string) string {
 	case "mode":
 		switch arg(1) {
 		case "off":
-			go a.disable()
+			go a.switchMode(config.ModeOff)
 		case "aac":
-			go a.enable(config.ModeAAC)
+			go a.switchMode(config.ModeAAC)
 		case "ssc":
-			go a.enable(config.ModeSSC)
+			go a.switchMode(config.ModeSSC)
 		case "ssc_uhq", "uhq":
-			go a.enable(config.ModeSSCUHQ)
+			go a.switchMode(config.ModeSSCUHQ)
 		default:
 			return "error: mode off|aac|ssc|ssc_uhq"
 		}
@@ -345,7 +345,7 @@ func (a *App) ctl(args []string) string {
 		}
 		_ = config.Save(a.s)
 		a.mu.Unlock()
-		go a.restartEngine()
+		go a.restartWinUSB()
 		return "ok"
 	}
 	return "error: unknown command " + args[0]

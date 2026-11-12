@@ -23,20 +23,15 @@ import (
 	"errors"
 	"fmt"
 	"math"
-	"sscv2/internal/i18n"
 	"sync"
 	"unsafe"
+
+	"sscv2/internal/codec/sscrate"
+	"sscv2/internal/i18n"
 )
 
 // FrameLen is the PCM frames per SSC frame (18 ms at 48 kHz).
 const FrameLen = 864
-
-// Basic (44.1/48 kHz) and UHQ (96 kHz) bitrates the encoder knows, ascending.
-// Any other value makes it write a malformed frame.
-var (
-	BasicBitrates = []int{88000, 96000, 128000, 192000, 229000, 256000, 328000}
-	UHQBitrates   = []int{152000, 250000, 291000, 308000, 442000, 584000, 886000}
-)
 
 // ErrBusy: another encoder is open (libssc state is process-global).
 var ErrBusy = i18n.Error("ssc: энкодер уже открыт", "ssc: an encoder is already open")
@@ -61,16 +56,7 @@ type Encoder struct {
 
 // Valid reports whether bitrate is one the encoder knows for sampleRate.
 func Valid(sampleRate, bitrate int) bool {
-	list := BasicBitrates
-	if sampleRate == 96000 {
-		list = UHQBitrates
-	}
-	for _, b := range list {
-		if b == bitrate {
-			return true
-		}
-	}
-	return false
+	return bitrate%1000 == 0 && sscrate.Valid(sampleRate, bitrate/1000)
 }
 
 // FrameBytes is the size of every frame (header included) at this rate:

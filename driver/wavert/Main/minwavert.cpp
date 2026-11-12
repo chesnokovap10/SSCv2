@@ -18,7 +18,6 @@ Abstract:
 #include "endpoints.h"
 #include "minwavert.h"
 #include "minwavertstream.h"
-#include "micarraywavtable.h"
 
 #define EFFECTS_LIST_COUNT 2
 
@@ -179,9 +178,6 @@ Routine Description:
   The DataRangeIntersection function determines the highest quality 
   intersection of two data ranges.
 
-  This sample just sets the ResultantFormat to be the only supported
-  format for the MicArray endpoint.
-
 Arguments:
 
   PinId -           Pin for which data intersection is being determined. 
@@ -190,9 +186,7 @@ Arguments:
                     range submitted by client in the data range intersection 
                     property request. 
 
-  MyDataRange -         Pin's data range to be compared with client's data 
-                        range. In this case we actually ignore our own data 
-                        range, because we know that we only support one range.
+  MyDataRange -         Pin data range to compare with the client range.
 
   OutputBufferLength -  Size of the buffer pointed to by the resultant format 
                         parameter. 
@@ -211,8 +205,7 @@ Arguments:
 --*/
 {
     UNREFERENCED_PARAMETER(PinId);
-
-    ULONG                   requiredSize;
+    UNREFERENCED_PARAMETER(ResultantFormat);
 
     PAGED_CODE();
 
@@ -221,67 +214,34 @@ Arguments:
         return STATUS_NOT_IMPLEMENTED;
     }
 
-    //If called for the mic array pin, set ResultantFormat to be the endpoint's only supported format.
-    //Otherwise, allow the class handler to set ResultantFormat.  
-    if ((this->m_DeviceType) == eMicArrayDevice1)
+    const ULONG requiredSize = sizeof(KSDATAFORMAT_WAVEFORMATEX);
+
+    //
+    // Validate return buffer size, if the request is only for the
+    // size of the resultant structure, return it now before
+    // returning other types of errors.
+    //
+    if (!OutputBufferLength)
     {
-        requiredSize = sizeof(KSDATAFORMAT_WAVEFORMATEXTENSIBLE);
-
-        //
-        // Validate return buffer size, if the request is only for the
-        // size of the resultant structure, return it now before
-        // returning other types of errors.
-        //
-        if (!OutputBufferLength)
-        {
-            *ResultantFormatLength = requiredSize;
-            return STATUS_BUFFER_OVERFLOW;
-        }
-        else if (OutputBufferLength < requiredSize)
-        {
-            return STATUS_BUFFER_TOO_SMALL;
-        }
-
-        //Set ResultantFormat to be the only supported format for the MicArray endpoint. 
-        PKSDATAFORMAT_WAVEFORMATEXTENSIBLE resultantFormat;
-        resultantFormat = (PKSDATAFORMAT_WAVEFORMATEXTENSIBLE)ResultantFormat;
-        *resultantFormat = *MicArrayPinSupportedDeviceFormats;
         *ResultantFormatLength = requiredSize;
-
-        return STATUS_SUCCESS;
+        return STATUS_BUFFER_OVERFLOW;
     }
-    else
+    else if (OutputBufferLength < requiredSize)
     {
-        requiredSize = sizeof(KSDATAFORMAT_WAVEFORMATEX);
-
-        //
-        // Validate return buffer size, if the request is only for the
-        // size of the resultant structure, return it now before
-        // returning other types of errors.
-        //
-        if (!OutputBufferLength)
-        {
-            *ResultantFormatLength = requiredSize;
-            return STATUS_BUFFER_OVERFLOW;
-        }
-        else if (OutputBufferLength < requiredSize)
-        {
-            return STATUS_BUFFER_TOO_SMALL;
-        }
-
-        // Verify channel count is supported. This routine assumes a separate data
-        // range for each supported channel count.
-        if (((PKSDATARANGE_AUDIO)MyDataRange)->MaximumChannels != ((PKSDATARANGE_AUDIO)ClientDataRange)->MaximumChannels)
-        {
-            return STATUS_NO_MATCH;
-        }
-
-        //
-        // Ok, let the class handler do the rest.
-        //
-        return STATUS_NOT_IMPLEMENTED;
+        return STATUS_BUFFER_TOO_SMALL;
     }
 
+    // Verify channel count is supported. This routine assumes a separate data
+    // range for each supported channel count.
+    if (((PKSDATARANGE_AUDIO)MyDataRange)->MaximumChannels != ((PKSDATARANGE_AUDIO)ClientDataRange)->MaximumChannels)
+    {
+        return STATUS_NO_MATCH;
+    }
+
+    //
+    // Ok, let the class handler do the rest.
+    //
+    return STATUS_NOT_IMPLEMENTED;
 } // DataRangeIntersection
 
 //=============================================================================
@@ -380,31 +340,28 @@ Return Value:
     //
     // Init the audio-engine used by the render devices.
     //
-    if (IsRenderDevice())
+    if (m_ulMaxSystemStreams == 0 )
     {
-        if (m_ulMaxSystemStreams == 0 )
-        {
-            return STATUS_INVALID_DEVICE_STATE;
-        }
-            
-        // System streams.
-        size = sizeof(PCMiniportWaveRTStream) * m_ulMaxSystemStreams;
-        m_SystemStreams = (PCMiniportWaveRTStream *)ExAllocatePool2(POOL_FLAG_NON_PAGED, size, MINWAVERT_POOLTAG);
-        if (m_SystemStreams == NULL)
-        {
-            return STATUS_INSUFFICIENT_RESOURCES;
-        }
-        
-        // 
-        // For DRM support.
-        //
-        if (!NT_SUCCESS(Port_->QueryInterface(IID_IDrmPort2, (PVOID *)&m_pDrmPort)))
-        {
-            m_pDrmPort = NULL;
-        }
+        return STATUS_INVALID_DEVICE_STATE;
     }
-    
-    // 
+
+    // System streams.
+    size = sizeof(PCMiniportWaveRTStream) * m_ulMaxSystemStreams;
+    m_SystemStreams = (PCMiniportWaveRTStream *)ExAllocatePool2(POOL_FLAG_NON_PAGED, size, MINWAVERT_POOLTAG);
+    if (m_SystemStreams == NULL)
+    {
+        return STATUS_INSUFFICIENT_RESOURCES;
+    }
+
+    //
+    // For DRM support.
+    //
+    if (!NT_SUCCESS(Port_->QueryInterface(IID_IDrmPort2, (PVOID *)&m_pDrmPort)))
+    {
+        m_pDrmPort = NULL;
+    }
+
+    //
     // For KS event support.
     //
     if (!NT_SUCCESS(Port_->QueryInterface(IID_IPortEvents, (PVOID *)&m_pPortEvents)))
@@ -486,7 +443,7 @@ Return Value:
     //
     if (NT_SUCCESS(ntStatus))
     {
-        ntStatus = IsFormatSupported(Pin, Capture, DataFormat);
+        ntStatus = IsFormatSupported(Pin, DataFormat);
     }
 
     // Instantiate a stream. Stream must be in
@@ -507,7 +464,6 @@ Return Value:
                     this,
                     OuterUnknown,
                     Pin,
-                    Capture,
                     DataFormat,
                     signalProcessingMode
                 );
@@ -667,8 +623,6 @@ CMiniportWaveRT::GetModes
     //      sink (#0) and offload (#1) pins.
     //  render is NOT offload capable:
     //      sink (#0) pin.
-    //  capture device: 
-    //      source (#1) pin.
     //
     numModes = GetPinSupportedDeviceModes(Pin, &modeInfo);
     if (numModes == 0)
@@ -715,22 +669,9 @@ CMiniportWaveRT::ValidateStreamCreate
 
     NTSTATUS ntStatus = STATUS_NOT_SUPPORTED;
 
-    if (_Capture)
+    if (!_Capture && IsSystemRenderPin(_Pin))
     {
-
-        if (IsSystemCapturePin(_Pin))
-        {
-            VERIFY_PIN_INSTANCE_RESOURCES_AVAILABLE(ntStatus, m_ulSystemAllocated, m_ulMaxSystemStreams);
-        }
-
-    }
-    else
-    {
-
-        if (IsSystemRenderPin(_Pin))
-        {
-            VERIFY_PIN_INSTANCE_RESOURCES_AVAILABLE(ntStatus, m_ulSystemAllocated, m_ulMaxSystemStreams);
-        }
+        VERIFY_PIN_INSTANCE_RESOURCES_AVAILABLE(ntStatus, m_ulSystemAllocated, m_ulMaxSystemStreams);
     }
 
     return ntStatus;
@@ -834,17 +775,6 @@ ULONG CMiniportWaveRT::GetPinSupportedDeviceModes(_In_ ULONG PinId, _Outptr_opt_
 }
 
 #pragma code_seg()
-BOOL CMiniportWaveRT::IsSystemCapturePin(ULONG nPinId)
-{
-    AcquireFormatsAndModesLock();
-
-    PINTYPE pinType = m_DeviceFormatsAndModes[nPinId].PinType;
-
-    ReleaseFormatsAndModesLock();
-    return (pinType == SystemCapturePin);
-}
-
-#pragma code_seg()
 BOOL CMiniportWaveRT::IsSystemRenderPin(ULONG nPinId)
 {
     AcquireFormatsAndModesLock();
@@ -882,12 +812,7 @@ CMiniportWaveRT::StreamCreated
     
     DPF_ENTER(("[CMiniportWaveRT::StreamCreated]"));
 
-    if (IsSystemCapturePin(_Pin))
-    {
-        ALLOCATE_PIN_INSTANCE_RESOURCES(m_ulSystemAllocated);
-        return STATUS_SUCCESS;
-    }
-    else if (IsSystemRenderPin(_Pin))
+    if (IsSystemRenderPin(_Pin))
     {
 
         ALLOCATE_PIN_INSTANCE_RESOURCES(m_ulSystemAllocated);
@@ -933,12 +858,7 @@ CMiniportWaveRT::StreamClosed
 
     DPF_ENTER(("[CMiniportWaveRT::StreamClosed]"));
 
-    if (IsSystemCapturePin(_Pin))
-    {
-        FREE_PIN_INSTANCE_RESOURCES(m_ulSystemAllocated);
-        return STATUS_SUCCESS;
-    }
-    else if (IsSystemRenderPin(_Pin))
+    if (IsSystemRenderPin(_Pin))
     {
 
         FREE_PIN_INSTANCE_RESOURCES(m_ulSystemAllocated);
@@ -1080,7 +1000,6 @@ NTSTATUS
 CMiniportWaveRT::IsFormatSupported
 (
     _In_ ULONG          _ulPin,
-    _In_ BOOLEAN        _bCapture,
     _In_ PKSDATAFORMAT  _pDataFormat
 )
 {
@@ -1092,7 +1011,6 @@ CMiniportWaveRT::IsFormatSupported
     PKSDATAFORMAT_WAVEFORMATEXTENSIBLE  pPinFormats = NULL;
     ULONG                               cPinFormats = 0;
 
-    UNREFERENCED_PARAMETER(_bCapture);
 
     if (_ulPin >= m_pMiniportPair->WaveDescriptor->PinCount)
     {
@@ -1173,8 +1091,7 @@ CMiniportWaveRT::PropertyHandlerProposedFormat
     //
     // This method is valid only on streaming pins.
     //
-    if (IsSystemRenderPin(kspPin->PinId) ||
-        IsSystemCapturePin(kspPin->PinId))
+    if (IsSystemRenderPin(kspPin->PinId))
     {
         ntStatus = STATUS_SUCCESS;
     }
@@ -1220,7 +1137,7 @@ CMiniportWaveRT::PropertyHandlerProposedFormat
     else if (PropertyRequest->Verb & KSPROPERTY_TYPE_SET)
     {
         pKsFormat = (PKSDATAFORMAT)PropertyRequest->Value;
-        ntStatus = IsFormatSupported(kspPin->PinId, IsSystemCapturePin(kspPin->PinId) || FALSE, pKsFormat);
+        ntStatus = IsFormatSupported(kspPin->PinId, pKsFormat);
         if (!NT_SUCCESS(ntStatus))
         {
             return ntStatus;

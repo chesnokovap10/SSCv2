@@ -134,7 +134,7 @@ func TestMenuWorkingBitrates(t *testing.T) {
 	if got := sscOffered(a); got[len(got)-1] != 229 {
 		t.Errorf("Buds2 Pro: %v, want up to 229", got)
 	}
-	if a.bitrateFor(config.ModeSSC) != 0 {
+	if a.winUSBBitrate(config.ModeSSC) != 0 {
 		t.Error("saved 328 should fall back to Auto")
 	}
 	s.AllBitrates = true

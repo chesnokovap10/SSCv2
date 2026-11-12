@@ -179,21 +179,11 @@ func main() {
 			fmt.Fprintln(out, "native-render:", err)
 			os.Exit(1)
 		}
-	case "native-aac-worker", "native-ssc-worker", "native-ssc_uhq-worker":
-		mode := config.ModeAAC
-		switch args[0] {
-		case "native-ssc-worker":
-			mode = config.ModeSSC
-		case "native-ssc_uhq-worker":
-			mode = config.ModeSSCUHQ
-		}
-		if err := nativebt.RunWorker(os.Stdin, os.Stdout, args[1:], mode, engine.HandleMediaKey); err != nil {
-			fmt.Fprintf(os.Stdout, "native worker: %v\n", err)
-			os.Exit(1)
-		}
+	case "native-worker":
+		os.Exit(nativebt.RunWorker(os.Stdin, os.Stdout, engine.HandleMediaKey))
 	case "native-aac":
 		out := console()
-		if err := nativebt.Run(args[1:], out); err != nil {
+		if err := nativebt.RunProbe(args[1:], out); err != nil {
 			fmt.Fprintln(out, "native-aac:", err)
 			os.Exit(1)
 		}

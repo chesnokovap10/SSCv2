@@ -17,8 +17,8 @@ func newBudsVolume() *budsVolume {
 	return v
 }
 
-func (v *budsVolume) set(level uint8) {
-	if v.wanted.Swap(int32(level)) != int32(level) {
+func (v *budsVolume) set(level int32) {
+	if v.wanted.Swap(level) != level {
 		select {
 		case v.wake <- struct{}{}:
 		default:

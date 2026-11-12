@@ -45,11 +45,8 @@ $sources = @(
     "$source\render-pcm.cpp",
     "$source\Main\NewDelete.cpp",
     "$source\Filters\speakertopo.cpp",
-    "$source\Filters\micarraytopo.cpp",
     "$source\Utilities\hw.cpp",
-    "$source\Utilities\kshelper.cpp",
-    "$source\Utilities\savedata.cpp",
-    "$source\Utilities\ToneGenerator.cpp"
+    "$source\Utilities\kshelper.cpp"
 )
 $scratch = (New-Item -ItemType Directory -Path (Join-Path ([IO.Path]::GetTempPath()) ("sscv2-render-" + [guid]::NewGuid()))).FullName
 $binary = Join-Path $scratch 'SscBudsRender.sys'

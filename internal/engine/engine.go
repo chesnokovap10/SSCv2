@@ -19,6 +19,7 @@ import (
 	"golang.org/x/sys/windows"
 
 	"sscv2/internal/audio"
+	"sscv2/internal/bitrate"
 	"sscv2/internal/bt"
 	"sscv2/internal/config"
 	"sscv2/internal/driver"
@@ -92,10 +93,9 @@ func Run(in io.Reader, stdout *os.File) int {
 		aacMode = e.cfg.AACMode
 	}
 	aacForced = e.cfg.AACBitrate * 1000
-	sscForced = e.cfg.SSCBitrate * 1000
+	sscForced = e.cfg.SSCBitrate
 	sscUHQMode = e.cfg.SSCUHQ
-	sscMaxMTU = e.cfg.MaxMTU
-	sscWorking = e.cfg.SSCMaxKbps * 1000
+	sscWorking = e.cfg.SSCMaxKbps
 	logf("engine start %s: codec=%s uhq=%v bitrate aac=%d ssc=%d maxmtu=%v headphones=%q mouse=%q adapter=%04X:%04X debug=%v lang=%s",
 		ipc.Version, e.cfg.Codec, e.cfg.SSCUHQ, e.cfg.AACBitrate, e.cfg.SSCBitrate, e.cfg.MaxMTU, e.cfg.Headphones, e.cfg.Mouse,
 		e.cfg.VID, e.cfg.PID, e.cfg.Debug, i18n.Lang())
@@ -135,14 +135,14 @@ func (e *engine) commands(r *ipc.Reader) {
 			bt.SetDebug(c.On)
 		case "lang":
 			i18n.Set(c.Lang)
-		case "stop":
+		case ipc.CommandStop:
 			e.keep.Store(c.Keep)
 			e.cancel()
 		case "scan":
 			go e.scan()
 		case "volume":
 			e.setVolume(c.Volume, c.On)
-		case "codec":
+		case ipc.CommandCodec:
 			if c.Codec != nil && (c.Codec.Codec == "aac" || c.Codec.Codec == "ssc") {
 				// Keep the latest request if the previous switch is still in progress.
 				select {
@@ -171,7 +171,7 @@ func (e *engine) update(f func(*ipc.EngineStatus)) {
 		logx.Dbgf("state", "phase=%s msg=%q connected=%v streaming=%v avrcp=%v volume=%d mouse=%q",
 			snap.Phase, snap.Message, snap.Connected, snap.Streaming, snap.AVRCP, snap.Volume, snap.MouseState)
 	}
-	_ = e.out.Write(ipc.Event{Ev: "status", Status: &snap})
+	_ = e.out.Write(ipc.Event{Ev: ipc.EventStatus, Status: &snap})
 }
 
 func (e *engine) run() error {
@@ -207,7 +207,7 @@ func (e *engine) run() error {
 		Logf:          logf,
 		Verbose:       e.cfg.Verbose,
 		Debug:         e.cfg.Debug,
-		ForceMediaMTU: map[bool]int{true: overMTU}[e.cfg.MaxMTU || e.cfg.AACMode == "over"],
+		ForceMediaMTU: map[bool]int{true: bitrate.WinUSBExtendedMTU}[e.cfg.MaxMTU || e.cfg.AACMode == "over"],
 		USBIDs:        [][2]uint16{{e.cfg.VID, e.cfg.PID}},
 	}
 	if e.cfg.Mouse != "" {
@@ -407,7 +407,7 @@ func (e *engine) session(addrStr string) error {
 	e.update(func(s *ipc.EngineStatus) {
 		s.Connected, s.SSCUHQSupported = true, &uhqSupported
 	})
-	sscUHQMode, sscForced = e.cfg.SSCUHQ, e.cfg.SSCBitrate*1000
+	sscUHQMode, sscForced = e.cfg.SSCUHQ, e.cfg.SSCBitrate
 	tryUHQ := e.cfg.TryUHQ && caps.SSC && !remoteCfg && !uhqSupported
 	if sscUHQ() && !uhqSupported && !tryUHQ {
 		logf("SSC UHQ unavailable on %s, using the supported codec", name)
@@ -534,7 +534,7 @@ func (e *engine) session(addrStr string) error {
 			oldMode, oldForced, oldWorking, oldAAC := sscUHQMode, sscForced, sscWorking, aacForced
 			aacForced = change.AACBitrate * 1000
 			sscUHQMode = change.SSCUHQ
-			sscForced, sscWorking = change.SSCBitrate*1000, change.SSCMaxKbps*1000
+			sscForced, sscWorking = change.SSCBitrate, change.SSCMaxKbps
 			target := bt.CodecAAC
 			if change.Codec == "ssc" {
 				target = bt.CodecSSC

@@ -1,2 +1,7 @@
 # The catalog covers the exact bytes of these files.
 /internal/driver/payload/** binary
+
+# Generated cgo translation units. Edit tools/genwrap or the included source.
+/internal/bt/zbt_*.c linguist-generated=true
+/internal/codec/aac/zfdk_*.cpp linguist-generated=true
+/internal/codec/ssc/zssc_*.c linguist-generated=true

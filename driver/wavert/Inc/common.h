@@ -123,7 +123,6 @@ Abstract:
 typedef enum
 {
     eSpeakerDevice = 0,
-    eMicArrayDevice1,
     eMaxDeviceType,
 } eDeviceType;
 
@@ -143,7 +142,6 @@ typedef enum
     NoPin,
     BridgePin,
     SystemRenderPin,
-    SystemCapturePin,
 } PINTYPE;
 
 //

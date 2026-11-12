@@ -8,11 +8,9 @@ import (
 	"time"
 
 	"sscv2/internal/config"
-	"sscv2/internal/driver"
 )
 
 type renderPCM struct {
-	kbps         int
 	gain         func() float32
 	read         func([]byte) (int, error)
 	out          io.Writer
@@ -31,30 +29,16 @@ const (
 	renderFadeFrames   = 96 // 2 ms at 48 kHz
 )
 
-// RunRenderDiagnostic streams PCM from the Buds WaveRT filter over native AVDTP.
-func RunRenderDiagnostic(ctx context.Context, address, wavePath string, out io.Writer, mode config.Mode) error {
-	if mode != config.ModeAAC && mode != config.ModeSSC {
-		return fmt.Errorf("WaveRT diagnostic supports AAC and SSC")
-	}
-	path, err := LocalProfilePath(address)
-	if err != nil {
+func runRenderPCM(ctx context.Context, path string, out io.Writer, mode config.Mode, kbps int, read func([]byte) (int, error), gain func() float32, ready func() error) error {
+	if err := requireTestSigning(); err != nil {
 		return err
 	}
-	return runRender(ctx, []string{path}, wavePath, out, mode)
-}
-
-func runRender(ctx context.Context, args []string, wavePath string, out io.Writer, mode config.Mode) error {
-	device, err := driver.OpenBudsPCM(wavePath)
-	if err != nil {
-		return err
-	}
-	defer device.Close()
-	return runRenderPCM(ctx, args, out, mode, DefaultBitrate(mode), device.Read, nil)
-}
-
-func runRenderPCM(ctx context.Context, args []string, out io.Writer, mode config.Mode, kbps int, read func([]byte) (int, error), gain func() float32) error {
-	render := &renderPCM{kbps: kbps, read: read, gain: gain, out: out}
-	return runWithRender(ctx, args, out, true, mode, render)
+	render := &renderPCM{read: read, gain: gain, out: out}
+	return runAVDTP(ctx, path, out, true, mode, kbps, func(media io.Writer) error {
+		return sendPCM(media, out, mode, kbps, 0, "Buds WaveRT", true, func(pcm []float32) error {
+			return render.fill(ctx, pcm)
+		}, ready)
+	})
 }
 
 func (r *renderPCM) fill(ctx context.Context, pcm []float32) error {

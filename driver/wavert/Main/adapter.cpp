@@ -45,31 +45,9 @@ StartDevice
 _Dispatch_type_(IRP_MJ_PNP)
 DRIVER_DISPATCH PnpHandler;
 
-//
-// Rendering streams are not saved to a file by default. Use the registry value 
-// DoNotCreateDataFiles (DWORD) = 0 to override this default.
-//
-DWORD g_DoNotCreateDataFiles = 1;  // default is off.
-DWORD g_DisableToneGenerator = 0;  // default is to generate tones.
-UNICODE_STRING g_RegistryPath;      // This is used to store the registry settings path for the driver
-
 //-----------------------------------------------------------------------------
 // Functions
 //-----------------------------------------------------------------------------
-
-#pragma code_seg("PAGE")
-void ReleaseRegistryStringBuffer()
-{
-    PAGED_CODE();
-
-    if (g_RegistryPath.Buffer != NULL)
-    {
-        ExFreePool(g_RegistryPath.Buffer);
-        g_RegistryPath.Buffer = NULL;
-        g_RegistryPath.Length = 0;
-        g_RegistryPath.MaximumLength = 0;
-    }
-}
 
 //=============================================================================
 #pragma code_seg("PAGE")
@@ -98,8 +76,6 @@ Environment:
 
     DPF(D_TERSE, ("[DriverUnload]"));
 
-    ReleaseRegistryStringBuffer();
-
     if (DriverObject == NULL)
     {
         goto Done;
@@ -122,132 +98,6 @@ Environment:
     }
 Done:
     return;
-}
-
-//=============================================================================
-#pragma code_seg("INIT")
-__drv_requiresIRQL(PASSIVE_LEVEL)
-NTSTATUS
-CopyRegistrySettingsPath(
-    _In_ PUNICODE_STRING RegistryPath
-)
-/*++
-
-Routine Description:
-
-Copies the following registry path to a global variable.
-
-\REGISTRY\MACHINE\SYSTEM\ControlSetxxx\Services\<driver>\Parameters
-
-Arguments:
-
-RegistryPath - Registry path passed to DriverEntry
-
-Returns:
-
-NTSTATUS - SUCCESS if able to configure the framework
-
---*/
-
-{
-    // Initializing the unicode string, so that if it is not allocated it will not be deallocated too.
-    RtlInitUnicodeString(&g_RegistryPath, NULL);
-
-    g_RegistryPath.MaximumLength = RegistryPath->Length + sizeof(WCHAR);
-
-    g_RegistryPath.Buffer = (PWCH)ExAllocatePool2(POOL_FLAG_PAGED, g_RegistryPath.MaximumLength, MINADAPTER_POOLTAG);
-
-    if (g_RegistryPath.Buffer == NULL)
-    {
-        return STATUS_INSUFFICIENT_RESOURCES;
-    }
-
-    RtlAppendUnicodeToString(&g_RegistryPath, RegistryPath->Buffer);
-
-    return STATUS_SUCCESS;
-}
-
-//=============================================================================
-#pragma code_seg("INIT")
-__drv_requiresIRQL(PASSIVE_LEVEL)
-NTSTATUS
-GetRegistrySettings(
-    _In_ PUNICODE_STRING RegistryPath
-   )
-/*++
-
-Routine Description:
-
-    Initialize Driver Framework settings from the driver
-    specific registry settings under
-
-    \REGISTRY\MACHINE\SYSTEM\ControlSetxxx\Services\<driver>\Parameters
-
-Arguments:
-
-    RegistryPath - Registry path passed to DriverEntry
-
-Returns:
-
-    NTSTATUS - SUCCESS if able to configure the framework
-
---*/
-
-{
-    NTSTATUS                    ntStatus;
-    PDRIVER_OBJECT              DriverObject;
-    HANDLE                      DriverKey;
-    RTL_QUERY_REGISTRY_TABLE    paramTable[] = {
-    // QueryRoutine     Flags                                               Name                     EntryContext             DefaultType                                                    DefaultData              DefaultLength
-        { NULL,   RTL_QUERY_REGISTRY_DIRECT | RTL_QUERY_REGISTRY_TYPECHECK, L"DoNotCreateDataFiles", &g_DoNotCreateDataFiles, (REG_DWORD << RTL_QUERY_REGISTRY_TYPECHECK_SHIFT) | REG_DWORD, &g_DoNotCreateDataFiles, sizeof(ULONG)},
-        { NULL,   RTL_QUERY_REGISTRY_DIRECT | RTL_QUERY_REGISTRY_TYPECHECK, L"DisableToneGenerator", &g_DisableToneGenerator, (REG_DWORD << RTL_QUERY_REGISTRY_TYPECHECK_SHIFT) | REG_DWORD, &g_DisableToneGenerator, sizeof(ULONG)},
-        { NULL,   0,                                                        NULL,                    NULL,                    0,                                                             NULL,                    0}
-    };
-
-    DPF(D_TERSE, ("[GetRegistrySettings]"));
-
-    PAGED_CODE();
-    UNREFERENCED_PARAMETER(RegistryPath);
-
-    DriverObject = WdfDriverWdmGetDriverObject(WdfGetDriver());
-    DriverKey = NULL;
-    ntStatus = IoOpenDriverRegistryKey(DriverObject, 
-                                 DriverRegKeyParameters,
-                                 KEY_READ,
-                                 0,
-                                 &DriverKey);
-
-    if (!NT_SUCCESS(ntStatus))
-    {
-        return ntStatus;
-    }
-
-    ntStatus = RtlQueryRegistryValues(RTL_REGISTRY_HANDLE,
-                                  (PCWSTR) DriverKey,
-                                  &paramTable[0],
-                                  NULL,
-                                  NULL);
-
-    if (!NT_SUCCESS(ntStatus)) 
-    {
-        DPF(D_VERBOSE, ("RtlQueryRegistryValues failed, using default values, 0x%x", ntStatus));
-        //
-        // Don't return error because we will operate with default values.
-        //
-    }
-
-    //
-    // Dump settings.
-    //
-    DPF(D_VERBOSE, ("DoNotCreateDataFiles: %u", g_DoNotCreateDataFiles));
-    DPF(D_VERBOSE, ("DisableToneGenerator: %u", g_DisableToneGenerator));
-
-    if (DriverKey)
-    {
-        ZwClose(DriverKey);
-    }
-
-    return STATUS_SUCCESS;
 }
 
 #pragma code_seg("INIT")
@@ -286,15 +136,6 @@ Return Value:
 
     SscPcmInitialize();
 
-    // Copy registry Path name in a global variable to be used by modules inside driver.
-    // !! NOTE !! Inside this function we are initializing the registrypath, so we MUST NOT add any failing calls
-    // before the following call.
-    ntStatus = CopyRegistrySettingsPath(RegistryPathName);
-    IF_FAILED_ACTION_JUMP(
-        ntStatus,
-        DPF(D_ERROR, ("Registry path copy error 0x%x", ntStatus)),
-        Done);
-    
     WDF_DRIVER_CONFIG_INIT(&config, WDF_NO_EVENT_CALLBACK);
     //
     // Set WdfDriverInitNoDispatchOverride flag to tell the framework
@@ -314,15 +155,6 @@ Return Value:
     IF_FAILED_ACTION_JUMP(
         ntStatus,
         DPF(D_ERROR, ("WdfDriverCreate failed, 0x%x", ntStatus)),
-        Done);
-
-    //
-    // Get registry configuration.
-    //
-    ntStatus = GetRegistrySettings(RegistryPathName);
-    IF_FAILED_ACTION_JUMP(
-        ntStatus,
-        DPF(D_ERROR, ("Registry Configuration error 0x%x", ntStatus)),
         Done);
 
     //
@@ -361,7 +193,6 @@ Done:
             WdfDriverMiniportUnload(WdfGetDriver());
         }
 
-        ReleaseRegistryStringBuffer();
     }
     
     return ntStatus;
@@ -593,82 +424,6 @@ InstallEndpointRenderFilters(
     return ntStatus;
 }
 
-#pragma code_seg("PAGE")
-NTSTATUS 
-InstallAllRenderFilters(
-    _In_ PDEVICE_OBJECT _pDeviceObject, 
-    _In_ PIRP           _pIrp, 
-    _In_ PADAPTERCOMMON _pAdapterCommon
-    )
-{
-    NTSTATUS            ntStatus;
-    PENDPOINT_MINIPAIR* ppAeMiniports   = g_RenderEndpoints;
-    
-    PAGED_CODE();
-
-    for(ULONG i = 0; i < g_cRenderEndpoints; ++i, ++ppAeMiniports)
-    {
-        ntStatus = InstallEndpointRenderFilters(_pDeviceObject, _pIrp, _pAdapterCommon, *ppAeMiniports);
-        IF_FAILED_JUMP(ntStatus, Exit);
-    }
-    
-    ntStatus = STATUS_SUCCESS;
-
-Exit:
-    return ntStatus;
-}
-
-#pragma code_seg("PAGE")
-NTSTATUS
-InstallEndpointCaptureFilters(
-    _In_ PDEVICE_OBJECT     _pDeviceObject,
-    _In_ PIRP               _pIrp,
-    _In_ PADAPTERCOMMON     _pAdapterCommon,
-    _In_ PENDPOINT_MINIPAIR _pAeMiniports
-)
-{
-    NTSTATUS    ntStatus = STATUS_SUCCESS;
-
-    PAGED_CODE();
-
-    UNREFERENCED_PARAMETER(_pDeviceObject);
-
-    ntStatus = _pAdapterCommon->InstallEndpointFilters(
-        _pIrp,
-        _pAeMiniports,
-        NULL,
-        NULL,
-        NULL,
-        NULL, NULL);
-
-    return ntStatus;
-}
-
-#pragma code_seg("PAGE")
-NTSTATUS
-InstallAllCaptureFilters(
-    _In_ PDEVICE_OBJECT _pDeviceObject,
-    _In_ PIRP           _pIrp,
-    _In_ PADAPTERCOMMON _pAdapterCommon
-)
-{
-    NTSTATUS            ntStatus;
-    PENDPOINT_MINIPAIR* ppAeMiniports = g_CaptureEndpoints;
-
-    PAGED_CODE();
-
-    for (ULONG i = 0; i < g_cCaptureEndpoints; ++i, ++ppAeMiniports)
-    {
-        ntStatus = InstallEndpointCaptureFilters(_pDeviceObject, _pIrp, _pAdapterCommon, *ppAeMiniports);
-        IF_FAILED_JUMP(ntStatus, Exit);
-    }
-
-    ntStatus = STATUS_SUCCESS;
-
-Exit:
-    return ntStatus;
-}
-
 //=============================================================================
 #pragma code_seg("PAGE")
 NTSTATUS
@@ -743,13 +498,7 @@ Return Value:
     //
     // Install wave+topology filters for render devices
     //
-    ntStatus = InstallAllRenderFilters(DeviceObject, Irp, pAdapterCommon);
-    IF_FAILED_JUMP(ntStatus, Exit);
-
-    //
-    // Install wave+topology filters for capture devices
-    //
-    ntStatus = STATUS_SUCCESS;
+    ntStatus = InstallEndpointRenderFilters(DeviceObject, Irp, pAdapterCommon, &SpeakerMiniports);
     IF_FAILED_JUMP(ntStatus, Exit);
 
 Exit:

@@ -9,6 +9,23 @@ import (
 	"unsafe"
 )
 
+func TestFindRenderEndpointAfterReplacement(t *testing.T) {
+	const adapter = "SSCv2 Buds WaveRT"
+	old := Endpoint{ID: "old", AdapterName: adapter}
+	replacement := Endpoint{ID: "new", Name: "Наушники (" + adapter + ")"}
+	speakers := Endpoint{ID: "speakers", AdapterName: "Realtek"}
+
+	if got := findRenderEndpoint([]Endpoint{replacement, old}, adapter, old.ID); got != old {
+		t.Fatalf("selected %v while the current endpoint is active", got)
+	}
+	if got := findRenderEndpoint([]Endpoint{speakers, replacement}, adapter, old.ID); got != replacement {
+		t.Fatalf("selected %v after the current endpoint disappeared", got)
+	}
+	if got := findRenderEndpoint([]Endpoint{speakers}, adapter, old.ID); got.ID != "" {
+		t.Fatalf("selected an unrelated endpoint: %v", got)
+	}
+}
+
 func TestCaptureReportsInvalidatedEndpoint(t *testing.T) {
 	const invalidated hresult = 0x88890004
 	ok := syscall.NewCallback(func(uintptr) uintptr { return 0 })

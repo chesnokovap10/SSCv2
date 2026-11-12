@@ -427,26 +427,6 @@ func (d *usbDev) download(img *fwImage) (cold bool, err error) {
 	return cold, nil
 }
 
-// Probe reads the chip id / firmware registers only.
-func Probe(vid, pid uint16, logf func(string, ...any)) (ChipInfo, error) {
-	d, err := openDev(vid, pid, logf)
-	if err != nil {
-		return ChipInfo{}, err
-	}
-	defer d.close()
-	return d.probe()
-}
-
-// SubsysReset resets the Bluetooth subsystem (next Setup is a cold load).
-func SubsysReset(vid, pid uint16, logf func(string, ...any)) error {
-	d, err := openDev(vid, pid, logf)
-	if err != nil {
-		return err
-	}
-	defer d.close()
-	return d.subsysReset()
-}
-
 // Setup is the full bring-up: probe, firmware download (skipped per section
 // when already loaded), endpoint reset option, function enable, event drain.
 // fwPath may be a file, a directory holding the expected file, or empty to

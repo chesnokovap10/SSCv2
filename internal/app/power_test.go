@@ -10,7 +10,7 @@ import (
 )
 
 func TestStreamingIconRequiresCurrentConnection(t *testing.T) {
-	p := &engineProc{}
+	p := &workerProcess{}
 	for _, tc := range []struct {
 		name                           string
 		connected, streaming, resuming bool
@@ -37,7 +37,7 @@ func TestStreamingIconRequiresCurrentConnection(t *testing.T) {
 }
 
 func TestResumeIgnoresOffAndDuplicateNotifications(t *testing.T) {
-	p := &engineProc{}
+	p := &workerProcess{}
 	for _, a := range []*App{
 		{mode: config.ModeOff, eng: p},
 		{mode: config.ModeAAC},

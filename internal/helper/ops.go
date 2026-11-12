@@ -70,8 +70,8 @@ func Handle(req ipc.Request) (resp ipc.Response) {
 			return fail(err)
 		}
 		resp.OK = true
-	case "native-render-bind", "native-render-restore":
-		if err := driver.SwitchBudsRender(req.Op == "native-render-bind", req.Device); err != nil {
+	case "native-render-restore":
+		if err := driver.RestoreBudsRender(req.Device); err != nil {
 			return fail(err)
 		}
 		resp.OK = true

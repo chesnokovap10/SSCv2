@@ -10,6 +10,7 @@ import (
 	"runtime"
 	"sync"
 
+	"sscv2/internal/codec/sscrate"
 	"sscv2/internal/logx"
 )
 
@@ -35,18 +36,6 @@ func (m Mode) EngineCodec() string {
 		return "aac"
 	}
 	return "ssc"
-}
-
-// UHQBitrates (kbps) are the SSC UHQ (96 kHz) rates; the rest are basic.
-var UHQBitrates = []int{152, 250, 291, 308, 442, 584, 886}
-
-func isUHQ(kbps int) bool {
-	for _, b := range UHQBitrates {
-		if b == kbps {
-			return true
-		}
-	}
-	return false
 }
 
 // Device is a remembered Bluetooth peer.
@@ -140,7 +129,7 @@ func (s *Settings) migrate() {
 	if s.AACMode == "over" {
 		s.AACMode, s.MaxMTU = "", true
 	}
-	if isUHQ(s.SSCBitrate) {
+	if sscrate.Valid(96000, s.SSCBitrate) {
 		// UHQ used to be "SSC with a UHQ bitrate"
 		s.SSCUHQBitrate, s.SSCBitrate = s.SSCBitrate, 0
 		if s.Mode == ModeSSC {

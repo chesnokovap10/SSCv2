@@ -1,6 +1,5 @@
 #include "definitions.h"
 #include "render-pcm.h"
-#include "definitions.h"
 #include <limits.h>
 #include <ks.h>
 #include "endpoints.h"
@@ -105,64 +104,12 @@ Return Value:
 //=============================================================================
 #pragma code_seg("PAGE")
 
-NTSTATUS CMiniportWaveRTStream::ReadRegistrySettings()
-{
-    PAGED_CODE();
-
-    NTSTATUS                    ntStatus;
-    PDRIVER_OBJECT              DriverObject;
-    HANDLE                      DriverKey;
-    RTL_QUERY_REGISTRY_TABLE    paramTable[] = {
-        // QueryRoutine     Flags                                               Name                            EntryContext                            DefaultType                                                     DefaultData                                 DefaultLength
-        { NULL,   RTL_QUERY_REGISTRY_DIRECT | RTL_QUERY_REGISTRY_TYPECHECK, L"HostCaptureToneFrequency",        &m_ulHostCaptureToneFrequency,          (REG_DWORD << RTL_QUERY_REGISTRY_TYPECHECK_SHIFT) | REG_DWORD,  &m_ulHostCaptureToneFrequency,              sizeof(DWORD) },
-        { NULL,   RTL_QUERY_REGISTRY_DIRECT | RTL_QUERY_REGISTRY_TYPECHECK, L"HostCaptureToneAmplitude",        &m_dwHostCaptureToneAmplitude,          (REG_DWORD << RTL_QUERY_REGISTRY_TYPECHECK_SHIFT) | REG_DWORD,  &m_dwHostCaptureToneAmplitude,              sizeof(DWORD) },
-        { NULL,   RTL_QUERY_REGISTRY_DIRECT | RTL_QUERY_REGISTRY_TYPECHECK, L"HostCaptureToneDCOffset",         &m_dwHostCaptureToneDCOffset,           (REG_DWORD << RTL_QUERY_REGISTRY_TYPECHECK_SHIFT) | REG_DWORD,  &m_dwHostCaptureToneDCOffset,               sizeof(DWORD) },
-        { NULL,   RTL_QUERY_REGISTRY_DIRECT | RTL_QUERY_REGISTRY_TYPECHECK, L"HostCaptureToneInitialPhase",     &m_dwHostCaptureToneInitialPhase,       (REG_DWORD << RTL_QUERY_REGISTRY_TYPECHECK_SHIFT) | REG_DWORD,  &m_dwHostCaptureToneInitialPhase,           sizeof(DWORD) },
-        { NULL,   0,                                                        NULL,                               NULL,                                   0,                                                              NULL,                                       0 }
-    };
-
-    DriverObject = WdfDriverWdmGetDriverObject(WdfGetDriver());
-    DriverKey = NULL;
-    ntStatus = IoOpenDriverRegistryKey(DriverObject, 
-                                 DriverRegKeyParameters,
-                                 KEY_READ,
-                                 0,
-                                 &DriverKey);
-
-    if (!NT_SUCCESS(ntStatus))
-    {
-        return ntStatus;
-    }
-
-    ntStatus = RtlQueryRegistryValues(RTL_REGISTRY_HANDLE,
-                                  (PCWSTR) DriverKey,
-                                  &paramTable[0],
-                                  NULL,
-                                  NULL);
-
-    if (!NT_SUCCESS(ntStatus)) 
-    {
-        DPF(D_VERBOSE, ("RtlQueryRegistryValues failed, using default values, 0x%x", ntStatus));
-        //
-        // Don't return error because we will operate with default values.
-        //
-    }
-
-    if (DriverKey)
-    {
-        ZwClose(DriverKey);
-    }
-
-    return ntStatus;
-}
-
 NTSTATUS
 CMiniportWaveRTStream::Init
 ( 
     _In_ PCMiniportWaveRT           Miniport_,
     _In_ PPORTWAVERTSTREAM          PortStream_,
     _In_ ULONG                      Pin_,
-    _In_ BOOLEAN                    Capture_,
     _In_ PKSDATAFORMAT              DataFormat_,
     _In_ GUID                       SignalProcessingMode
 )
@@ -198,7 +145,6 @@ Return Value:
     m_pMiniport = NULL;
     m_ulPin = 0;
     m_bUnregisterStream = FALSE;
-    m_bCapture = FALSE;
     m_ulDmaBufferSize = 0;
     m_pDmaBuffer = NULL;
     m_ulNotificationsPerBuffer = 0;
@@ -223,17 +169,12 @@ Return Value:
     m_ullPresentationPosition = 0;
     m_ulContentId = 0;
     m_ulCurrentWritePosition = 0;
-    m_ulLastOsReadPacket = ULONG_MAX;
     m_ulLastOsWritePacket = ULONG_MAX;
     m_IsCurrentWritePositionUpdated = 0;
     m_SignalProcessingMode = SignalProcessingMode;
     m_bEoSReceived = FALSE;
     m_bLastBufferRendered = FALSE;
 
-    m_ulHostCaptureToneFrequency = IsEqualGUID(SignalProcessingMode, AUDIO_SIGNALPROCESSINGMODE_RAW) ? 1000 : 2000;
-    m_dwHostCaptureToneAmplitude = 50;
-    m_dwHostCaptureToneDCOffset = 0;
-    m_dwHostCaptureToneInitialPhase = 0;
 
     m_pPortStream = PortStream_;
     InitializeListHead(&m_NotificationList);
@@ -269,7 +210,6 @@ Return Value:
         return ntStatus;
     }
     m_ulPin = Pin_;
-    m_bCapture = Capture_;
     m_ulDmaMovementRate = pWfEx->nAvgBytesPerSec;
 
     m_pDpc = (PRKDPC)ExAllocatePool2(POOL_FLAG_NON_PAGED, sizeof(KDPC), MINWAVERTSTREAM_POOLTAG);
@@ -301,78 +241,6 @@ Return Value:
     if (m_plPeakMeter == NULL)
     {
         return STATUS_INSUFFICIENT_RESOURCES;
-    }
-
-    if (m_bCapture)
-    {
-        ReadRegistrySettings();
-        DWORD toneFrequency = 0;
-        DWORD toneAmplitude = 0;
-        DWORD toneDCOffset = 0;
-        DWORD toneInitialPhase = 0;
-
-        double toneAmplitudeDouble = 0;
-        double toneDCOffsetDouble = 0;
-        double toneInitialPhaseDouble = 0;
-
-        toneFrequency = m_ulHostCaptureToneFrequency;
-        toneAmplitude = m_dwHostCaptureToneAmplitude;
-        toneDCOffset = m_dwHostCaptureToneDCOffset;
-        toneInitialPhase = m_dwHostCaptureToneInitialPhase;
-
-        if (labs(toneAmplitude) > 100)
-        {
-            toneAmplitude = toneAmplitude > 0 ? 100 : -100;
-        }
-
-        if (labs(toneDCOffset) > 100)
-        {
-            toneDCOffset = toneDCOffset > 0 ? 100 : -100;
-        }
-
-        DWORD abssum = labs(toneAmplitude) + labs(toneDCOffset);
-
-        if (abssum > 100)
-        {
-            toneAmplitudeDouble = ((double)toneAmplitude) / abssum;
-            toneDCOffsetDouble = ((double)toneDCOffset) / abssum;
-        }
-        else
-        {
-            toneAmplitudeDouble = ((double)toneAmplitude) / 100.0;
-            toneDCOffsetDouble = ((double)toneDCOffset) / 100.0;
-        }
-
-        if (labs(toneInitialPhase) > 31416)
-        {
-            toneInitialPhase = toneInitialPhase > 0 ? 31416 : -31416;
-        }
-
-        toneInitialPhaseDouble = (double)toneInitialPhase / 10000;
-
-        ntStatus = m_ToneGenerator.Init(toneFrequency, toneAmplitudeDouble, toneDCOffsetDouble, toneInitialPhaseDouble, m_pWfExt);
-
-        if (!NT_SUCCESS(ntStatus))
-        {
-            return ntStatus;
-        }
-    }
-    else if (!g_DoNotCreateDataFiles)
-    {
-        //
-        // Create an output file for the render data.
-        //
-        DPF(D_TERSE, ("SaveData %p", &m_SaveData));
-        ntStatus = m_SaveData.SetDataFormat(DataFormat_);
-        if (NT_SUCCESS(ntStatus))
-        {
-            ntStatus = m_SaveData.Initialize();
-        }
-    
-        if (!NT_SUCCESS(ntStatus))
-        {
-            return ntStatus;
-        }
     }
 
     //
@@ -429,11 +297,6 @@ Return Value:
     {
         *Object = PVOID(PMINIPORTWAVERTSTREAMNOTIFICATION(this));
     }
-    else if (IsEqualGUIDAligned(Interface, IID_IMiniportWaveRTInputStream) && (this->m_bCapture))
-    {
-        // This interface is supported only on capture streams
-        *Object = PVOID(PMINIPORTWAVERTINPUTSTREAM(this));
-    }
     else if (IsEqualGUIDAligned(Interface, IID_IMiniportWaveRTOutputStream))
     {
         // This interface is supported only on host render streams
@@ -485,19 +348,6 @@ NTSTATUS CMiniportWaveRTStream::AllocateBufferWithNotification
 
     RequestedSize_ -= RequestedSize_ % (m_pWfExt->Format.nBlockAlign);
     
-    if (!m_bCapture && (!g_DoNotCreateDataFiles))
-    {
-        NTSTATUS ntStatus;
-        
-        // Simple Audio Sample uses following buffer to hold data before writing to a file.
-        // Allocating larger buffer will reduce File I/O operations.
-        ntStatus = m_SaveData.SetMaxWriteSize(RequestedSize_ * 4);
-        if (!NT_SUCCESS(ntStatus))
-        {
-            return ntStatus;
-        }
-    }
-
     PHYSICAL_ADDRESS highAddress;
     highAddress.HighPart = 0;
     highAddress.LowPart = MAXULONG;
@@ -804,107 +654,6 @@ NTSTATUS CMiniportWaveRTStream::GetPosition
     return ntStatus;
 }
 
-//=============================================================================
-// CMiniportWaveRTStream::GetReadPacket
-//
-//  Returns information about the next packet for the OS to read.
-//
-// Return value
-//
-//  Returns STATUS_DEVICE_NOT_READY if no new packets are available.
-//
-// IRQL - PASSIVE_LEVEL
-//
-// Remarks
-//  Although called at passive level, this routine is non-paged code because
-//  it is called in the streaming path where page faults should be avoided.
-//
-// ISSUE-2014/10/4 Will this work correctly across pause/play?
-#pragma code_seg()
-_IRQL_requires_max_(PASSIVE_LEVEL)
-NTSTATUS CMiniportWaveRTStream::GetReadPacket
-(
-    _Out_ ULONG* PacketNumber,
-    _Out_ DWORD* Flags,
-    _Out_ ULONG64* PerformanceCounterValue,
-    _Out_ BOOL* MoreData
-)
-{
-    ULONG availablePacketNumber;
-    ULONG droppedPackets;
-
-    // The call must be from event driven mode
-    if (m_ulNotificationsPerBuffer == 0)
-    {
-        return STATUS_NOT_SUPPORTED;
-    }
-
-    *Flags = 0;
-
-    if (m_KsState < KSSTATE_PAUSE)
-    {
-        return STATUS_INVALID_DEVICE_STATE;
-    }
-
-    KIRQL oldIrql;
-    KeAcquireSpinLock(&m_PositionSpinLock, &oldIrql);
-
-    LONGLONG packetCounter = m_llPacketCounter;
-    ULONGLONG ullLinearPosition = m_ullLinearPosition;
-    ULONGLONG hnsElapsedTimeCarryForward = m_hnsElapsedTimeCarryForward;
-    ULONGLONG ullDmaTimeStamp = m_ullDmaTimeStamp;
-
-    KeReleaseSpinLock(&m_PositionSpinLock, oldIrql);
-
-    // The 0-based number of the last completed packet
-    // FUTURE-2014/10/27 Update to allow different numbers of packets per WaveRT buffer
-    availablePacketNumber = LODWORD(packetCounter - 1);  // Note this might be ULONG_MAX if called during the first packet
-
-    // If no new packets are available...
-    if (availablePacketNumber == m_ulLastOsReadPacket)
-    {
-        return STATUS_DEVICE_NOT_READY;
-    }
-
-    // If more than one packet has transferred since the last packet read by
-    // the OS, then those were dropped. That is, a glitch occurred.
-    droppedPackets = availablePacketNumber - m_ulLastOsReadPacket - 1;
-    if (droppedPackets > 0)
-    {
-        // Trace a glitch
-    }
-
-    // Return next packet number to be read
-    *PacketNumber = availablePacketNumber;
-
-    // Compute and return timestamp corresponding to the end of the available packet. In a real hardware
-    // driver, the timestamp would be computed in a driver and hardware specific manner. In this sample
-    // driver, it is extrapolated from the sample driver's internal simulated position correlation
-    // [m_ullLinearPosition @ m_ullDmaTimeStamp] and the sample's internal 64-bit packet counter, subtracting
-    // 1 from the packet counter to compute the time at the start of that last completed packet.
-    ULONGLONG linearPositionOfAvailablePacket = packetCounter * (m_ulDmaBufferSize / m_ulNotificationsPerBuffer);
-    // Need to divide by (1000 * 10000 because m_ulDmaMovementRate is average bytes per sec
-    ULONGLONG carryForwardBytes = (hnsElapsedTimeCarryForward * m_ulDmaMovementRate) / 10000000;
-    ULONGLONG deltaLinearPosition = ullLinearPosition + carryForwardBytes - linearPositionOfAvailablePacket;
-    ULONGLONG deltaTimeInHns = deltaLinearPosition * 10000000 / m_ulDmaMovementRate;
-    ULONGLONG timeOfAvailablePacketInHns = ullDmaTimeStamp - deltaTimeInHns;
-    ULONGLONG timeOfAvailablePacketInQpc = timeOfAvailablePacketInHns * m_ullPerformanceCounterFrequency.QuadPart / 10000000;
-
-    *PerformanceCounterValue = timeOfAvailablePacketInQpc;
-
-    // No flags are defined yet
-    *Flags = 0;
-
-    // This sample does not internally buffer data so there is never more data
-    // than revealed by the results from this routine.
-    *MoreData = FALSE;
-
-    // Update the last packet read by the OS
-    m_ulLastOsReadPacket = availablePacketNumber;
-
-    return STATUS_SUCCESS;
-}
-
 #pragma code_seg()
 _IRQL_requires_max_(PASSIVE_LEVEL)
 NTSTATUS CMiniportWaveRTStream::SetWritePacket
@@ -1191,8 +940,7 @@ NTSTATUS CMiniportWaveRTStream::SetState
             m_ullLinearPosition = 0;
             m_ullPresentationPosition = 0;
             
-            // Reset OS read/write positions
-            m_ulLastOsReadPacket = ULONG_MAX;
+            // Reset OS write positions
             m_ulCurrentWritePosition = 0;
             m_ulLastOsWritePacket = ULONG_MAX;
             m_bEoSReceived = FALSE;
@@ -1200,11 +948,6 @@ NTSTATUS CMiniportWaveRTStream::SetState
 
             KeReleaseSpinLock(&m_PositionSpinLock, oldIrql);
 
-            // Wait until all work items are completed.
-            if (!m_bCapture && !g_DoNotCreateDataFiles)
-            {
-                m_SaveData.WaitAllWorkItems();
-            }
             break;
 
         case KSSTATE_ACQUIRE:
@@ -1289,11 +1032,6 @@ NTSTATUS CMiniportWaveRTStream::SetFormat
 
     PAGED_CODE();
 
-    //if (!m_fCapture && !g_DoNotCreateDataFiles)
-    //{
-    //    ntStatus = m_SaveData.SetDataFormat(Format);
-    //}
-
     return STATUS_NOT_SUPPORTED;
 }
 
@@ -1332,43 +1070,34 @@ VOID CMiniportWaveRTStream::UpdatePosition
     // Increment presentation position even after last buffer is rendered.
     m_ullPresentationPosition += ByteDisplacement;
 
-    if (m_bCapture)
+    if (m_bEoSReceived)
     {
-        // Write sine wave to buffer.
-        WriteBytes(ByteDisplacement);
-    }
-    else
-    {
-
-        if (m_bEoSReceived)
+        // since EoS flag is set, we'll need to make sure not to read data beyond EOS position.
+        // If driver's current position is less than EoS position, then make sure not to read data beyond EoS.
+        if (m_ullWritePosition <= m_ulCurrentWritePosition)
         {
-            // since EoS flag is set, we'll need to make sure not to read data beyond EOS position.
-            // If driver's current position is less than EoS position, then make sure not to read data beyond EoS.
-            if (m_ullWritePosition <= m_ulCurrentWritePosition)
+            ByteDisplacement = min(ByteDisplacement, m_ulCurrentWritePosition - (ULONG)m_ullWritePosition);
+        }
+        // If our current position is ahead of EoS position and we'll wrap around after new position then adjust
+        // new position if it crosses EoS.
+        else if ((m_ullWritePosition + ByteDisplacement) % m_ulDmaBufferSize < m_ullWritePosition)
+        {
+            if ((m_ullWritePosition + ByteDisplacement) % m_ulDmaBufferSize > m_ulCurrentWritePosition)
             {
-                ByteDisplacement = min(ByteDisplacement, m_ulCurrentWritePosition - (ULONG)m_ullWritePosition);
-            }
-            // If our current position is ahead of EoS position and we'll wrap around after new position then adjust
-            // new position if it crosses EoS.
-            else if ((m_ullWritePosition + ByteDisplacement) % m_ulDmaBufferSize < m_ullWritePosition)
-            {
-                if ((m_ullWritePosition + ByteDisplacement) % m_ulDmaBufferSize > m_ulCurrentWritePosition)
-                {
-                    ByteDisplacement = ByteDisplacement - (((ULONG)m_ullWritePosition + ByteDisplacement) % m_ulDmaBufferSize - m_ulCurrentWritePosition);
-                }
+                ByteDisplacement = ByteDisplacement - (((ULONG)m_ullWritePosition + ByteDisplacement) % m_ulDmaBufferSize - m_ulCurrentWritePosition);
             }
         }
-
-        // If the last packet was rendered(read in the sample driver's case), send out an etw event.
-        if (m_bEoSReceived && !m_bLastBufferRendered
-            && (m_ullWritePosition + ByteDisplacement) % m_ulDmaBufferSize == m_ulCurrentWritePosition)
-        {
-            m_bLastBufferRendered = TRUE;
-        }
-
-        if (m_ulContentId == 0) { ReadBytes(ByteDisplacement); }
     }
-    
+
+    // If the last packet was rendered(read in the sample driver's case), send out an etw event.
+    if (m_bEoSReceived && !m_bLastBufferRendered
+        && (m_ullWritePosition + ByteDisplacement) % m_ulDmaBufferSize == m_ulCurrentWritePosition)
+    {
+        m_bLastBufferRendered = TRUE;
+    }
+
+    if (m_ulContentId == 0) { ReadBytes(ByteDisplacement); }
+
     // Increment the DMA position by the number of bytes displaced since the last
     // call to UpdatePosition() and ensure we properly wrap at buffer length.
     //
@@ -1387,39 +1116,6 @@ VOID CMiniportWaveRTStream::UpdatePosition
 
 //=============================================================================
 #pragma code_seg()
-VOID CMiniportWaveRTStream::WriteBytes
-(
-    _In_ ULONG ByteDisplacement
-)
-/*++
-
-Routine Description:
-
-This function writes the audio buffer using a sine wave generator
-
-Arguments:
-
-ByteDisplacement - # of bytes to process.
-
---*/
-{
-    ULONG bufferOffset = m_ullLinearPosition % m_ulDmaBufferSize;
-
-    // Normally this will loop no more than once for a single wrap, but if
-    // many bytes have been displaced then this may loops many times.
-    while (ByteDisplacement > 0)
-    {
-        ULONG runWrite = min(ByteDisplacement, m_ulDmaBufferSize - bufferOffset);
-        
-        m_ToneGenerator.GenerateSine(m_pDmaBuffer + bufferOffset, runWrite);
-           	
-        bufferOffset = (bufferOffset + runWrite) % m_ulDmaBufferSize;
-        ByteDisplacement -= runWrite;
-    }
-}
-
-//=============================================================================
-#pragma code_seg()
 VOID CMiniportWaveRTStream::ReadBytes
 (
     _In_ ULONG ByteDisplacement
@@ -1428,7 +1124,7 @@ VOID CMiniportWaveRTStream::ReadBytes
 
 Routine Description:
 
-This function reads the audio buffer and saves the data in a file.
+This function forwards rendered samples to the SSCv2 PCM queue.
 
 Arguments:
 
@@ -1480,6 +1176,8 @@ Return Value:
 {
     PAGED_CODE();
 
+    UNREFERENCED_PARAMETER(drmRights);
+
     DPF_ENTER(("[CMiniportWaveRT::SetContentId]"));
 
     NTSTATUS    ntStatus;
@@ -1499,45 +1197,6 @@ Return Value:
     {
         m_ulContentId = ulOldContentId;
     }
-
-    //
-    // Simple Audio Sample writes each stream seperately to disk. If the rights for this
-    // stream indicates that the stream is CopyProtected, stop writing to disk.
-    //
-    m_SaveData.Disable(drmRights->CopyProtect);
-
-    //
-    // From MSDN:
-    //
-    // This sample doesn't forward protected content, but if your driver uses 
-    // lower layer drivers or a different stack to properly work, please see the 
-    // following info from MSDN:
-    //
-    // "Before allowing protected content to flow through a data path, the system
-    // verifies that the data path is secure. To do so, the system authenticates
-    // each module in the data path beginning at the upstream end of the data path
-    // and moving downstream. As each module is authenticated, that module gives
-    // the system information about the next module in the data path so that it
-    // can also be authenticated. To be successfully authenticated, a module's 
-    // binary file must be signed as DRM-compliant.
-    //
-    // Two adjacent modules in the data path can communicate with each other in 
-    // one of several ways. If the upstream module calls the downstream module 
-    // through IoCallDriver, the downstream module is part of a WDM driver. In 
-    // this case, the upstream module calls the DrmForwardContentToDeviceObject
-    // function to provide the system with the device object representing the 
-    // downstream module. (If the two modules communicate through the downstream
-    // module's COM interface or content handlers, the upstream module calls 
-    // DrmForwardContentToInterface or DrmAddContentHandlers instead.)
-    //
-    // DrmForwardContentToDeviceObject performs the same function as 
-    // PcForwardContentToDeviceObject and IDrmPort2::ForwardContentToDeviceObject." 
-    //
-    // Other supported DRM DDIs for down-level module validation are: 
-    // DrmForwardContentToInterfaces and DrmAddContentHandlers.
-    //
-    // For more information, see MSDN's DRM Functions and Interfaces.
-    //
 
     return ntStatus;
 } // SetContentId

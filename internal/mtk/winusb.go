@@ -50,12 +50,6 @@ func devicePath(vid, pid uint16) (string, error) {
 	return "", errNotFound
 }
 
-// Present reports whether vid:pid has a whole-device USB interface.
-func Present(vid, pid uint16) bool {
-	_, err := devicePath(vid, pid)
-	return err == nil
-}
-
 // CheckWinUSB verifies that the whole-device interface can be opened and initialized.
 func CheckWinUSB(vid, pid uint16) error {
 	d, err := openDev(vid, pid, nil)

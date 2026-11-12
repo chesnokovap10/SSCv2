@@ -1,24 +1,21 @@
-package engine
+package bitrate
 
 import (
-	"fmt"
 	"strings"
+
+	"sscv2/internal/config"
 )
 
 // DevID is a Bluetooth Device ID (DI profile): vendor id source (1 =
 // Bluetooth SIG company id, 2 = USB-IF), vendor and product.
 type DevID struct{ Source, Vendor, Product uint16 }
 
-func (d DevID) String() string {
-	return fmt.Sprintf("%d:%04X:%04X", d.Source, d.Vendor, d.Product)
-}
-
 // profile: what was checked by ear on one headphones model.
 type profile struct {
-	Model string         // official model name, shown in the menu
-	id    DevID          // Device ID of the model
-	name  string         // lower-case part of the Bluetooth name (when the Device ID is unknown)
-	max   map[string]int // codec ("aac" | "ssc" | "ssc_uhq") -> highest working kbps, Unsupported = none
+	Model string              // official model name, shown in the menu
+	id    DevID               // Device ID of the model
+	name  string              // lower-case part of the Bluetooth name (when the Device ID is unknown)
+	max   map[config.Mode]int // codec ("aac" | "ssc" | "ssc_uhq") -> highest working kbps, Unsupported = none
 }
 
 // Unsupported in a profile: the codec does not work on the model (no
@@ -33,7 +30,7 @@ const Unsupported = -1
 // profile: every bitrate is offered and "Auto" is the highest one packet
 // holds.
 var profiles = []profile{
-	{Model: "Samsung Galaxy Buds2 Pro", id: DevID{1, 0x0075, 0xA013}, name: "buds2 pro", max: map[string]int{"ssc": 229, "ssc_uhq": Unsupported}},
+	{Model: "Samsung Galaxy Buds2 Pro", id: DevID{1, 0x0075, 0xA013}, name: "buds2 pro", max: map[config.Mode]int{config.ModeSSC: 229, config.ModeSSCUHQ: Unsupported}},
 }
 
 // findProfile matches by Device ID; by name only when the id is unknown.
@@ -53,7 +50,7 @@ func findProfile(id DevID, name string) *profile {
 // WorkingMax is the highest bitrate (kbps) checked to work for the codec on
 // these headphones, and their model name; 0 = not known, Unsupported = the
 // codec does not work on them.
-func WorkingMax(codec string, id DevID, name string) (int, string) {
+func WorkingMax(codec config.Mode, id DevID, name string) (int, string) {
 	if p := findProfile(id, name); p != nil && p.max[codec] != 0 {
 		return p.max[codec], p.Model
 	}

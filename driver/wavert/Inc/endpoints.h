@@ -35,14 +35,6 @@ enum
     KSPIN_WAVE_RENDER3_SOURCE
 };
 
-// Wave pins - offloading is NOT supported.
-enum 
-{
-    KSPIN_WAVE_RENDER2_SINK_SYSTEM = 0, 
-    KSPIN_WAVE_RENDER2_SINK_LOOPBACK, 
-    KSPIN_WAVE_RENDER2_SOURCE
-};
-
 // Wave Topology nodes - offloading is NOT supported.
 enum 
 {
@@ -65,39 +57,6 @@ enum
     KSNODE_TOPO_WAVEOUT_VOLUME = 0,
     KSNODE_TOPO_WAVEOUT_MUTE,
     KSNODE_TOPO_WAVEOUT_PEAKMETER
-};
-
-//----------------------------------------------------
-// New defines for the capture endpoints.
-//----------------------------------------------------
-
-// Default pin instances.
-#define MAX_INPUT_STREAMS           1       // Number of capture streams.
-
-// Wave pins
-enum 
-{
-    KSPIN_WAVE_BRIDGE = 0,
-    KSPIN_WAVEIN_HOST,
-};
-
-// Wave Topology nodes.
-enum 
-{
-    KSNODE_WAVE_ADC = 0
-};
-
-// Wave Topology nodes.
-enum 
-{
-    KSNODE_WAVE_DAC = 0
-};
-
-// topology pins.
-enum
-{
-    KSPIN_TOPO_MIC_ELEMENTS,
-    KSPIN_TOPO_BRIDGE
 };
 
 // topology nodes.

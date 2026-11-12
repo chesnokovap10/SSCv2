@@ -15,3 +15,10 @@ func openTarget(target string) {
 		logf("open %s: %v", target, err)
 	}
 }
+
+func nz(a, b string) string {
+	if a != "" {
+		return a
+	}
+	return b
+}

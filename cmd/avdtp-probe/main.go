@@ -8,7 +8,7 @@ import (
 )
 
 func main() {
-	if err := nativebt.Run(os.Args[1:], os.Stdout); err != nil {
+	if err := nativebt.RunProbe(os.Args[1:], os.Stdout); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}

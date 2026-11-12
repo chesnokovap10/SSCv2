@@ -70,4 +70,6 @@ go test ./...
 
 `build.cmd` builds `bin\ssc.exe` using BTstack, FDK-AAC and [libssc](libssc/README.md) through cgo. The tray menu and **Device info…** display the build version and commit hash.
 
+Run `go run ./tools/genwrap` after changing the list of C or C++ sources. The build checks the generated cgo wrappers with `go run ./tools/genwrap -check`. The application links the SSC encoder from `libssc/src`. The decoder, test bench and reverse-engineering tools are used by the libssc tests and research.
+
 The executable includes the AVDTP and WaveRT test-mode driver packages. See the [native driver build instructions](driver/README.md) to rebuild and sign them.

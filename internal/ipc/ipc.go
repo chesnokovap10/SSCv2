@@ -1,5 +1,5 @@
 // Package ipc defines the messages exchanged between the tray, the engine
-// child process (JSON lines over its stdin/stdout) and the helper service
+// child processes (JSON lines over stdin/stdout) and the helper service
 // (JSON request/response over a named pipe).
 package ipc
 
@@ -8,6 +8,8 @@ import (
 	"encoding/json"
 	"io"
 	"sync"
+
+	"sscv2/internal/config"
 )
 
 // ---- tray <-> engine ----------------------------------------------------------
@@ -37,6 +39,24 @@ type EngineConfig struct {
 	Carry *AudioCarry `json:"carry,omitempty"`
 }
 
+// NativeConfig is the first line the tray writes to the native worker.
+type NativeConfig struct {
+	Path           string       `json:"path"`
+	RenderEndpoint string       `json:"renderEndpoint"`
+	Device         string       `json:"device"`
+	StereoEndpoint string       `json:"stereoEndpoint,omitempty"`
+	Stream         NativeStream `json:"stream"`
+}
+
+type NativeStream struct {
+	Mode        config.Mode `json:"mode"`
+	BitrateKbps int         `json:"bitrateKbps"`
+}
+
+func (s NativeStream) Valid() bool {
+	return s.Mode.Streaming() && s.BitrateKbps > 0
+}
+
 // AudioCarry is what an engine changed in the Windows audio setup.
 type AudioCarry struct {
 	MuteEndpoint string `json:"muteEndpoint,omitempty"`
@@ -52,15 +72,23 @@ type CodecChange struct {
 	SSCMaxKbps int    `json:"sscMaxKbps,omitempty"`
 }
 
-// Command from tray to engine.
+type CommandKind string
+
+const (
+	CommandStop  CommandKind = "stop"
+	CommandCodec CommandKind = "codec"
+)
+
+// Command from tray to a playback worker.
 type Command struct {
-	Volume uint8        `json:"volume,omitempty"`
-	Cmd    string       `json:"cmd"` // "stop" | "scan" | "connect" | "debug" | "lang"
-	Addr   string       `json:"addr,omitempty"`
-	On     bool         `json:"on,omitempty"`
-	Keep   bool         `json:"keep,omitempty"` // stop: leave the audio routing for the next engine
-	Lang   string       `json:"lang,omitempty"`
-	Codec  *CodecChange `json:"codec,omitempty"`
+	Volume uint8         `json:"volume,omitempty"`
+	Cmd    CommandKind   `json:"cmd"`
+	Addr   string        `json:"addr,omitempty"`
+	On     bool          `json:"on,omitempty"`
+	Keep   bool          `json:"keep,omitempty"` // stop: leave the audio routing for the next engine
+	Lang   string        `json:"lang,omitempty"`
+	Codec  *CodecChange  `json:"codec,omitempty"`
+	Native *NativeStream `json:"native,omitempty"`
 }
 
 // Found device from a scan.
@@ -106,11 +134,20 @@ type EngineStatus struct {
 	Sent  uint64 `json:"sent"`
 }
 
-// Event from engine to tray.
+type EventKind string
+
+const (
+	EventStatus      EventKind = "status"
+	EventNativeReady EventKind = "nativeReady"
+	EventNativeLog   EventKind = "nativeLog"
+	EventNativeError EventKind = "nativeError"
+)
+
+// Event from a playback worker to the tray.
 type Event struct {
 	Codec   *CodecChange  `json:"codec,omitempty"`
 	Volume  *uint8        `json:"volume,omitempty"`
-	Ev      string        `json:"ev"` // status|scan|linkkey|log
+	Ev      EventKind     `json:"ev"`
 	Status  *EngineStatus `json:"status,omitempty"`
 	Devices []Found       `json:"devices,omitempty"`
 	Addr    string        `json:"addr,omitempty"`
@@ -118,6 +155,7 @@ type Event struct {
 	KeyType int           `json:"keyType,omitempty"`
 	Name    string        `json:"name,omitempty"`
 	Msg     string        `json:"msg,omitempty"`
+	Native  *NativeStream `json:"native,omitempty"`
 }
 
 // ---- tray -> helper ------------------------------------------------------------

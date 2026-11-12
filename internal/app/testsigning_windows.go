@@ -43,7 +43,7 @@ func (a *App) toggleTestSigning() {
 	defer a.setBusy("")
 	if enable {
 		if _, running := helper.ServiceState(); !running {
-			a.installService()
+			a.installServiceLocked()
 			if _, running := helper.ServiceState(); !running {
 				return
 			}
@@ -51,17 +51,8 @@ func (a *App) toggleTestSigning() {
 		}
 	}
 
-	if !enable {
-		a.mu.Lock()
-		wasNative := a.native != nil
-		a.mu.Unlock()
-		if err := a.stopNativeAudio(); err != nil {
-			a.nativeError(err)
-			return
-		}
-		if wasNative {
-			a.setMode(config.ModeOff)
-		}
+	if !enable && !a.disableNativePlaybackLocked() {
+		return
 	}
 	if _, err := helper.Call(ipc.Request{Op: "test-signing", TestSigning: &enable}); err != nil {
 		tray.Info(title, fmt.Sprintf(T("Не удалось применить настройки тестового режима.\n\n%v", "Could not apply the Windows test-mode settings.\n\n%v"), err))
@@ -84,13 +75,11 @@ func (a *App) toggleTestSigning() {
 		a.mu.Unlock()
 		winUSB := a.refreshAdapter().Mode == driver.WinUSB
 		if (legacyRunning || winUSB) && (mode == config.ModeAAC || mode == config.ModeSSC) {
-			// enable returns the adapter to Windows before startNativeAudio
-			// registers the local profile on the radio.
-			go a.enable(mode)
+			a.switchModeLocked(mode)
 			return
 		}
 		if legacyRunning || winUSB {
-			a.disableLocked()
+			a.switchModeLocked(config.ModeOff)
 			if a.refreshAdapter().Mode == driver.WinUSB {
 				return
 			}

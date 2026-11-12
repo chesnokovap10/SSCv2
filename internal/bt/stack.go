@@ -676,15 +676,6 @@ func Disconnect() {
 func Connected() bool { return stack.connected.Load() }
 func Streaming() bool { return stack.streaming.Load() }
 
-// MediaMTU is the maximum media payload (after the RTP header is added by
-// BTstack the packet fits the L2CAP MTU).
-func MediaMTU() int {
-	if m := int(stack.mtu.Load()); m > 0 {
-		return m
-	}
-	return 667
-}
-
 // Stats returns (queued packets, failures since last call, packets sent).
 func Stats() (int, uint32, uint64) {
 	s := stack

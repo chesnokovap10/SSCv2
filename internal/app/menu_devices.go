@@ -71,7 +71,7 @@ func (a *App) selectMenuDevice(id int) {
 	eng := a.eng
 	a.mu.Unlock()
 	if mouse {
-		go a.restartEngine()
+		go a.restartWinUSB()
 	} else if eng != nil {
 		eng.send(ipc.Command{Cmd: "connect", Addr: device.Addr})
 	}

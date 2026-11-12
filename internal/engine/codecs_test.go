@@ -8,9 +8,9 @@ func TestSSCBitrate(t *testing.T) {
 		cfg  uint8
 		want int
 	}{
-		{667, 0x0C, 256000}, // Galaxy Buds: 630-byte frames
+		{667, 0x0C, 256000},  // Galaxy Buds: 630-byte frames
 		{1005, 0x0C, 328000}, // Max MTU: 806-byte frames
-		{667, 0x04, 128000}, // sink without the "no bitrate limit" bit
+		{667, 0x04, 128000},  // sink without the "no bitrate limit" bit
 		{667, 0, 256000},
 		{484, 0x0C, 192000},
 		{483, 0x0C, 128000},
@@ -33,31 +33,25 @@ func TestSSCForced(t *testing.T) {
 		{256, 667, 256000},
 		{229, 667, 229000},
 	} {
-		sscForced = c.kbps * 1000
+		sscForced = c.kbps
 		if got, err := sscBitrate(48000, c.mtu, 0x04); err != nil || got != c.want {
 			t.Errorf("%d kbps mtu %d: %d %v, want %d", c.kbps, c.mtu, got, err, c.want)
 		}
-	}
-	if sscNeedsOver(256) || !sscNeedsOver(328) || sscNeedsOver(0) {
-		t.Error("sscNeedsOver")
 	}
 }
 
 func TestSSCUHQ(t *testing.T) {
 	defer func() { sscForced = 0 }()
-	sscForced = 584000
+	sscForced = 584
 	if !sscUHQ() || sscEncodeRate(48000) != 96000 {
 		t.Fatal("584k is not UHQ")
 	}
 	if got, err := sscBitrate(96000, 667, 0x0A); err != nil || got != 584000 {
 		t.Errorf("584k mtu 667: %d %v", got, err)
 	}
-	sscForced = 886000
+	sscForced = 886
 	if got, _ := sscBitrate(96000, 667, 0x0A); got != 584000 {
 		t.Errorf("886k mtu 667: %d, want 584000", got)
-	}
-	if !sscNeedsOver(886) || sscNeedsOver(584) {
-		t.Error("sscNeedsOver UHQ")
 	}
 	e, err := newSSC(48000, 1005)
 	if err != nil {
@@ -74,8 +68,6 @@ func TestSSCUHQ(t *testing.T) {
 }
 
 func TestMaxMTUAuto(t *testing.T) {
-	defer func() { sscMaxMTU = false }()
-	sscMaxMTU = true
 	if got, _ := sscBitrate(48000, 1005, 0x0C); got != 328000 {
 		t.Errorf("max MTU auto: %d, want 328000", got)
 	}
@@ -87,42 +79,9 @@ func TestMaxMTUAuto(t *testing.T) {
 	}
 }
 
-func TestBitrateFits(t *testing.T) {
-	for _, c := range []struct {
-		codec  string
-		kbps   int
-		maxMTU bool
-		want   bool
-	}{
-		{"aac", 0, false, true}, {"aac", 224, false, true}, {"aac", 256, false, false}, {"aac", 256, true, true},
-		{"ssc", 256, false, true}, {"ssc", 328, false, false}, {"ssc", 328, true, true},
-		{"ssc_uhq", 584, false, true}, {"ssc_uhq", 886, false, false}, {"ssc_uhq", 886, true, true},
-	} {
-		if got := BitrateFits(c.codec, c.kbps, c.maxMTU); got != c.want {
-			t.Errorf("%s %d maxMTU=%v: %v", c.codec, c.kbps, c.maxMTU, got)
-		}
-	}
-}
-
-func TestWorkingMax(t *testing.T) {
-	b2p := DevID{1, 0x0075, 0xA013}
-	if k, m := WorkingMax("ssc", b2p, "renamed"); k != 229 || m != "Samsung Galaxy Buds2 Pro" {
-		t.Errorf("Buds2 Pro by id: %d %q", k, m)
-	}
-	if k, _ := WorkingMax("ssc", DevID{}, "Buds2 Pro JK08"); k != 229 {
-		t.Errorf("Buds2 Pro by name (no id): %d", k)
-	}
-	if k, _ := WorkingMax("ssc", DevID{1, 0x0075, 0xA0FF}, "Buds2 Pro JK08"); k != 0 {
-		t.Errorf("another Samsung product id named like Buds2 Pro: %d", k)
-	}
-	if k, _ := WorkingMax("ssc_uhq", b2p, ""); k != Unsupported {
-		t.Errorf("UHQ on Buds2 Pro: %d, want Unsupported", k)
-	}
-	if k, _ := WorkingMax("aac", b2p, ""); k != 0 {
-		t.Errorf("AAC not profiled: %d", k)
-	}
-	defer func() { sscWorking, sscMaxMTU = 0, false }()
-	sscWorking, sscMaxMTU = 229000, true
+func TestSSCWorkingMax(t *testing.T) {
+	defer func() { sscWorking = 0 }()
+	sscWorking = 229
 	if got, _ := sscBitrate(48000, 1005, 0x0C); got != 229000 {
 		t.Errorf("Auto on Buds2 Pro: %d, want 229000", got)
 	}

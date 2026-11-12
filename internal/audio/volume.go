@@ -225,12 +225,6 @@ func headphonesEndpoint(name string) (Endpoint, bool) {
 	return Endpoint{}, false
 }
 
-// HeadphonesStereoActive reports whether Windows can render to these headphones.
-func HeadphonesStereoActive(name string) bool {
-	_, ok := headphonesEndpoint(name)
-	return ok
-}
-
 // HeadphonesVolume reads the Windows stereo endpoint's level and mute state.
 func HeadphonesVolume(name string) (level float32, muted bool, ok bool) {
 	if name == "" {
@@ -280,38 +274,38 @@ func SetEndpointVolume(id string, level float32, muted bool) error {
 }
 
 // WatchEndpointPCMGain tracks hardware controls that Windows delegates to WaveRT.
-// The returned reader is used by one encoder at a time.
-func WatchEndpointPCMGain(id string, onHardwareVolume func(uint8)) (read func() float32, stop func(), err error) {
-	vol, err := endpointVolume(id)
-	if err != nil {
-		return nil, nil, err
-	}
+// Windows can replace an endpoint when the driver is updated.
+func WatchEndpointPCMGain(id, adapter string, onHardwareVolume func(int32)) (read func() float32, stop func(), err error) {
+	var vol uintptr
 	var support uint32
-	if err := hr(vcall(vol, 19, uintptr(unsafe.Pointer(&support)))); err != nil {
-		release(vol)
-		return nil, nil, err
-	}
-	if support&(hardwareVolume|hardwareMute) == 0 {
-		release(vol)
-		return func() float32 { return 1 }, func() {}, nil
-	}
 	var gain atomic.Uint32
 	lastLevel := float32(-1)
 	var lastMute int32
-	refresh := func() error {
-		var level float32
-		if support&hardwareVolume != 0 {
-			current, err := getScalar(vol)
-			if err != nil {
-				return err
-			}
-			level = current
+	refresh := func(vol uintptr, support uint32, rebound, replaced bool) error {
+		level, err := getScalar(vol)
+		if err != nil {
+			return err
 		}
 		var muted int32
 		if err := hr(vcall(vol, 15, uintptr(unsafe.Pointer(&muted)))); err != nil {
 			return err
 		}
-		if level == lastLevel && muted == lastMute {
+		if replaced && lastLevel >= 0 {
+			// A newly published endpoint starts at full volume and unmuted.
+			if lastMute != 0 && muted == 0 {
+				if err := hr(vcall(vol, 14, 1, uintptr(unsafe.Pointer(&trayContext)))); err != nil {
+					return err
+				}
+				muted = 1
+			}
+			if level >= 0.99 && lastLevel < 0.99 {
+				if err := setScalar(vol, lastLevel, &trayContext); err != nil {
+					return err
+				}
+				level = lastLevel
+			}
+		}
+		if !rebound && level == lastLevel && muted == lastMute {
 			return nil
 		}
 		current := float32(1)
@@ -326,33 +320,66 @@ func WatchEndpointPCMGain(id string, onHardwareVolume func(uint8)) (read func() 
 		}
 		gain.Store(math.Float32bits(current))
 		lastLevel, lastMute = level, muted
+		value := int32(-1) // Windows applies volume when the endpoint has no hardware control.
 		if support&hardwareVolume != 0 {
-			value := ScalarTo127(level)
+			value = int32(ScalarTo127(level))
 			if muted != 0 {
 				value = 0
 			}
-			onHardwareVolume(value)
 		}
+		onHardwareVolume(value)
 		return nil
 	}
-	if err := refresh(); err != nil {
+	bind := func(next string) error {
+		newVol, err := endpointVolume(next)
+		if err != nil {
+			return err
+		}
+		var newSupport uint32
+		if err := hr(vcall(newVol, 19, uintptr(unsafe.Pointer(&newSupport)))); err != nil {
+			release(newVol)
+			return err
+		}
+		if err := refresh(newVol, newSupport, true, next != id); err != nil {
+			release(newVol)
+			return err
+		}
 		release(vol)
+		vol, support, id = newVol, newSupport, next
+		return nil
+	}
+	resolve := func() string { return FindRenderEndpoint(adapter, id, StateActive).ID }
+	err = bind(id)
+	for deadline := time.Now().Add(time.Second); err != nil && time.Now().Before(deadline); {
+		time.Sleep(50 * time.Millisecond)
+		if next := resolve(); next != "" {
+			err = bind(next)
+		}
+	}
+	if err != nil {
 		return nil, nil, err
 	}
-	// Read the endpoint directly. Windows can report changes to the tray's
-	// subscription while the native worker's endpoint callback misses them.
 	done, stopped := make(chan struct{}), make(chan struct{})
 	go func() {
 		defer close(stopped)
-		defer release(vol)
+		defer func() { release(vol) }()
 		ticker := time.NewTicker(20 * time.Millisecond)
 		defer ticker.Stop()
+		devices := time.NewTicker(250 * time.Millisecond)
+		defer devices.Stop()
 		for {
 			select {
 			case <-done:
 				return
 			case <-ticker.C:
-				_ = refresh()
+				if vol != 0 && refresh(vol, support, false, false) != nil {
+					release(vol)
+					vol = 0
+				}
+			case <-devices.C:
+				if next := resolve(); next != "" && (vol == 0 || next != id) {
+					_ = bind(next)
+				}
 			}
 		}
 	}()
@@ -363,18 +390,6 @@ func WatchEndpointPCMGain(id string, onHardwareVolume func(uint8)) (read func() 
 }
 
 const hardwareVolume, hardwareMute = 1, 2
-
-// SetLevel sets an endpoint's master level (0..1).
-func SetLevel(id string, level float32) error {
-	vol, err := endpointVolume(id)
-	if err != nil {
-		return err
-	}
-	defer release(vol)
-	err = setScalar(vol, level, &trayContext)
-	logx.Dbgf("vol", "set %s to %.1f%%: %v", id, level*100, err)
-	return err
-}
 
 // Level reads an endpoint's master level (0..1).
 func Level(id string) (float32, error) {

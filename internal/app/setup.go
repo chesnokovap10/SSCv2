@@ -144,12 +144,8 @@ func (a *App) uninstall(confirmed bool) {
 		return
 	}
 	logf("uninstall: start")
-	a.mu.Lock()
-	a.quitting = true
-	mode := a.mode
-	a.mu.Unlock()
-	if mode != config.ModeOff {
-		a.disable()
+	if !a.beginShutdown(false) {
+		return
 	}
 	a.setBusy(T("удаление программы", "uninstalling"))
 	code, err := helper.RunElevated(fmt.Sprintf("uninstall-system --pid %d", os.Getpid()))
@@ -183,4 +179,76 @@ func UninstallSystem(pid int) int {
 		return 1
 	}
 	return 0
+}
+
+func (a *App) installService() {
+	a.opMu.Lock()
+	defer a.opMu.Unlock()
+	a.installServiceLocked()
+}
+
+func (a *App) installServiceLocked() {
+	a.setBusy(T("установка службы", "installing the service"))
+	defer a.setBusy("")
+	code, err := helper.RunElevated("service-install --owner " + helper.CurrentUserSID())
+	if err == nil && code != 0 {
+		err = fmt.Errorf(T("код %d, см. журнал helper.log", "code %d, see helper.log"), code)
+	}
+	if err != nil {
+		a.t.Balloon(T("Служба не установлена", "Service not installed"), err.Error(), 2)
+		return
+	}
+	a.t.Balloon("SSCv2", T("Служба установлена и запущена: переключения больше не требуют подтверждения UAC.",
+		"The service is installed and running: switching no longer asks for UAC."), 0)
+}
+
+func (a *App) removeService() {
+	// Give Bluetooth back to Windows while the helper can still do it.
+	a.opMu.Lock()
+	defer a.opMu.Unlock()
+	a.mu.Lock()
+	needsRestore := a.needsPlaybackRestore()
+	quitting := a.quitting
+	a.mu.Unlock()
+	if quitting {
+		return
+	}
+	a.t.CloseMenu()
+	if needsRestore && !a.stopPlaybackLocked() {
+		a.setBusy("")
+		return
+	}
+	a.setBusy(T("удаление службы", "removing the service"))
+	defer a.setBusy("")
+	code, err := helper.RunElevated("service-uninstall")
+	if err == nil && code != 0 {
+		err = fmt.Errorf(T("код %d", "code %d"), code)
+	}
+	if err != nil {
+		a.t.Balloon(T("Служба не удалена", "Service not removed"), err.Error(), 2)
+		return
+	}
+	a.t.Balloon("SSCv2", T("Служба удалена.", "Service removed."), 0)
+}
+
+// exit quits the tray. keepMode (update): the adapter goes back to Windows
+// as usual, but the saved codec stays so the new version resumes it.
+func (a *App) exit(keepMode bool) {
+	if !a.beginShutdown(keepMode) {
+		return
+	}
+	// Wait for the Windows endpoint to receive the carried volume and mute.
+	a.mu.Lock()
+	settled := a.volSettled
+	a.mu.Unlock()
+	if settled != nil {
+		a.setBusy(T("перенос громкости в Windows", "carrying the volume to Windows"))
+		select {
+		case <-settled:
+		case <-time.After(8 * time.Second):
+			logf("exit: volume carry-over not finished in 8 s")
+		}
+	}
+	logf("tray exit (keep mode %v)", keepMode)
+	a.t.Quit()
 }

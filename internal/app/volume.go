@@ -3,6 +3,7 @@ package app
 import (
 	"sscv2/internal/audio"
 	"sscv2/internal/config"
+	"sscv2/internal/driver"
 	"sscv2/internal/ipc"
 )
 
@@ -61,7 +62,11 @@ func (a *App) sliderVolumeLocked() (uint8, bool, bool) {
 
 func (a *App) nativeVolumeEndpointLocked() string {
 	if a.native != nil && a.mode.Streaming() {
-		return a.s.NativeRenderEndpoint
+		saved := a.s.NativeRenderEndpoint
+		if endpoint := audio.FindRenderEndpoint(driver.BudsRenderName, saved, audio.StateActive); endpoint.ID != "" {
+			return endpoint.ID
+		}
+		return saved
 	}
 	return ""
 }
