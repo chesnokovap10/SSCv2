@@ -57,6 +57,9 @@ func (a *App) stateLocked() (tray.Color, string) {
 		}
 		return tray.Amber, modeName(a.native.Mode) + " (Windows Bluetooth)..."
 	}
+	if a.nativeWaiting != nil {
+		return tray.Blue, T("ожидание наушников", "waiting for headphones")
+	}
 	if a.mode == config.ModeOff {
 		if a.adapter.Mode == driver.WinUSB {
 			return tray.Blue, T("выкл (адаптер в WinUSB)", "off (adapter in WinUSB)")
@@ -64,6 +67,9 @@ func (a *App) stateLocked() (tray.Color, string) {
 		return tray.Gray, T("выкл - Bluetooth Windows", "off - Windows Bluetooth")
 	}
 	if a.eng == nil {
+		if a.st.StreamStartFailed {
+			return tray.Red, fmt.Sprintf(T("%s не запустился", "%s failed to start"), modeName(a.mode))
+		}
 		if a.noBitrate(a.mode) {
 			return tray.Red, a.unsupportedText(a.mode)
 		}

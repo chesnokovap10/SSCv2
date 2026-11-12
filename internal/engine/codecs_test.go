@@ -2,6 +2,24 @@ package engine
 
 import "testing"
 
+func TestAACManualBitrateIsNotClamped(t *testing.T) {
+	defer func() { aacForced = 0 }()
+	aacForced = 256000
+	if enc, err := newAAC(48000, 667); err == nil {
+		enc.Close()
+		t.Fatal("256 kbps should fail when it does not fit the packet")
+	}
+	aacForced = 0
+	enc, err := newAAC(48000, 667)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer enc.Close()
+	if got := enc.BitrateKbps(); got != 250 {
+		t.Fatalf("Auto AAC bitrate = %d, want 250", got)
+	}
+}
+
 func TestSSCBitrate(t *testing.T) {
 	for _, c := range []struct {
 		mtu  int
@@ -29,12 +47,12 @@ func TestSSCForced(t *testing.T) {
 	defer func() { sscForced = 0 }()
 	for _, c := range []struct{ kbps, mtu, want int }{
 		{328, 1017, 328000},
-		{328, 667, 256000}, // not raised: steps down to what fits
+		{328, 667, 0}, // the requested frame does not fit
 		{256, 667, 256000},
 		{229, 667, 229000},
 	} {
 		sscForced = c.kbps
-		if got, err := sscBitrate(48000, c.mtu, 0x04); err != nil || got != c.want {
+		if got, err := sscBitrate(48000, c.mtu, 0x04); (err != nil) != (c.want == 0) || got != c.want {
 			t.Errorf("%d kbps mtu %d: %d %v, want %d", c.kbps, c.mtu, got, err, c.want)
 		}
 	}
@@ -50,8 +68,8 @@ func TestSSCUHQ(t *testing.T) {
 		t.Errorf("584k mtu 667: %d %v", got, err)
 	}
 	sscForced = 886
-	if got, _ := sscBitrate(96000, 667, 0x0A); got != 584000 {
-		t.Errorf("886k mtu 667: %d, want 584000", got)
+	if got, err := sscBitrate(96000, 667, 0x0A); err == nil || got != 0 {
+		t.Errorf("886k mtu 667: %d, %v, want an error", got, err)
 	}
 	e, err := newSSC(48000, 1005)
 	if err != nil {

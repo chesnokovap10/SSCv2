@@ -13,6 +13,7 @@ import (
 
 	"sscv2/internal/config"
 	"sscv2/internal/driver"
+	"sscv2/internal/ipc"
 )
 
 const (
@@ -78,7 +79,7 @@ func (p *avdtpSession) command(signal byte, payload ...byte) ([]byte, error) {
 	}
 }
 
-func inspect(link io.ReadWriter, out io.Writer, openMedia func() (io.WriteCloser, error), send func(io.Writer) error, mode config.Mode, kbps int) error {
+func inspect(link io.ReadWriter, out io.Writer, openMedia func() (io.WriteCloser, error), send func(io.Writer) error, stream ipc.NativeStream, capabilities func(bool)) error {
 	p := avdtpSession{link: link}
 	endpoints, err := p.command(discover)
 	if err != nil {
@@ -89,6 +90,9 @@ func inspect(link io.ReadWriter, out io.Writer, openMedia func() (io.WriteCloser
 	}
 	var selectedSEID byte
 	var selectedCodec []byte
+	var experimentalSEID byte
+	var experimentalCodec []byte
+	var uhqSupported bool
 	for i := 0; i < len(endpoints); i += 2 {
 		seid := endpoints[i] >> 2
 		if endpoints[i+1]>>3 != 1 {
@@ -114,26 +118,37 @@ func inspect(link io.ReadWriter, out io.Writer, openMedia func() (io.WriteCloser
 					return fmt.Errorf("SEID %d: truncated media codec", seid)
 				}
 				fmt.Fprintf(out, "  media type %#x, codec %#02x, data % x\n", value[0]>>4, value[1], value[2:])
+				uhqSupported = uhqSupported || sscSupportsRate(value, 0x02)
 				if selectedSEID == 0 && endpoints[i]&2 == 0 && openMedia != nil {
-					selectedCodec = codecConfiguration(mode, value, kbps)
+					selectedCodec = codecConfiguration(stream.Mode, value, stream.BitrateKbps)
 					if selectedCodec != nil {
 						selectedSEID = seid
+					} else if experimentalSEID == 0 && stream.Mode == config.ModeSSCUHQ && stream.TryUHQ && sscSupportsRate(value, 0x04) {
+						experimentalSEID = seid
+						experimentalCodec = sscConfiguration(value, 0x02)
 					}
 				}
 			}
 			caps = caps[2+size:]
 		}
-		if selectedSEID != 0 {
+		if selectedSEID != 0 && capabilities == nil {
 			break
 		}
+	}
+	if capabilities != nil {
+		capabilities(uhqSupported)
 	}
 	if openMedia == nil {
 		return nil
 	}
 	if selectedSEID == 0 {
-		return fmt.Errorf("no idle %s sink supports the requested configuration", mode)
+		selectedSEID, selectedCodec = experimentalSEID, experimentalCodec
+		if selectedSEID == 0 {
+			return fmt.Errorf("no idle %s sink supports the requested configuration", stream.Mode)
+		}
+		fmt.Fprintf(out, "trying SSC UHQ on SEID %d without advertised support\n", selectedSEID)
 	}
-	return p.stream(out, selectedSEID, selectedCodec, openMedia, send, mode)
+	return p.stream(out, selectedSEID, selectedCodec, openMedia, send, stream.Mode)
 }
 
 func supportsAAC(codec []byte, bitrate int) bool {
@@ -145,18 +160,26 @@ func supportsAAC(codec []byte, bitrate int) bool {
 	return maxBitrate == 0 || maxBitrate >= bitrate
 }
 
+func sscSupportsRate(codec []byte, flag byte) bool {
+	return len(codec) == 9 && codec[0]>>4 == 0 && codec[1] == 0xff &&
+		binary.LittleEndian.Uint32(codec[2:6]) == 0x75 &&
+		binary.LittleEndian.Uint16(codec[6:8]) == 0x0103 && codec[8]&flag != 0
+}
+
+func sscConfiguration(codec []byte, flag byte) []byte {
+	return []byte{0, 0xff, 0x75, 0, 0, 0, 0x03, 0x01, flag | codec[8]&0x08}
+}
+
 func codecConfiguration(mode config.Mode, codec []byte, kbps int) []byte {
 	if mode == config.ModeSSC || mode == config.ModeSSCUHQ {
 		rateFlag := byte(0x04)
 		if mode == config.ModeSSCUHQ {
 			rateFlag = 0x02
 		}
-		if len(codec) != 9 || codec[0]>>4 != 0 || codec[1] != 0xff ||
-			binary.LittleEndian.Uint32(codec[2:6]) != 0x75 ||
-			binary.LittleEndian.Uint16(codec[6:8]) != 0x0103 || codec[8]&rateFlag == 0 {
+		if !sscSupportsRate(codec, rateFlag) {
 			return nil
 		}
-		return []byte{0, 0xff, 0x75, 0, 0, 0, 0x03, 0x01, rateFlag | codec[8]&0x08}
+		return sscConfiguration(codec, rateFlag)
 	}
 	bitrate := uint32(kbps * 1000)
 	if !supportsAAC(codec, int(bitrate)) {
@@ -203,7 +226,7 @@ func (p *avdtpSession) stream(out io.Writer, seid byte, codec []byte, openMedia 
 
 // runAVDTP opens the signaling channel and discovers the remote endpoints.
 // If send is provided, it negotiates a media stream and hands it to the sender.
-func runAVDTP(ctx context.Context, path string, out io.Writer, retry bool, mode config.Mode, kbps int, send func(io.Writer) error) error {
+func runAVDTP(ctx context.Context, path string, out io.Writer, retry bool, stream ipc.NativeStream, send func(io.Writer) error, capabilities func(bool)) error {
 	started := time.Now()
 	link, err := openChannel(ctx, path, retry)
 	if err != nil {
@@ -217,7 +240,7 @@ func runAVDTP(ctx context.Context, path string, out io.Writer, retry bool, mode 
 			return openChannel(ctx, path, retry)
 		}
 	}
-	return inspect(link, out, openMedia, send, mode, kbps)
+	return inspect(link, out, openMedia, send, stream, capabilities)
 }
 
 func requireTestSigning() error {

@@ -33,13 +33,19 @@ func (a *App) setBitrate(kbps int) {
 	defer a.opMu.Unlock()
 	a.mu.Lock()
 	m := a.mode
-	if !m.Streaming() || !a.offered(m, kbps) || a.s.Bitrate(m) == kbps {
+	retryStream := a.st.StreamStartFailed && a.eng == nil && a.native == nil
+	if !m.Streaming() || !a.offered(m, kbps) || a.s.Bitrate(m) == kbps && !retryStream {
 		a.mu.Unlock()
 		return
 	}
 	a.s.SetBitrate(m, kbps)
 	_ = config.Save(a.s)
 	defer a.t.RefreshMenu()
+	if retryStream {
+		a.mu.Unlock()
+		a.switchModeLocked(m)
+		return
+	}
 	if p := a.native; p != nil {
 		a.mu.Unlock()
 		a.changeNativeCodecLocked(p, m)
@@ -141,6 +147,18 @@ func (a *App) prefersNativeBitrates() bool {
 
 func (a *App) bitratePolicy(m config.Mode, native bool) (bitrate.Policy, string) {
 	limit, model := a.workingMax(m)
+	if m == config.ModeSSCUHQ && limit == bitrate.Unsupported {
+		supported := a.st.SSCUHQSupported
+		if native {
+			supported = nil
+			if a.native != nil {
+				supported = a.native.uhqSupported
+			}
+		}
+		if supported != nil && *supported {
+			limit = 0
+		}
+	}
 	return bitrate.Policy{Native: native, MaxMTU: a.s.MaxMTU, AllBitrates: a.s.AllBitrates, WorkingMax: limit}, model
 }
 
@@ -154,11 +172,19 @@ func (a *App) uhqUnavailable() bool {
 	if a.s.AllBitrates {
 		return false
 	}
+	if a.native != nil && a.native.uhqSupported != nil {
+		return !*a.native.uhqSupported
+	}
 	if a.st.Connected && a.st.SSCUHQSupported != nil {
 		return !*a.st.SSCUHQSupported
 	}
 	limit, _ := a.workingMax(config.ModeSSCUHQ)
 	return limit == bitrate.Unsupported
+}
+
+// nativeStreamLocked requires a.mu.
+func (a *App) nativeStreamLocked(mode config.Mode) ipc.NativeStream {
+	return ipc.NativeStream{Mode: mode, BitrateKbps: a.nativeBitrateLocked(mode), TryUHQ: mode == config.ModeSSCUHQ && a.s.AllBitrates}
 }
 
 // noBitrate: nothing can be offered for the codec on these headphones (not

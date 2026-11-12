@@ -27,6 +27,7 @@ func (a *App) startWinUSBPlaybackLocked(m config.Mode, eng *workerProcess, strea
 	}
 	codec := a.codecChange(m)
 	a.mu.Unlock()
+	a.setMode(m)
 	if !blocked && eng != nil && eng.running() && streaming {
 		if m == config.ModeSSCUHQ {
 			a.mu.Lock()
@@ -34,9 +35,6 @@ func (a *App) startWinUSBPlaybackLocked(m config.Mode, eng *workerProcess, strea
 			a.mu.Unlock()
 		}
 		if err := eng.in.Write(ipc.Command{Cmd: ipc.CommandCodec, Codec: &codec}); err == nil {
-			if m != config.ModeSSCUHQ {
-				a.setMode(m)
-			}
 			return
 		}
 		a.mu.Lock()
@@ -54,7 +52,6 @@ func (a *App) startWinUSBPlaybackLocked(m config.Mode, eng *workerProcess, strea
 	if blocked {
 		// codec chosen, but not supported by these headphones: no stream
 		// until Settings > All bitrates
-		a.setMode(m)
 		a.mu.Lock()
 		msg := a.unsupportedText(m)
 		a.mu.Unlock()
@@ -66,7 +63,7 @@ func (a *App) startWinUSBPlaybackLocked(m config.Mode, eng *workerProcess, strea
 	st := a.refreshAdapter()
 	if st.Mode == driver.NotPresent {
 		a.t.Balloon("SSCv2", T("Адаптер MediaTek не найден", "MediaTek adapter not found"), 2)
-		a.setMode(config.ModeOff)
+		a.markStreamStartFailed()
 		return
 	}
 	if st.Mode == driver.BthUSB {
@@ -91,7 +88,7 @@ func (a *App) startWinUSBPlaybackLocked(m config.Mode, eng *workerProcess, strea
 			logf("driver winusb: %v", err)
 			a.t.Balloon(T("Не удалось включить поток", "Could not start streaming"), err.Error(), 2)
 			a.refreshAdapter()
-			a.setMode(config.ModeOff)
+			a.markStreamStartFailed()
 			return
 		}
 		deadline := time.Now().Add(10 * time.Second)
@@ -107,14 +104,13 @@ func (a *App) startWinUSBPlaybackLocked(m config.Mode, eng *workerProcess, strea
 				}
 				a.t.Balloon(T("Не удалось включить поток", "Could not start streaming"), err.Error(), 2)
 				a.refreshAdapter()
-				a.setMode(config.ModeOff)
+				a.markStreamStartFailed()
 				return
 			}
 			time.Sleep(50 * time.Millisecond)
 		}
 		a.refreshAdapter()
 	}
-	a.setMode(m)
 	a.launchWinUSBLocked()
 }
 
@@ -179,22 +175,15 @@ func (a *App) onEngineEvent(p *workerProcess, ev ipc.Event) {
 		logx.Dbgf("ipc", "engine -> tray: %s %s %s", ev.Ev, ev.Addr, ev.Msg)
 	}
 	switch ev.Ev {
-	case "codec", "codecRejected":
+	case "codec":
 		a.mu.Lock()
-		current := a.eng == p && a.pendingUHQ && (ev.Ev == "codecRejected" || ev.Codec != nil && ev.Codec.SSCUHQ)
+		current := a.eng == p && a.pendingUHQ && ev.Codec != nil && ev.Codec.SSCUHQ
 		if current {
 			a.pendingUHQ = false
-			if ev.Codec != nil && ev.Codec.SSCUHQ {
-				a.mode, a.s.Mode = config.ModeSSCUHQ, config.ModeSSCUHQ
-				_ = config.Save(a.s)
-			}
 		}
 		a.mu.Unlock()
 		if current {
 			a.refresh()
-		}
-		if current && ev.Ev == "codecRejected" {
-			a.t.Balloon("SSCv2", ev.Msg, 1)
 		}
 	case "volume":
 		if ev.Volume != nil {

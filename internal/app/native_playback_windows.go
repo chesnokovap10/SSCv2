@@ -3,6 +3,7 @@ package app
 import (
 	"time"
 
+	"sscv2/internal/audio"
 	"sscv2/internal/config"
 	"sscv2/internal/ipc"
 )
@@ -10,15 +11,16 @@ import (
 type nativeProcess struct {
 	*workerProcess
 	ipc.NativeStream
-	started     chan struct{}
-	ready       bool
-	lastAACKbps int
-	lastMessage string
+	started      chan struct{}
+	ready        bool
+	linkLost     bool
+	uhqSupported *bool
+	lastMessage  string
 }
 
 func (a *App) startNativeWorker(mode config.Mode, path, endpoint, address, stereo string) error {
 	a.mu.Lock()
-	stream := ipc.NativeStream{Mode: mode, BitrateKbps: a.nativeBitrateLocked(mode)}
+	stream := a.nativeStreamLocked(mode)
 	a.mu.Unlock()
 	worker, err := startWorkerProcess("native-worker", "native-stderr.log", ipc.NativeConfig{
 		Path: path, RenderEndpoint: endpoint, Device: address, StereoEndpoint: stereo, Stream: stream,
@@ -30,6 +32,7 @@ func (a *App) startNativeWorker(mode config.Mode, path, endpoint, address, stere
 	p := &nativeProcess{workerProcess: worker, NativeStream: stream, started: make(chan struct{})}
 	a.mu.Lock()
 	a.native = p
+	a.st.StreamStartFailed = false
 	a.mu.Unlock()
 	logf("native worker: started PID %d", p.process.Pid)
 	p.watch(func(event ipc.Event) { a.onNativeEvent(p, event) }, func(err error) { a.nativeWorkerExited(p, err, p.lastMessage) })
@@ -50,7 +53,7 @@ func (a *App) requestNativeCodec(p *nativeProcess, mode config.Mode) (bool, erro
 	}
 	started := make(chan struct{})
 	a.mu.Lock()
-	stream := ipc.NativeStream{Mode: mode, BitrateKbps: a.nativeBitrateLocked(mode)}
+	stream := a.nativeStreamLocked(mode)
 	if p.NativeStream == stream {
 		a.mu.Unlock()
 		return false, nil
@@ -88,20 +91,26 @@ func (a *App) onNativeEvent(p *nativeProcess, event ipc.Event) {
 	}
 	stream := p.NativeStream
 	switch event.Ev {
+	case ipc.EventNativeCaps:
+		if event.Status != nil {
+			p.uhqSupported = event.Status.SSCUHQSupported
+		}
+		a.mu.Unlock()
+		a.refresh()
 	case ipc.EventNativeReady:
 		if p.ready || event.Native == nil || *event.Native != stream {
 			a.mu.Unlock()
 			return
 		}
 		p.ready = true
-		if stream.Mode == config.ModeAAC {
-			p.lastAACKbps = stream.BitrateKbps
-		}
 		close(p.started)
 		a.mu.Unlock()
 		logf("native %s: ready", stream.Mode)
 		logf("native %s: streaming at %d kbps", stream.Mode, stream.BitrateKbps)
 		a.refresh()
+	case ipc.EventNativeLinkLost:
+		p.linkLost = true
+		a.mu.Unlock()
 	case ipc.EventNativeLog, ipc.EventNativeError:
 		p.lastMessage = event.Msg
 		a.mu.Unlock()
@@ -115,8 +124,42 @@ func (a *App) stopNativeWorker() {
 	a.mu.Lock()
 	p := a.native
 	a.native = nil
+	a.nativeWaiting = nil
 	a.mu.Unlock()
 	if p != nil {
 		p.stop(3*time.Second, false)
+	}
+}
+
+func (a *App) waitForNativeHeadphones(p *nativeProcess) {
+	ticker := time.NewTicker(500 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		a.mu.Lock()
+		waiting := a.nativeWaiting == p && !a.quitting
+		var name string
+		if a.s.Headphones != nil {
+			name = a.s.Headphones.Name
+		}
+		a.mu.Unlock()
+		if !waiting {
+			return
+		}
+		if budsStereoOutput(audio.List(false, audio.StateActive), "", name) != "" {
+			a.opMu.Lock()
+			a.mu.Lock()
+			waiting = a.nativeWaiting == p && !a.quitting && a.s.Headphones != nil && a.s.Headphones.Name == name
+			mode := a.mode
+			a.mu.Unlock()
+			if waiting {
+				logf("native %s: headphones returned, restoring selected mode", mode)
+				a.switchModeLocked(mode)
+			}
+			a.opMu.Unlock()
+			if waiting {
+				return
+			}
+		}
+		<-ticker.C
 	}
 }

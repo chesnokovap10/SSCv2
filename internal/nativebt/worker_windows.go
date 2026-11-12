@@ -7,9 +7,11 @@ import (
 	"io"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"sscv2/internal/audio"
+	"sscv2/internal/bt"
 	"sscv2/internal/driver"
 	"sscv2/internal/helper"
 	"sscv2/internal/ipc"
@@ -17,7 +19,7 @@ import (
 
 // RunWorker keeps the process alive across codec changes. Each change releases
 // the old AVDTP stream before negotiating the next one.
-func RunWorker(input io.Reader, output io.Writer, handleMediaKey func(int)) int {
+func RunWorker(input io.Reader, output io.Writer, handleMediaKey func(int), pauseOnLinkLoss func(bool, func(string, ...any))) int {
 	reader, events := ipc.NewReader(input), ipc.NewWriter(output)
 	var cfg ipc.NativeConfig
 	err := reader.Read(&cfg)
@@ -25,7 +27,7 @@ func RunWorker(input io.Reader, output io.Writer, handleMediaKey func(int)) int 
 		if cfg.Path == "" || cfg.RenderEndpoint == "" || cfg.Device == "" || !cfg.Stream.Valid() {
 			err = errors.New("invalid native worker configuration")
 		} else {
-			err = runWorker(cfg, reader, events, handleMediaKey)
+			err = runWorker(cfg, reader, events, handleMediaKey, pauseOnLinkLoss)
 		}
 	} else {
 		err = fmt.Errorf("read native worker configuration: %w", err)
@@ -47,7 +49,7 @@ func (w workerLog) Write(p []byte) (int, error) {
 	return len(p), nil
 }
 
-func runWorker(cfg ipc.NativeConfig, reader *ipc.Reader, events *ipc.Writer, handleMediaKey func(int)) error {
+func runWorker(cfg ipc.NativeConfig, reader *ipc.Reader, events *ipc.Writer, handleMediaKey func(int), pauseOnLinkLoss func(bool, func(string, ...any))) error {
 	out := workerLog{events: events}
 	volume := newBudsVolume()
 	readGain, stopVolume, err := audio.WatchEndpointPCMGain(cfg.RenderEndpoint, driver.BudsRenderName, volume.set)
@@ -57,7 +59,14 @@ func runWorker(cfg ipc.NativeConfig, reader *ipc.Reader, events *ipc.Writer, han
 	defer stopVolume()
 	controlCtx, stopControl := context.WithCancel(context.Background())
 	defer stopControl()
-	go watchAVRCP(controlCtx, cfg.Path, out, handleMediaKey, volume)
+	activity := &audio.Activity{}
+	var lastPause atomic.Int64
+	go watchAVRCP(controlCtx, cfg.Path, out, func(key int) {
+		if key == bt.MediaPause {
+			lastPause.Store(time.Now().UnixMilli())
+		}
+		handleMediaKey(key)
+	}, volume, activity)
 	started := time.Now()
 	released := make(chan error, 1)
 	go func(completed chan<- error) {
@@ -116,6 +125,16 @@ func runWorker(cfg ipc.NativeConfig, reader *ipc.Reader, events *ipc.Writer, han
 		}
 	}()
 	stream := cfg.Stream
+	linkLost := func(playing bool) {
+		_ = events.Write(ipc.Event{Ev: ipc.EventNativeLinkLost})
+		if time.Since(time.UnixMilli(lastPause.Load())) < 2*time.Second {
+			return // The headset already requested pause before the link dropped.
+		}
+		pauseOnLinkLoss(playing, func(format string, args ...any) { fmt.Fprintf(out, format, args...) })
+	}
+	capabilities := func(uhq bool) {
+		_ = events.Write(ipc.Event{Ev: ipc.EventNativeCaps, Status: &ipc.EngineStatus{SSCUHQSupported: &uhq}})
+	}
 
 	for {
 		ctx, cancel := context.WithCancel(context.Background())
@@ -124,9 +143,10 @@ func runWorker(cfg ipc.NativeConfig, reader *ipc.Reader, events *ipc.Writer, han
 			ready := func() error {
 				return events.Write(ipc.Event{Ev: ipc.EventNativeReady, Native: &stream})
 			}
-			done <- runRenderPCM(ctx, cfg.Path, out, stream.Mode, stream.BitrateKbps, pcm.Read, func() float32 {
+			render := renderPCM{out: out, read: pcm.Read, activity: activity, gain: func() float32 {
 				return volume.gain(readGain)
-			}, ready)
+			}}
+			done <- render.stream(ctx, cfg.Path, stream, ready, linkLost, capabilities)
 		}(stream)
 		for {
 			select {

@@ -51,6 +51,7 @@ type NativeConfig struct {
 type NativeStream struct {
 	Mode        config.Mode `json:"mode"`
 	BitrateKbps int         `json:"bitrateKbps"`
+	TryUHQ      bool        `json:"tryUhq,omitempty"`
 }
 
 func (s NativeStream) Valid() bool {
@@ -102,9 +103,10 @@ type Found struct {
 
 // EngineStatus is a full snapshot sent whenever something changes.
 type EngineStatus struct {
-	MuteEndpoint string `json:"muteEndpoint,omitempty"`
-	Phase        string `json:"phase"` // firmware|starting|connecting|streaming|waiting|idle|error|stopped
-	Message      string `json:"message,omitempty"`
+	MuteEndpoint      string `json:"muteEndpoint,omitempty"`
+	Phase             string `json:"phase"` // firmware|starting|connecting|streaming|waiting|idle|error|stopped
+	Message           string `json:"message,omitempty"`
+	StreamStartFailed bool   `json:"streamStartFailed,omitempty"`
 
 	AdapterAddr string `json:"adapterAddr,omitempty"`
 	Chip        string `json:"chip,omitempty"`
@@ -137,10 +139,12 @@ type EngineStatus struct {
 type EventKind string
 
 const (
-	EventStatus      EventKind = "status"
-	EventNativeReady EventKind = "nativeReady"
-	EventNativeLog   EventKind = "nativeLog"
-	EventNativeError EventKind = "nativeError"
+	EventStatus         EventKind = "status"
+	EventNativeReady    EventKind = "nativeReady"
+	EventNativeLog      EventKind = "nativeLog"
+	EventNativeError    EventKind = "nativeError"
+	EventNativeLinkLost EventKind = "nativeLinkLost"
+	EventNativeCaps     EventKind = "nativeCaps"
 )
 
 // Event from a playback worker to the tray.
@@ -228,6 +232,6 @@ func (r *Reader) Read(v any) error {
 	return json.Unmarshal(r.s.Bytes(), v)
 }
 
-// Version of the program: "0.4.0 #<commit hash, 8 chars>", set by build.cmd
+// Version of the program: "0.4.1 #<commit hash, 8 chars>", set by build.cmd
 // through -ldflags "-X 'sscv2/internal/ipc.Version=...'".
-var Version = "0.4.0 #dev"
+var Version = "0.4.1 #dev"

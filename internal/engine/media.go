@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"time"
 	"unsafe"
 
 	"golang.org/x/sys/windows"
@@ -44,6 +45,17 @@ func pressKey(vk uint16) {
 // players pause on it, like when Bluetooth headphones go into their case).
 func mediaPlayPause() { pressKey(vkMediaPlayPause) }
 
+// PauseOnLinkLoss gives the player time to pause before the audio route moves.
+func PauseOnLinkLoss(playing bool, logf func(string, ...any)) {
+	if !playing {
+		logf("link lost (nothing playing)")
+		return
+	}
+	logf("link lost while playing: sending media Play/Pause")
+	mediaPlayPause()
+	time.Sleep(300 * time.Millisecond)
+}
+
 // HandleMediaKey routes a headset button to the current Windows player.
 func HandleMediaKey(key int) {
 	switch key {
@@ -51,7 +63,7 @@ func HandleMediaKey(key int) {
 		mediaTrackCommand(mediaNextTrack)
 	case bt.MediaPrev:
 		mediaTrackCommand(mediaPreviousTrack)
-	case bt.MediaPlayPause:
+	case bt.MediaPlayPause, bt.MediaPause:
 		mediaPlayPause()
 	case bt.MediaStop:
 		pressKey(vkMediaStop)

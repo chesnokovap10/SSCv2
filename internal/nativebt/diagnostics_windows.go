@@ -18,6 +18,7 @@ import (
 	"sscv2/internal/bitrate"
 	"sscv2/internal/config"
 	"sscv2/internal/driver"
+	"sscv2/internal/ipc"
 )
 
 // RunProbe opens the probe driver interface and runs the requested AAC diagnostic.
@@ -54,13 +55,13 @@ func RunProbe(args []string, out io.Writer) error {
 	}
 	ctx := context.Background()
 	if len(args) == 1 {
-		return runAVDTP(ctx, args[0], out, false, config.ModeAAC, bitrate.NativeDiagnosticDefault(config.ModeAAC), send)
+		return runAVDTP(ctx, args[0], out, false, ipc.NativeStream{Mode: config.ModeAAC, BitrateKbps: bitrate.NativeDiagnosticDefault(config.ModeAAC)}, send, nil)
 	}
 	path, err := singleInterface()
 	if err != nil {
 		return err
 	}
-	return runAVDTP(ctx, path, out, false, config.ModeAAC, bitrate.NativeDiagnosticDefault(config.ModeAAC), send)
+	return runAVDTP(ctx, path, out, false, ipc.NativeStream{Mode: config.ModeAAC, BitrateKbps: bitrate.NativeDiagnosticDefault(config.ModeAAC)}, send, nil)
 }
 
 func ProbeLocalProfile(ctx context.Context, address string, out io.Writer) error {
@@ -71,7 +72,7 @@ func ProbeLocalProfile(ctx context.Context, address string, out io.Writer) error
 	if err := requireTestSigning(); err != nil {
 		return err
 	}
-	return runAVDTP(ctx, path, out, false, config.ModeAAC, 0, nil)
+	return runAVDTP(ctx, path, out, false, ipc.NativeStream{}, nil, nil)
 }
 
 func ProbeLocalHandoff(ctx context.Context, address string, out io.Writer) (err error) {
@@ -100,10 +101,11 @@ func RunRenderDiagnostic(ctx context.Context, address, wavePath string, out io.W
 		return err
 	}
 	defer device.Close()
-	return runRenderPCM(ctx, path, out, mode, bitrate.NativeDiagnosticDefault(mode), device.Read, nil, func() error {
+	render := renderPCM{out: out, read: device.Read}
+	return render.stream(ctx, path, ipc.NativeStream{Mode: mode, BitrateKbps: bitrate.NativeDiagnosticDefault(mode)}, func() error {
 		_, err := fmt.Fprintf(out, "native-%s-ready\n", mode)
 		return err
-	})
+	}, nil, nil)
 }
 
 func sendAACTone(media io.Writer, out io.Writer) error {

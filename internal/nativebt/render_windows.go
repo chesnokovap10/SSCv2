@@ -3,11 +3,15 @@ package nativebt
 import (
 	"context"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"io"
 	"time"
 
-	"sscv2/internal/config"
+	"golang.org/x/sys/windows"
+
+	"sscv2/internal/audio"
+	"sscv2/internal/ipc"
 )
 
 type renderPCM struct {
@@ -21,6 +25,7 @@ type renderPCM struct {
 	lastSample   [2]float32
 	previousPCM  bool
 	lastShortLog time.Time
+	activity     *audio.Activity
 }
 
 const (
@@ -29,16 +34,33 @@ const (
 	renderFadeFrames   = 96 // 2 ms at 48 kHz
 )
 
-func runRenderPCM(ctx context.Context, path string, out io.Writer, mode config.Mode, kbps int, read func([]byte) (int, error), gain func() float32, ready func() error) error {
+func (r *renderPCM) stream(ctx context.Context, path string, stream ipc.NativeStream, ready func() error, linkLost, capabilities func(bool)) error {
 	if err := requireTestSigning(); err != nil {
 		return err
 	}
-	render := &renderPCM{read: read, gain: gain, out: out}
-	return runAVDTP(ctx, path, out, true, mode, kbps, func(media io.Writer) error {
-		return sendPCM(media, out, mode, kbps, 0, "Buds WaveRT", true, func(pcm []float32) error {
-			return render.fill(ctx, pcm)
+	return runAVDTP(ctx, path, r.out, true, stream, func(media io.Writer) error {
+		link := &renderMedia{Writer: media}
+		err := sendPCM(link, r.out, stream.Mode, stream.BitrateKbps, 0, "Buds WaveRT", true, func(pcm []float32) error {
+			return r.fill(ctx, pcm)
 		}, ready)
-	})
+		if linkLost != nil && ctx.Err() == nil && link.lost {
+			linkLost(r.activity.PlayingOnLinkLoss())
+		}
+		return err
+	}, capabilities)
+}
+
+type renderMedia struct {
+	io.Writer
+	sent bool
+	lost bool
+}
+
+func (m *renderMedia) Write(packet []byte) (int, error) {
+	n, err := m.Writer.Write(packet)
+	m.lost = m.sent && (errors.Is(err, windows.ERROR_NETNAME_DELETED) || errors.Is(err, windows.ERROR_DEVICE_NOT_CONNECTED))
+	m.sent = m.sent || err == nil && n == len(packet)
+	return n, err
 }
 
 func (r *renderPCM) fill(ctx context.Context, pcm []float32) error {
@@ -92,10 +114,18 @@ func (r *renderPCM) fill(ctx context.Context, pcm []float32) error {
 	if r.gain != nil {
 		gain = r.gain()
 	}
-	for i := range size / 2 {
-		pcm[i] = float32(int16(binary.LittleEndian.Uint16(r.buffer[2*i:]))) * (gain / 32768)
-	}
 	samples := pcm[:size/2]
+	for i := range samples {
+		samples[i] = float32(int16(binary.LittleEndian.Uint16(r.buffer[2*i:]))) / 32768
+	}
+	if r.activity != nil {
+		r.activity.Observe(samples)
+	}
+	if gain != 1 {
+		for i := range samples {
+			samples[i] *= gain
+		}
+	}
 	frames := len(samples) / 2
 	fade := min(frames, renderFadeFrames)
 	if !r.previousPCM {

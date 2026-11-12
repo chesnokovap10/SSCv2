@@ -26,20 +26,21 @@ type App struct {
 
 	opMu sync.Mutex // one mode switch / privileged op at a time
 
-	mu           sync.Mutex
-	s            *config.Settings
-	mode         config.Mode // effective mode
-	busy         string
-	pendingUHQ   bool
-	eng          *workerProcess
-	native       *nativeProcess
-	resumeEngine *workerProcess // old process being replaced after system sleep
-	st           ipc.EngineStatus
-	scan         []ipc.Found
-	scanning     bool
-	adapter      driver.Status
-	crashes      []time.Time
-	quitting     bool
+	mu            sync.Mutex
+	s             *config.Settings
+	mode          config.Mode // effective mode
+	busy          string
+	pendingUHQ    bool
+	eng           *workerProcess
+	native        *nativeProcess
+	nativeWaiting *nativeProcess // last worker, while waiting for its headphones to return
+	resumeEngine  *workerProcess // old process being replaced after system sleep
+	st            ipc.EngineStatus
+	scan          []ipc.Found
+	scanning      bool
+	adapter       driver.Status
+	crashes       []time.Time
+	quitting      bool
 	// restoreMode: how the headphones' level is restored after "Off"
 	// (ctl "restore <mode>", for diagnostics; not persisted).
 	restoreMode   string

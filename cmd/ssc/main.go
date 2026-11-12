@@ -180,7 +180,7 @@ func main() {
 			os.Exit(1)
 		}
 	case "native-worker":
-		os.Exit(nativebt.RunWorker(os.Stdin, os.Stdout, engine.HandleMediaKey))
+		os.Exit(nativebt.RunWorker(os.Stdin, os.Stdout, engine.HandleMediaKey, engine.PauseOnLinkLoss))
 	case "native-aac":
 		out := console()
 		if err := nativebt.RunProbe(args[1:], out); err != nil {

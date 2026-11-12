@@ -63,6 +63,10 @@ func newAAC(sampleRate, mtu int) (Encoder, error) {
 	if err != nil {
 		return nil, err
 	}
+	if aacForced > 0 && e.Bitrate != aacForced {
+		e.Close()
+		return nil, fmt.Errorf(i18n.T("AAC: %d кбит/с не помещается в пакет %d байт", "AAC: %d kbps does not fit a %d-byte packet"), aacForced/1000, budget)
+	}
 	return &aacEnc{e: e}, nil
 }
 
@@ -137,19 +141,21 @@ func sscEncodeRate(captureRate int) int {
 // (bitrate package); "Auto" stays at or below it. 0 = not known.
 var sscWorking int
 
-// sscBitrate: the forced bitrate or the phone's choice for this
-// configuration byte, lowered if a frame (CBR, 4-byte header included)
-// would not fit one packet.
+// sscBitrate validates a manual selection or picks an Auto rate that fits one packet.
 func sscBitrate(sampleRate, mtu int, cfg uint8) (int, error) {
+	if sscForced > 0 {
+		bps := sscForced * 1000
+		if !ssc.Valid(sampleRate, bps) || ssc.FrameBytes(sampleRate, bps) > mtu {
+			return 0, fmt.Errorf(i18n.T("SSC: %d кбит/с недоступно при %d Гц и размере пакета %d байт", "SSC: %d kbps unavailable at %d Hz with a %d-byte packet"), sscForced, sampleRate, mtu)
+		}
+		return bps, nil
+	}
 	top := 0
 	if sampleRate != 96000 {
 		top = sscWorking
 		if cfg != 0 && cfg&0x08 == 0 && (top == 0 || top > sscBitrateLimited) {
 			top = sscBitrateLimited
 		}
-	}
-	if sscForced > 0 {
-		top = sscForced
 	}
 	best := bitrate.BestSSC(sampleRate, mtu, top)
 	if best == 0 {

@@ -40,6 +40,9 @@ func sameMenuSlot(a, b Item) bool {
 		return false
 	}
 	if a.Sub != nil {
+		if a.ID != 0 || b.ID != 0 {
+			return a.ID == b.ID
+		}
 		return a.Text == b.Text || len(a.Sub) > 0 && len(b.Sub) > 0 && (a.Sub[0].ID != 0 || a.Sub[0].Sub != nil) && sameMenuSlot(a.Sub[0], b.Sub[0])
 	}
 	return a.ID == b.ID && a.Separator == b.Separator
@@ -181,7 +184,11 @@ func (t *Tray) updateMenu(m *liveMenu, next []Item) {
 				continue
 			}
 			old, sub := m.items[i], m.children[i]
-			t.updateMenuState(m, i, item)
+			// Windows still tracks the parent of a visible submenu. Apply
+			// its disabled state after the submenu has closed.
+			if sub == nil || !t.menuIsActive(sub.handle) {
+				t.updateMenuState(m, i, item)
+			}
 			if item.Slider && t.volumeRow != nil && old.Text != item.Text {
 				t.volumeRow.label = item.Text
 				t.volumeRow.redraw()
@@ -192,7 +199,12 @@ func (t *Tray) updateMenu(m *liveMenu, next []Item) {
 				m.items[i].Text = item.Text
 			}
 			if sub != nil {
-				t.updateMenu(sub, item.Sub)
+				if t.menuIsActive(sub.handle) && old.SubRevision != item.SubRevision {
+					t.updateMenu(sub, nil) // commands belong to the previous codec
+				} else {
+					t.updateMenu(sub, item.Sub)
+					m.items[i].SubRevision = item.SubRevision
+				}
 			}
 		}
 		return
@@ -200,14 +212,18 @@ func (t *Tray) updateMenu(m *liveMenu, next []Item) {
 	// Native Windows popups can move when a label changes their measured size.
 	// Keep the visible bitrate popup's layout and update its check marks in place.
 	if m != t.openMenu && t.menuIsActive(m.handle) {
-		for i, item := range next {
-			if i < len(m.items) && sameMenuSlot(m.items[i], item) {
+		for i, old := range m.items {
+			if i < len(next) && sameMenuSlot(old, next[i]) {
+				item := next[i]
 				t.updateMenuState(m, i, item)
 				if old := &m.items[i]; old.infoID != 0 && old.Text != item.Text {
 					item.infoID = old.infoID
 					t.writeMenuItem(m, i, &item, m.children[i], true)
 					old.Text = item.Text
 				}
+			} else {
+				old.Disabled = true
+				t.updateMenuState(m, i, old)
 			}
 		}
 		return
@@ -263,19 +279,20 @@ func (t *Tray) refreshOpenMenu() {
 		return
 	}
 	next := t.Menu()
-	if t.hasOpenChild(m) {
-		for i, item := range next {
-			if item.LiveLabel && i < len(m.items) && !sameMenuSlot(m.items[i], item) {
-				// Adding or removing a submenu while Windows tracks a child
-				// cancels tracking. Reopen with the new layout immediately.
-				endMenu.Call()
-				t.postMenuMessage(menuOpenMsg, 0)
-				return
-			}
+	t.updateMenu(m, next)
+	items := m.snapshot()
+	t.rendered.Store(&items)
+}
+
+func (m *liveMenu) snapshot() []Item {
+	items := make([]Item, len(m.items))
+	copy(items, m.items)
+	for i, sub := range m.children {
+		if sub != nil {
+			items[i].Sub = sub.snapshot()
 		}
 	}
-	t.updateMenu(m, next)
-	t.rendered.Store(&next)
+	return items
 }
 
 func (t *Tray) redrawMenuItem(menu uintptr, position int) {
@@ -347,7 +364,14 @@ func (t *Tray) selectedMenuAction(m *msgT) bool {
 		if (m.wParam == 0x0d || m.wParam == 0x20) && t.selectedMenu != 0 &&
 			t.selectedFlags&(mfPopup|mfGrayed|2|mfSeparator) == 0 &&
 			(t.volumeRow == nil || t.selectedID != t.volumeRow.id) {
-			id = t.selectedID
+			if selected := t.openMenu.find(t.selectedMenu); selected != nil {
+				for _, item := range selected.items {
+					if item.ID == t.selectedID && !item.Disabled && item.Sub == nil {
+						id = item.ID
+						break
+					}
+				}
+			}
 		}
 	}
 	if id == 0 {

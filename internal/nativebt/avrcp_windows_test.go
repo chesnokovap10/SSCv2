@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"sscv2/internal/audio"
 	"sscv2/internal/bt"
 )
 
@@ -22,7 +23,8 @@ func TestAVRCPTrackButtons(t *testing.T) {
 	ctx, cancel := context.WithDeadline(context.Background(), deadline)
 	defer cancel()
 	keys := make(chan int, 8)
-	go func() { _ = serveAVRCP(ctx, link, io.Discard, keys, newBudsVolume()) }()
+	activity := &audio.Activity{}
+	go func() { _ = serveAVRCP(ctx, link, io.Discard, keys, newBudsVolume(), activity) }()
 
 	volume := make([]byte, 14)
 	if _, err := io.ReadFull(buds, volume); err != nil {
@@ -33,7 +35,27 @@ func TestAVRCPTrackButtons(t *testing.T) {
 	if _, err := buds.Write(volume); err != nil {
 		t.Fatal(err)
 	}
-	for i, op := range []byte{0x4b, 0xcb, 0x4c, 0xcc} {
+	if _, err := buds.Write(avrcpFrame(0x20, 3, 0x31, 1, 0, 0, 0, 0)); err != nil {
+		t.Fatal(err)
+	}
+	checkStatus := func(want []byte) {
+		t.Helper()
+		got := make([]byte, len(want))
+		if _, err := io.ReadFull(buds, got); err != nil {
+			t.Fatal(err)
+		}
+		if !bytes.Equal(got, want) {
+			t.Fatalf("playback status = %x, want %x", got, want)
+		}
+	}
+	checkStatus(avrcpFrame(0x22, 0x0f, 0x31, 1, 2))
+	activity.Observe([]float32{0.5})
+	checkStatus(avrcpFrame(0x22, 0x0d, 0x31, 1, 1))
+	if _, err := buds.Write(avrcpFrame(0x80, 1, 0x30)); err != nil {
+		t.Fatal(err)
+	}
+	checkStatus(avrcpFrame(0x82, 0x0c, 0x30, 0, 0, 0, 0, 0, 0, 0, 0, 1))
+	for i, op := range []byte{0x4b, 0xcb, 0x4c, 0xcc, 0x46, 0xc6} {
 		label := byte(i+3) << 4
 		command := []byte{label, 0x11, 0x0e, 0, 0x48, 0x7c, op, 0}
 		if _, err := buds.Write(command); err != nil {
@@ -48,7 +70,7 @@ func TestAVRCPTrackButtons(t *testing.T) {
 			t.Fatalf("button 0x%02x: response %x, want %x", op, response, want)
 		}
 	}
-	for _, want := range []int{bt.MediaNext, bt.MediaPrev} {
+	for _, want := range []int{bt.MediaNext, bt.MediaPrev, bt.MediaPause} {
 		select {
 		case key := <-keys:
 			if key != want {
@@ -78,7 +100,7 @@ func TestAVRCPVolumeTracksTheLatestLevel(t *testing.T) {
 	volume := newBudsVolume()
 	volume.set(5)
 	keys := make(chan int, 8)
-	go func() { _ = serveAVRCP(ctx, link, io.Discard, keys, volume) }()
+	go func() { _ = serveAVRCP(ctx, link, io.Discard, keys, volume, &audio.Activity{}) }()
 
 	receiveLevel := func(want byte) []byte {
 		t.Helper()

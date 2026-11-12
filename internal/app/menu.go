@@ -45,6 +45,7 @@ const (
 	idRepository
 	idAutoStart
 	idTestSigning
+	idBitrateMenu
 
 	idBitrateBase = 500 // + kbps (0 = auto)
 	idDeviceBase  = 2000
@@ -78,7 +79,7 @@ func (a *App) menu() []tray.Item {
 	}
 	items = append(items, tray.Item{Text: T("Кодек: ", "Codec: ") + modeName(mode), Sub: codecs, LiveLabel: true})
 	if a.noBitrate(mode) {
-		items = append(items, tray.Item{Text: T("Битрейт: — (", "Bitrate: - (") + a.unsupportedText(mode) + ")", LiveLabel: true})
+		items = append(items, tray.Item{ID: idBitrateMenu, Text: T("Битрейт: — (", "Bitrate: - (") + a.unsupportedText(mode) + ")", Sub: []tray.Item{}, Disabled: true, LiveLabel: true})
 	} else if mode.Streaming() {
 		policy, model := a.bitratePolicy(mode, a.prefersNativeBitrates())
 		choices := bitrate.Choices(mode)
@@ -119,9 +120,9 @@ func (a *App) menu() []tray.Item {
 			}
 			sub = append(sub, tray.Item{Text: t, ID: idBitrateBase + b, Radio: true, Checked: b == cur, Disabled: busy})
 		}
-		items = append(items, tray.Item{Text: label, Sub: sub, SubRevision: string(mode), LiveLabel: true})
+		items = append(items, tray.Item{ID: idBitrateMenu, Text: label, Sub: sub, SubRevision: string(mode), LiveLabel: true})
 	} else {
-		items = append(items, tray.Item{Text: T("Битрейт: —", "Bitrate: -"), LiveLabel: true})
+		items = append(items, tray.Item{ID: idBitrateMenu, Text: T("Битрейт: —", "Bitrate: -"), Sub: []tray.Item{}, Disabled: true, LiveLabel: true})
 	}
 	items = append(items, tray.Item{Separator: true})
 

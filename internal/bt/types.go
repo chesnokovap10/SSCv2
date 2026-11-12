@@ -103,6 +103,7 @@ const (
 	MediaNext                 // FORWARD (double tap)
 	MediaPrev                 // BACKWARD (triple tap)
 	MediaStop
+	MediaPause // explicit AVRCP PAUSE
 )
 
 // Event is delivered on Events().
@@ -126,9 +127,9 @@ type Options struct {
 	Mouse     *LEBond // nil = no LE mouse bridge
 	// ClassicMouse: a BR/EDR HID mouse (link key from Keys) instead of an LE one.
 	ClassicMouse *Addr
-	EnableSSC bool    // offer the SSC endpoint (only when SSC can be encoded)
-	SSCCap    uint8   // SSC configuration byte to send (0 = like the phone)
-	Debug     bool    // packet journal (logx debug mode)
+	EnableSSC    bool  // offer the SSC endpoint (only when SSC can be encoded)
+	SSCCap       uint8 // SSC configuration byte to send (0 = like the phone)
+	Debug        bool  // packet journal (logx debug mode)
 	// ForceMediaMTU: treat the headphones' media channel MTU as this many
 	// bytes instead of what they announced (Settings > Max MTU).
 	ForceMediaMTU int

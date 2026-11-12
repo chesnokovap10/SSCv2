@@ -28,7 +28,10 @@ const (
 )
 
 // Streaming reports a mode that owns the adapter (not "off").
-func (m Mode) Streaming() bool { return m == ModeAAC || m == ModeSSC || m == ModeSSCUHQ }
+func (m Mode) Streaming() bool { return m == ModeAAC || m.UsesSSC() }
+
+// UsesSSC reports whether the selected mode uses the SSC codec family.
+func (m Mode) UsesSSC() bool { return m == ModeSSC || m == ModeSSCUHQ }
 
 // EngineCodec is the codec the engine streams in this mode.
 func (m Mode) EngineCodec() string {

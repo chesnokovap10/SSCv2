@@ -6,7 +6,6 @@ import (
 	"time"
 
 	"sscv2/internal/audio"
-	"sscv2/internal/bitrate"
 	"sscv2/internal/config"
 	"sscv2/internal/driver"
 	"sscv2/internal/engine"
@@ -140,6 +139,7 @@ func (a *App) switchModeLocked(mode config.Mode) {
 	if eng != nil {
 		a.stopWinUSBEngineLocked(false)
 	}
+	a.releaseWinUSBCarryLocked()
 	if st := a.refreshAdapter(); st.Mode == driver.WinUSB {
 		if _, err := helper.Call(ipc.Request{Op: "driver", VID: st.ID.VID, PID: st.ID.PID}); err != nil {
 			a.reportNativeError(err)
@@ -248,14 +248,20 @@ func (a *App) cancelVolumeRestoreLocked() {
 // stopWinUSBEngineLocked can transfer the muted output to the next engine.
 func (a *App) stopWinUSBEngineLocked(keep bool) {
 	a.mu.Lock()
-	eng, st := a.eng, a.st
+	eng, st, carry := a.eng, a.st, a.carry
 	a.eng, a.carry = nil, nil
+	if eng == nil && keep {
+		a.carry = carry
+	}
 	a.pendingUHQ = false
 	if eng != nil {
 		a.t.SetVolumeKeys(false)
 	}
 	a.mu.Unlock()
 	if eng == nil {
+		if !keep && carry != nil {
+			engine.RestoreAudio(ipc.EngineStatus{MuteEndpoint: carry.MuteEndpoint})
+		}
 		return
 	}
 
@@ -306,14 +312,21 @@ func (a *App) launchWinUSBLocked() {
 		defer a.setBusy("")
 		logf("start engine: %v", err)
 		a.t.Balloon("SSCv2", T("Не удалось запустить движок: ", "Could not start the engine: ")+err.Error(), 2)
-		a.stopPlaybackLocked()
+		a.markStreamStartFailed()
 	}
+}
+
+func (a *App) markStreamStartFailed() {
+	a.mu.Lock()
+	a.st.StreamStartFailed = true
+	a.mu.Unlock()
+	a.refresh()
 }
 
 func (a *App) startNativePlaybackLocked(mode config.Mode) {
 	a.setBusy(fmt.Sprintf(T("Запуск %s через Bluetooth Windows", "Starting %s through Windows Bluetooth"), modeName(mode)))
 	if err := a.openNativePlaybackLocked(mode); err != nil {
-		a.failNativePlaybackLocked(err)
+		a.failNativePlaybackLocked(mode, err)
 		return
 	}
 	a.setMode(mode)
@@ -322,7 +335,7 @@ func (a *App) startNativePlaybackLocked(mode config.Mode) {
 func (a *App) changeNativeCodecLocked(p *nativeProcess, mode config.Mode) {
 	changed, err := a.requestNativeCodec(p, mode)
 	if err != nil {
-		a.failNativePlaybackLocked(err)
+		a.failNativePlaybackLocked(mode, err)
 	} else if changed {
 		a.setMode(mode)
 	}
@@ -336,7 +349,7 @@ func (a *App) stopNativePlaybackLocked() error {
 // disableNativePlaybackLocked leaves a running WinUSB session alone.
 func (a *App) disableNativePlaybackLocked() bool {
 	a.mu.Lock()
-	wasNative := a.native != nil
+	wasNative := a.native != nil || a.nativeWaiting != nil
 	a.mu.Unlock()
 	if err := a.stopNativePlaybackLocked(); err != nil {
 		a.reportNativeError(err)
@@ -348,8 +361,21 @@ func (a *App) disableNativePlaybackLocked() bool {
 	return true
 }
 
-func (a *App) failNativePlaybackLocked(err error) {
-	a.reportNativeError(errors.Join(err, a.stopNativePlaybackLocked()))
+func (a *App) failNativePlaybackLocked(mode config.Mode, err error) {
+	a.mu.Lock()
+	hasNativeRoute := a.native != nil
+	a.mu.Unlock()
+	if hasNativeRoute {
+		// Keep WaveRT as the output until the user chooses another route.
+		a.stopNativeWorker()
+	} else {
+		err = errors.Join(err, a.stopNativePlaybackLocked())
+	}
+	logf("native %s: %v", mode, err)
+	a.mu.Lock()
+	a.st.StreamStartFailed = true
+	a.mu.Unlock()
+	a.setMode(mode)
 }
 
 func (a *App) reportNativeError(err error) {
@@ -371,15 +397,18 @@ func (a *App) onEngineExit(p *workerProcess, err error) {
 	if current {
 		a.eng = nil
 		a.pendingUHQ = false
+		if last.StreamStartFailed && last.MuteEndpoint != "" {
+			a.carry = &ipc.AudioCarry{MuteEndpoint: last.MuteEndpoint}
+		}
 		a.t.SetVolumeKeys(false)
 	}
 	mode, quitting := a.mode, a.quitting
 	a.mu.Unlock()
 	logf("engine exited unexpectedly: %v (phase %s: %s)", err, last.Phase, last.Message)
-	if current {
+	if current && !last.StreamStartFailed {
 		engine.RestoreAudio(last)
 	}
-	if !current || quitting || mode == config.ModeOff {
+	if !current || quitting || mode == config.ModeOff || last.StreamStartFailed {
 		a.refresh()
 		return
 	}
@@ -433,25 +462,18 @@ func (a *App) nativeWorkerExited(p *nativeProcess, err error, last string) {
 	if last != "" {
 		err = fmt.Errorf("%w: %s", err, last)
 	}
-	if !quitting && p.Mode == config.ModeAAC && !p.ready {
-		fallback := p.lastAACKbps
-		if fallback == 0 && p.BitrateKbps > bitrate.MaxNativeAACKbps {
-			fallback = bitrate.MaxNativeAACKbps
-		}
-		if fallback != 0 && fallback != p.BitrateKbps {
-			logf("native AAC: %d kbps failed, retrying at %d kbps: %v", p.BitrateKbps, fallback, err)
-			if cleanupErr := a.stopNativePlaybackLocked(); cleanupErr != nil {
-				a.reportNativeError(errors.Join(err, cleanupErr))
-				return
-			}
-			a.mu.Lock()
-			a.s.SetBitrate(config.ModeAAC, fallback)
-			a.mu.Unlock()
-			a.t.Balloon("SSCv2", fmt.Sprintf(T("AAC %d кбит/с не запустился. Повторная попытка на %d кбит/с.", "AAC %d kbps failed to start. Retrying at %d kbps."), p.BitrateKbps, fallback), 2)
-			a.startNativePlaybackLocked(config.ModeAAC)
-			a.setBusy("")
+	if !quitting && p.linkLost {
+		if cleanupErr := a.stopNativePlaybackLocked(); cleanupErr != nil {
+			a.reportNativeError(errors.Join(err, cleanupErr))
 			return
 		}
+		a.mu.Lock()
+		a.nativeWaiting = p
+		a.mu.Unlock()
+		logf("native %s: link lost, waiting for headphones", p.Mode)
+		a.refresh()
+		go a.waitForNativeHeadphones(p)
+		return
 	}
-	a.failNativePlaybackLocked(err)
+	a.failNativePlaybackLocked(p.Mode, err)
 }

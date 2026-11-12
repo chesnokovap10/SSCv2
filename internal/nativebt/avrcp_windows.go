@@ -11,6 +11,7 @@ import (
 
 	"golang.org/x/sys/windows"
 
+	"sscv2/internal/audio"
 	"sscv2/internal/bt"
 )
 
@@ -78,8 +79,10 @@ func avrcpButton(p []byte) (response []byte, key int) {
 		return nil, 0
 	}
 	switch p[6] & 0x7f {
-	case 0x44, 0x46:
+	case 0x44:
 		key = bt.MediaPlayPause
+	case 0x46:
+		key = bt.MediaPause
 	case 0x45:
 		key = bt.MediaStop
 	case 0x4b:
@@ -99,7 +102,7 @@ func avrcpButton(p []byte) (response []byte, key int) {
 	return response, key
 }
 
-func watchAVRCP(ctx context.Context, path string, out io.Writer, handleMediaKey func(int), volume *budsVolume) {
+func watchAVRCP(ctx context.Context, path string, out io.Writer, handleMediaKey func(int), volume *budsVolume, activity *audio.Activity) {
 	keys := make(chan int, 8)
 	go func() {
 		for ctx.Err() == nil {
@@ -113,7 +116,7 @@ func watchAVRCP(ctx context.Context, path string, out io.Writer, handleMediaKey 
 	}()
 	var lastError string
 	for ctx.Err() == nil {
-		err := runAVRCP(ctx, path, out, keys, volume)
+		err := runAVRCP(ctx, path, out, keys, volume, activity)
 		if ctx.Err() != nil {
 			return
 		}
@@ -130,7 +133,7 @@ func watchAVRCP(ctx context.Context, path string, out io.Writer, handleMediaKey 
 }
 
 // runAVRCP keeps the incoming control channel alive independently of AVDTP.
-func runAVRCP(ctx context.Context, path string, out io.Writer, keys chan<- int, volume *budsVolume) error {
+func runAVRCP(ctx context.Context, path string, out io.Writer, keys chan<- int, volume *budsVolume, activity *audio.Activity) error {
 	// Volume changes must be able to write while a read waits for a button.
 	link, err := os.OpenFile(path+"-R", os.O_RDWR|windows.O_FILE_FLAG_OVERLAPPED, 0)
 	if err != nil {
@@ -144,10 +147,10 @@ func runAVRCP(ctx context.Context, path string, out io.Writer, keys chan<- int, 
 	stopClose := context.AfterFunc(ctx, func() { _ = link.Close() })
 	defer stopClose()
 	fmt.Fprintln(out, "Buds AVRCP channel accepted")
-	return serveAVRCP(ctx, avrcpDevice{File: link, raw: raw}, out, keys, volume)
+	return serveAVRCP(ctx, avrcpDevice{File: link, raw: raw}, out, keys, volume, activity)
 }
 
-func serveAVRCP(ctx context.Context, link io.ReadWriter, out io.Writer, keys chan<- int, volume *budsVolume) error {
+func serveAVRCP(ctx context.Context, link io.ReadWriter, out io.Writer, keys chan<- int, volume *budsVolume, activity *audio.Activity) error {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	defer volume.hardware.Store(false)
@@ -164,6 +167,16 @@ func serveAVRCP(ctx context.Context, link io.ReadWriter, out io.Writer, keys cha
 	timeout.Stop()
 	defer timeout.Stop()
 	var confirmation <-chan time.Time
+	playbackStatus := func() byte {
+		if activity.LoudWithin(3 * time.Second) {
+			return 1 // playing
+		}
+		return 2 // paused
+	}
+	statusTicker := time.NewTicker(100 * time.Millisecond)
+	defer statusTicker.Stop()
+	var statusUpdates <-chan time.Time
+	var statusHeader, registeredStatus byte
 	sendVolume := func(level int32) error {
 		attempted = level
 		volumeHeader += 0x10 // next AVCTP transaction label
@@ -202,6 +215,13 @@ func serveAVRCP(ctx context.Context, link io.ReadWriter, out io.Writer, keys cha
 		case <-ctx.Done():
 			return ctx.Err()
 		case <-volume.wake:
+		case <-statusUpdates:
+			if status := playbackStatus(); status != registeredStatus {
+				statusUpdates = nil // AVRCP notifications are one-shot.
+				if err := send(avrcpFrame(statusHeader, 0x0d, 0x31, 1, status)); err != nil {
+					return err
+				}
+			}
 		case <-confirmation:
 			confirmation = nil
 			volume.hardware.Store(false)
@@ -212,9 +232,6 @@ func serveAVRCP(ctx context.Context, link io.ReadWriter, out io.Writer, keys cha
 			}
 			p := packet.data
 			if response, key := avrcpButton(p); response != nil {
-				if err := send(response); err != nil {
-					return err
-				}
 				if key != 0 {
 					select {
 					case keys <- key:
@@ -222,6 +239,9 @@ func serveAVRCP(ctx context.Context, link io.ReadWriter, out io.Writer, keys cha
 					default:
 						fmt.Fprintln(out, "Buds AVRCP media command queue full")
 					}
+				}
+				if err := send(response); err != nil {
+					return err
 				}
 				continue
 			}
@@ -242,13 +262,15 @@ func serveAVRCP(ctx context.Context, link io.ReadWriter, out io.Writer, keys cha
 						response = avrcpFrame(header, 0x0c, 0x10, 2, 1, 0, 0x19, 0x58)
 					}
 				case 0x30:
-					response = avrcpFrame(header, 0x0c, 0x30, 0, 0, 0, 0, 0, 0, 0, 0, 2)
+					response = avrcpFrame(header, 0x0c, 0x30, 0, 0, 0, 0, 0, 0, 0, 0, playbackStatus())
 				case 0x31:
 					if len(p) < 14 {
 						continue
 					}
 					if p[13] == 1 {
-						response = avrcpFrame(header, 0x0f, 0x31, 1, 2)
+						statusHeader, registeredStatus = header, playbackStatus()
+						statusUpdates = statusTicker.C
+						response = avrcpFrame(header, 0x0f, 0x31, 1, registeredStatus)
 					} else {
 						response = avrcpFrame(header, 0x0a, 0x31, 0)
 					}

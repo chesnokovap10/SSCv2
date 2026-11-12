@@ -6,6 +6,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"sscv2/internal/audio"
 	"sscv2/internal/bt"
 )
 
@@ -45,7 +46,7 @@ type pipeline struct {
 	encBytes atomic.Uint64
 	frames   atomic.Uint64
 	peak     atomic.Uint32 // float32 bits of the last window's peak
-	lastLoud atomic.Int64  // unix ms of the last non-silent capture block
+	activity audio.Activity
 }
 
 // set installs a new encoder (nil pauses the pipeline).
@@ -80,12 +81,7 @@ func clamp16(v float32) int16 { return int16(clip(v) * 32767) }
 // onCapture receives `frames` interleaved frames of `ch` channels.
 func (p *pipeline) onCapture(s []float32, frames, ch, rate int, discontinuity bool) {
 	p.frames.Add(uint64(frames))
-	for _, v := range s[:frames*ch] {
-		if v > 0.003 || v < -0.003 { // above ~-50 dB: something is playing
-			p.lastLoud.Store(time.Now().UnixMilli())
-			break
-		}
-	}
+	p.activity.Observe(s[:frames*ch])
 	if !p.active.Load() {
 		return
 	}
@@ -256,11 +252,6 @@ func (p *pipeline) encodePerPacket(block int, off *int) {
 		p.ts++
 		bt.SendMedia(out, p.ts)
 	}
-}
-
-// loudWithin reports audio above silence during the last d.
-func (p *pipeline) loudWithin(d time.Duration) bool {
-	return time.Now().UnixMilli()-p.lastLoud.Load() < d.Milliseconds()
 }
 
 // takeFrameStats returns and resets the largest frame and the number of

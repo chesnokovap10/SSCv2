@@ -343,6 +343,9 @@ func wndProc(hwnd, msg, wparam, lparam uintptr) uintptr {
 		for i := len(t.activeMenus) - 1; i >= 0; i-- {
 			if t.activeMenus[i] == wparam {
 				t.activeMenus = t.activeMenus[:i]
+				if i > 0 {
+					t.postMenuMessage(menuRefreshMsg, 0)
+				}
 				break
 			}
 		}

@@ -62,7 +62,7 @@ func TestNativeCodecMenuWhileRestoringA2DP(t *testing.T) {
 	}
 	a.mode = config.ModeOff
 	items = a.menu()
-	if len(items[3].Sub) != 4 || !items[3].Sub[0].Checked || items[4].Sub != nil {
+	if len(items[3].Sub) != 4 || !items[3].Sub[0].Checked || !items[4].Disabled || len(items[4].Sub) != 0 {
 		t.Fatalf("unexpected codec and bitrate rows in Off: %+v", items[3:5])
 	}
 }
@@ -98,7 +98,7 @@ func TestMenuAACNoMaxMTU(t *testing.T) {
 	t.Setenv("APPDATA", t.TempDir())
 	a := &App{mode: config.ModeAAC, s: &config.Settings{Mode: config.ModeAAC, AACBitrate: 256}}
 	for _, it := range a.menu() {
-		if it.Sub == nil || it.Sub[0].ID != idBitrateBase {
+		if len(it.Sub) == 0 || it.Sub[0].ID != idBitrateBase {
 			continue
 		}
 		for _, b := range it.Sub {
@@ -161,7 +161,7 @@ func TestMenuUHQUnsupported(t *testing.T) {
 	}
 	found := false
 	for _, it := range a.menu() {
-		if strings.HasPrefix(it.Text, "Битрейт: —") && it.Sub == nil {
+		if strings.HasPrefix(it.Text, "Битрейт: —") && it.Disabled && len(it.Sub) == 0 {
 			found = true
 		}
 	}

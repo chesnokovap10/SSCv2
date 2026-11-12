@@ -110,10 +110,16 @@ func Run(in io.Reader, stdout *os.File) int {
 	go e.commands(r)
 
 	err := e.run()
+	if errors.Is(err, errStreamStart) {
+		e.keep.Store(true)
+	}
 	e.teardown()
 	if err != nil && !errors.Is(err, context.Canceled) {
 		logf("engine error: %v", err)
-		e.update(func(s *ipc.EngineStatus) { s.Phase, s.Message = "error", err.Error() })
+		e.update(func(s *ipc.EngineStatus) {
+			s.Phase, s.Message = "error", err.Error()
+			s.StreamStartFailed = errors.Is(err, errStreamStart)
+		})
 		return 1
 	}
 	e.update(func(s *ipc.EngineStatus) { s.Phase, s.Message = "stopped", "" })
@@ -295,6 +301,8 @@ func (e *engine) run() error {
 		}
 		msg := i18n.T("ожидание наушников", "waiting for the headphones")
 		switch {
+		case errors.Is(err, errStreamStart):
+			return err
 		case errors.Is(err, errLinkLost):
 			// Put in the case / out of range: pause what was playing, fall
 			// back to the speakers, stop calling them.
@@ -378,7 +386,7 @@ func (e *engine) drainIncoming() {
 }
 
 // session connects, streams until the link drops (nil) or fails (error).
-func (e *engine) session(addrStr string) error {
+func (e *engine) session(addrStr string) (result error) {
 	addr, err := bt.ParseAddr(addrStr)
 	if err != nil {
 		return err
@@ -402,16 +410,21 @@ func (e *engine) session(addrStr string) error {
 		return err
 	}
 	defer bt.Disconnect()
-	remoteCodec, _, remoteCfg := bt.RemoteConfigured()
+	startingSelectedStream := e.cfg.SSCUHQ || e.cfg.SSCBitrate > 0 || e.cfg.AACBitrate > 0 && e.cfg.Codec == "aac"
+	defer func() {
+		if startingSelectedStream && result != nil && !errors.Is(result, errReconnect) {
+			result = fmt.Errorf("%w: %v", errStreamStart, result)
+		}
+	}()
+	_, _, remoteCfg := bt.RemoteConfigured()
 	uhqSupported := caps.SSCUHQ || remoteCfg && bt.SSCConfig()&0x02 != 0
 	e.update(func(s *ipc.EngineStatus) {
 		s.Connected, s.SSCUHQSupported = true, &uhqSupported
 	})
 	sscUHQMode, sscForced = e.cfg.SSCUHQ, e.cfg.SSCBitrate
 	tryUHQ := e.cfg.TryUHQ && caps.SSC && !remoteCfg && !uhqSupported
-	if sscUHQ() && !uhqSupported && !tryUHQ {
-		logf("SSC UHQ unavailable on %s, using the supported codec", name)
-		sscUHQMode, sscForced = false, 0
+	if sscUHQ() && !uhqSupported && !remoteCfg && !tryUHQ {
+		return bt.ErrNoCodec
 	}
 
 	if err := e.openAudio(); err != nil {
@@ -422,17 +435,7 @@ func (e *engine) session(addrStr string) error {
 	var mk func(int, int) (Encoder, error)
 	// A stream the headphones configured themselves carries no codec list
 	// (no discovery): judge it below, before the capability checks.
-	requestedCodec := e.cfg.Codec
-	if e.cfg.SSCUHQ && !sscUHQ() && !remoteCfg && (!caps.SSC || caps.SSCCap&0x04 == 0) && caps.AAC {
-		requestedCodec = "aac"
-	}
-	if e.cfg.SSCUHQ && !uhqSupported && remoteCfg {
-		requestedCodec = "aac"
-		if remoteCodec == bt.CodecSSC {
-			requestedCodec = "ssc"
-		}
-	}
-	switch requestedCodec {
+	switch e.cfg.Codec {
 	case "ssc":
 		if !caps.SSC && !remoteCfg {
 			return errors.New(i18n.T("наушники не поддерживают SSC", "the headphones do not support SSC"))
@@ -475,16 +478,6 @@ func (e *engine) session(addrStr string) error {
 			rate = sscEncodeRate(e.srate)
 		}
 		mtu, err = bt.Configure(ctx, codec, uint32(rate), 2, 256000)
-		if err != nil && tryUHQ && codec == bt.CodecSSC {
-			logf("initial SSC UHQ rejected: %v", err)
-			if retryErr := bt.PrepareStreamRetry(); retryErr == nil {
-				sscUHQMode, sscForced = false, 0
-				if caps.SSCCap&0x04 == 0 && caps.AAC {
-					codec, mk = bt.CodecAAC, newAAC
-				}
-				mtu, err = bt.Configure(ctx, codec, uint32(e.srate), 2, 256000)
-			}
-		}
 		if err != nil {
 			return err
 		}
@@ -508,6 +501,7 @@ func (e *engine) session(addrStr string) error {
 	// remains unavailable, the encoder can safely use software attenuation.
 	e.pipe.volumeStartedAt.Store(time.Now().UnixMilli())
 	e.installEncoder(enc, mtu, codec)
+	startingSelectedStream = false
 	defer e.pipe.set(nil, 0, false)
 
 	for {
@@ -523,15 +517,13 @@ func (e *engine) session(addrStr string) error {
 			return nil
 		case change := <-e.changeCodec:
 			if change.SSCUHQ && !uhqSupported && !change.TryUHQ {
-				e.rejectUHQ(bt.ErrNoCodec)
-				continue
+				return fmt.Errorf("%w: %v", errStreamStart, bt.ErrNoCodec)
 			}
 			sameMode := e.cfg.Codec == change.Codec && e.cfg.SSCUHQ == change.SSCUHQ
 			if sameMode && e.cfg.AACBitrate == change.AACBitrate && e.cfg.SSCBitrate == change.SSCBitrate &&
 				e.cfg.SSCMaxKbps == change.SSCMaxKbps && (!change.SSCUHQ || sscUHQ()) {
 				continue
 			}
-			oldMode, oldForced, oldWorking, oldAAC := sscUHQMode, sscForced, sscWorking, aacForced
 			aacForced = change.AACBitrate * 1000
 			sscUHQMode = change.SSCUHQ
 			sscForced, sscWorking = change.SSCBitrate, change.SSCMaxKbps
@@ -539,57 +531,21 @@ func (e *engine) session(addrStr string) error {
 			if change.Codec == "ssc" {
 				target = bt.CodecSSC
 			}
-			handle := bt.ACLHandle()
-			next, nextMTU, closed, err := e.switchCodec(ctx, caps, target, &enc)
-			if err != nil {
-				logf("codec switch to %s: %v", target, err)
-				if !change.SSCUHQ || sameMode {
-					e.cfg.Codec, e.cfg.SSCUHQ, e.cfg.TryUHQ = change.Codec, change.SSCUHQ, change.TryUHQ
-					e.cfg.AACBitrate, e.cfg.SSCBitrate, e.cfg.SSCMaxKbps = change.AACBitrate, change.SSCBitrate, change.SSCMaxKbps
-					return errReconnect
-				}
-				sscUHQMode, sscForced, sscWorking, aacForced = oldMode, oldForced, oldWorking, oldAAC
-				e.rejectUHQ(err)
-				if closed && bt.ACLHandle() == handle {
-					rate := e.srate
-					if codec == bt.CodecSSC {
-						rate = sscEncodeRate(rate)
-					}
-					restoreErr := bt.PrepareStreamRetry()
-					if restoreErr == nil {
-						var restored Encoder
-						var restoredMTU int
-						restored, restoredMTU, restoreErr = e.openCodec(ctx, codec, rate, mk)
-						if restoreErr == nil {
-							enc = restored
-							e.installEncoder(enc, restoredMTU, codec)
-							continue
-						}
-					}
-					logf("could not restore %s on ACL 0x%04x: %v", codec, handle, restoreErr)
-				}
-				if closed || bt.ACLHandle() != handle {
-					return errReconnect
-				}
-				continue
-			}
+			next, nextMTU, err := e.switchCodec(ctx, caps, target, &enc)
 			e.cfg.Codec, e.cfg.SSCUHQ, e.cfg.TryUHQ = change.Codec, change.SSCUHQ, change.TryUHQ
 			e.cfg.AACBitrate, e.cfg.SSCBitrate, e.cfg.SSCMaxKbps = change.AACBitrate, change.SSCBitrate, change.SSCMaxKbps
-			codec = target
-			mk = newAAC
-			if codec == bt.CodecSSC {
-				mk = newSSC
+			if err != nil {
+				logf("codec switch to %s: %v", target, err)
+				if change.SSCUHQ || change.SSCBitrate > 0 || change.AACBitrate > 0 {
+					return fmt.Errorf("%w: %v", errStreamStart, err)
+				}
+				return errReconnect
 			}
 			enc = next
-			e.installEncoder(enc, nextMTU, codec)
+			e.installEncoder(enc, nextMTU, target)
 			_ = e.out.Write(ipc.Event{Ev: "codec", Codec: &change})
 		}
 	}
-}
-
-func (e *engine) rejectUHQ(err error) {
-	message := i18n.T("Не удалось включить SSC UHQ: ", "Could not enable SSC UHQ: ") + err.Error()
-	_ = e.out.Write(ipc.Event{Ev: "codecRejected", Msg: message})
 }
 
 func (e *engine) installEncoder(enc Encoder, mtu int, codec bt.Codec) {
@@ -734,7 +690,7 @@ func (e *engine) ticker() {
 				(fr-lastFrames)/2, (eb-lastBytes)*8/2000, e.pipe.takePeak(), q, fails, sent, maxF, over)
 		}
 		lastBytes, lastFrames = eb, fr
-		bt.SetPlaying(bt.Streaming() && e.pipe.loudWithin(3*time.Second))
+		bt.SetPlaying(bt.Streaming() && e.pipe.activity.LoudWithin(3*time.Second))
 		e.update(func(s *ipc.EngineStatus) {
 			s.Queue, s.Fails, s.Sent = q, fails, sent
 			s.Volume = int(e.pipe.volume.Load() & 127)
@@ -779,20 +735,15 @@ func (e *engine) closeCapture() {
 
 // teardown restores the audio setup and releases the adapter.
 var (
-	errLinkLost  = i18n.Error("связь с наушниками потеряна", "the link to the headphones was lost")
-	errReconnect = i18n.Error("переподключение для выбора кодека", "reconnecting to choose the codec")
+	errLinkLost    = i18n.Error("связь с наушниками потеряна", "the link to the headphones was lost")
+	errReconnect   = i18n.Error("переподключение для выбора кодека", "reconnecting to choose the codec")
+	errStreamStart = i18n.Error("не удалось запустить поток", "stream failed to start")
 )
 
 // onLinkLost pauses playback (when something was playing) and gives the
 // sound back to the speakers until the headphones reconnect.
 func (e *engine) onLinkLost() {
-	if e.pipe.loudWithin(2 * time.Second) {
-		logf("link lost while playing: sending media Play/Pause")
-		mediaPlayPause()
-		time.Sleep(300 * time.Millisecond) // let players pause before the output moves
-	} else {
-		logf("link lost (nothing playing)")
-	}
+	PauseOnLinkLoss(e.pipe.activity.PlayingOnLinkLoss(), logf)
 	e.releaseAudio()
 	logf("output back to the speakers until the headphones return")
 }
