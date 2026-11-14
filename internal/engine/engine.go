@@ -114,7 +114,12 @@ func Run(in io.Reader, stdout *os.File) int {
 	if errors.Is(err, errStreamStart) {
 		e.keep.Store(false)
 	}
-	e.teardown()
+	if cleanupErr := e.teardown(); cleanupErr != nil {
+		if errors.Is(err, context.Canceled) {
+			err = nil
+		}
+		err = errors.Join(err, cleanupErr)
+	}
 	if err != nil && !errors.Is(err, context.Canceled) {
 		logf("engine error: %v", err)
 		e.update(func(s *ipc.EngineStatus) {
@@ -770,7 +775,10 @@ var (
 // sound back to the speakers until the headphones reconnect.
 func (e *engine) onLinkLost() {
 	PauseOnLinkLoss(e.pipe.activity.PlayingOnLinkLoss(), logf)
-	e.releaseAudio()
+	if err := e.releaseAudio(); err != nil {
+		logf("release audio after link loss: %v", err)
+		return
+	}
 	logf("output back to the speakers until the headphones return")
 }
 
@@ -784,42 +792,55 @@ func (e *engine) stopAudio() {
 }
 
 func (e *engine) releaseSessionAudio() {
-	if e.cap != nil || e.carried {
-		e.releaseAudio()
+	e.mu.Lock()
+	muted := e.st.MuteEndpoint != ""
+	e.mu.Unlock()
+	if e.cap != nil || e.carried || muted {
+		if err := e.releaseAudio(); err != nil {
+			logf("release audio: %v", err)
+		}
 	}
 }
 
-func (e *engine) releaseAudio() {
+func (e *engine) releaseAudio() error {
 	e.carried = false
 	e.closeCapture()
 	e.mu.Lock()
 	st := e.st
 	e.mu.Unlock()
-	RestoreAudio(st)
+	err := RestoreAudio(st)
 	e.update(func(s *ipc.EngineStatus) {
-		s.MuteEndpoint, s.Muted = "", false
+		if err == nil {
+			s.MuteEndpoint, s.Muted = "", false
+		}
 		s.CaptureDevice, s.CaptureFormat = "", ""
 	})
+	return err
 }
 
 // teardown restores the audio setup and releases the adapter.
-func (e *engine) teardown() {
+func (e *engine) teardown() error {
+	var err error
 	if e.keep.Load() {
 		e.stopAudio() // routing stays for the next engine
 	} else {
-		e.releaseAudio()
+		err = e.releaseAudio()
 	}
 	bt.Disconnect()
 	bt.Shutdown()
 	logf("engine stopped")
+	return err
 }
 
 // RestoreAudio undoes what an engine changed (also used by the tray when an
 // engine died).
-func RestoreAudio(st ipc.EngineStatus) {
+func RestoreAudio(st ipc.EngineStatus) error {
 	if st.MuteEndpoint != "" {
-		_ = audio.SetMute(st.MuteEndpoint, false)
+		if err := audio.SetMute(st.MuteEndpoint, false); err != nil {
+			return fmt.Errorf("restore mute on %q: %w", st.MuteEndpoint, err)
+		}
 	}
+	return nil
 }
 
 func nz(a, b string) string {

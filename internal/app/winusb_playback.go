@@ -7,7 +7,6 @@ import (
 	"sscv2/internal/audio"
 	"sscv2/internal/config"
 	"sscv2/internal/driver"
-	"sscv2/internal/engine"
 	"sscv2/internal/helper"
 	"sscv2/internal/i18n"
 	"sscv2/internal/ipc"
@@ -162,7 +161,7 @@ func (a *App) startWinUSBEngineLocked() error {
 	p, err := startWorkerProcess("engine", "engine-stderr.log", cfg)
 	if err != nil {
 		if cfg.Carry != nil {
-			engine.RestoreAudio(ipc.EngineStatus{MuteEndpoint: cfg.Carry.MuteEndpoint})
+			a.restoreWinUSBAudio(ipc.EngineStatus{MuteEndpoint: cfg.Carry.MuteEndpoint})
 		}
 		return err
 	}

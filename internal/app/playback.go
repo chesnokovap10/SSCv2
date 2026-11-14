@@ -185,7 +185,7 @@ func (a *App) beginShutdown(keepMode bool) bool {
 
 // needsPlaybackRestore requires a.mu.
 func (a *App) needsPlaybackRestore() bool {
-	return a.mode.Streaming() || a.eng != nil || a.native != nil ||
+	return a.mode.Streaming() || a.eng != nil || a.native != nil || a.carry != nil ||
 		a.s.NativeA2DPAddress != "" || a.adapter.Mode == driver.WinUSB
 }
 
@@ -242,7 +242,9 @@ func (a *App) stopPlaybackLocked() bool {
 		}
 		a.refreshAdapter()
 	}
-	return true
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.carry == nil
 }
 
 func (a *App) cancelVolumeRestoreLocked() {
@@ -271,14 +273,14 @@ func (a *App) stopWinUSBEngineLocked(keep bool) {
 	a.mu.Unlock()
 	if eng == nil {
 		if !keep && carry != nil {
-			engine.RestoreAudio(ipc.EngineStatus{MuteEndpoint: carry.MuteEndpoint})
+			a.restoreWinUSBAudio(ipc.EngineStatus{MuteEndpoint: carry.MuteEndpoint})
 		}
 		return
 	}
 
 	forced := eng.stop(15*time.Second, keep)
 	if !keep && (forced || eng.waitErr != nil) {
-		engine.RestoreAudio(st)
+		a.restoreWinUSBAudio(st)
 	}
 	if keep && st.MuteEndpoint != "" {
 		a.mu.Lock()
@@ -293,7 +295,18 @@ func (a *App) releaseWinUSBCarryLocked() {
 	a.carry = nil
 	a.mu.Unlock()
 	if carry != nil {
-		engine.RestoreAudio(ipc.EngineStatus{MuteEndpoint: carry.MuteEndpoint})
+		a.restoreWinUSBAudio(ipc.EngineStatus{MuteEndpoint: carry.MuteEndpoint})
+	}
+}
+
+// Save the endpoint for a later retry if it is temporarily unavailable.
+func (a *App) restoreWinUSBAudio(st ipc.EngineStatus) {
+	if err := engine.RestoreAudio(st); err != nil {
+		logf("restore Windows audio: %v", err)
+		a.mu.Lock()
+		a.carry = &ipc.AudioCarry{MuteEndpoint: st.MuteEndpoint}
+		a.mu.Unlock()
+		a.t.Balloon(T("Не удалось вернуть звук Windows", "Could not restore Windows audio"), err.Error(), 2)
 	}
 }
 
@@ -416,7 +429,7 @@ func (a *App) onEngineExit(p *workerProcess, err error) {
 	a.mu.Unlock()
 	logf("engine exited unexpectedly: %v (phase %s: %s)", err, last.Phase, last.Message)
 	if current {
-		engine.RestoreAudio(last)
+		a.restoreWinUSBAudio(last)
 	}
 	if !current || quitting || mode == config.ModeOff || last.StreamStartFailed {
 		a.refresh()
