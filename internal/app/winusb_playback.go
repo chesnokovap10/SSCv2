@@ -195,7 +195,7 @@ func (a *App) onEngineEvent(p *workerProcess, ev ipc.Event) {
 			a.mu.Lock()
 			if a.eng == p && a.volumeLocked() != *ev.Volume {
 				a.s.HeadphonesVolume = ev.Volume
-				_ = config.Save(a.s)
+				a.scheduleVolumeSaveLocked()
 			}
 			a.mu.Unlock()
 		}

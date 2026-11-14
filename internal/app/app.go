@@ -32,6 +32,7 @@ type App struct {
 	busy          string
 	pendingUHQ    bool
 	eng           *workerProcess
+	volumeSave    *time.Timer
 	native        *nativeProcess
 	nativeWaiting *nativeProcess // last worker, while waiting for its headphones to return
 	resumeEngine  *workerProcess // old process being replaced after system sleep
@@ -79,6 +80,7 @@ func Run() int {
 	logf("tray start, version %s, %s", ipc.Version, selfPath())
 
 	a := &App{mode: config.ModeOff, s: s}
+	defer a.flushVolumeSave()
 	if a.s.Debug {
 		logx.SetDebug(true)
 	}

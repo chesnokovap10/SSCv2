@@ -1,6 +1,8 @@
 package app
 
 import (
+	"time"
+
 	"sscv2/internal/audio"
 	"sscv2/internal/config"
 	"sscv2/internal/ipc"
@@ -85,10 +87,41 @@ func (a *App) setVolumeLocked(value uint8, muted bool) {
 	changed := a.volumeLocked() != value || a.s.HeadphonesMuted != muted
 	a.eng.queueVolume(ipc.Command{Cmd: "volume", Volume: value, On: muted})
 	a.s.HeadphonesVolume, a.s.HeadphonesMuted = &value, muted
-	_ = config.Save(a.s)
-	if changed && !a.s.DisableAnimations {
-		a.t.PulseVolume()
+	if changed {
+		a.scheduleVolumeSaveLocked()
+		if !a.s.DisableAnimations {
+			a.t.PulseVolume()
+		}
 	}
+}
+
+func (a *App) scheduleVolumeSaveLocked() {
+	if a.volumeSave != nil {
+		a.volumeSave.Stop()
+	}
+	var timer *time.Timer
+	timer = time.AfterFunc(300*time.Millisecond, func() {
+		a.mu.Lock()
+		defer a.mu.Unlock()
+		if a.volumeSave == timer {
+			a.saveVolumeLocked()
+		}
+	})
+	a.volumeSave = timer
+}
+
+func (a *App) flushVolumeSave() {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.volumeSave != nil {
+		a.volumeSave.Stop()
+		a.saveVolumeLocked()
+	}
+}
+
+func (a *App) saveVolumeLocked() {
+	a.volumeSave = nil
+	_ = config.Save(a.s)
 }
 
 func (a *App) writeNativeVolume(p *nativeProcess) {
