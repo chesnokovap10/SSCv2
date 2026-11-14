@@ -5,6 +5,7 @@ package helper
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"time"
 
@@ -79,12 +80,12 @@ func Handle(req ipc.Request) (resp ipc.Response) {
 		}
 		resp.OK = true
 	case "native-a2dp-release", "native-a2dp-resume":
-		if req.Op == "native-a2dp-resume" {
-			if err := driver.RestoreNativeAVRCP(); err != nil {
-				return fail(err)
-			}
+		resume := req.Op == "native-a2dp-resume"
+		var avrcpErr error
+		if resume {
+			avrcpErr = driver.RestoreNativeAVRCP()
 		}
-		if err := driver.SetNativeStereoService(req.Device, req.Op == "native-a2dp-resume"); err != nil {
+		if err := errors.Join(avrcpErr, driver.SetNativeStereoService(req.Device, resume)); err != nil {
 			return fail(err)
 		}
 		resp.OK = true
