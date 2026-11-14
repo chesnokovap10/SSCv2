@@ -29,11 +29,15 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"sscv2/internal/i18n"
 	"sscv2/internal/mtk"
 	"strings"
 	"syscall"
 	"time"
+	"unsafe"
+
+	"golang.org/x/sys/windows"
 )
 
 const (
@@ -42,9 +46,6 @@ const (
 	catName       = "sscv2_winusb.cat"
 	infName       = "sscv2_winusb.inf"
 )
-
-// Logf, when set, receives the switch script's timed log.
-var Logf func(string, ...any)
 
 // Result of a switch.
 type Result struct {
@@ -139,7 +140,7 @@ func run(timeout time.Duration, exe string, args ...string) (string, error) {
 	return string(out), err
 }
 
-// Variant (diagnostics): "remove" switches the old way, by uninstalling the
+// The "remove" variant switches the old way, by uninstalling the
 // devnode subtree (pnputil /remove-device /subtree) and re-scanning.
 //
 // Default: the driver is changed in place. Uninstalling the subtree deletes
@@ -148,10 +149,8 @@ func run(timeout time.Duration, exe string, args ...string) (string, error) {
 // NEW device: new audio endpoints with no remembered volume (100 %), a
 // restart right after their first install (output bounced headphones ->
 // speakers -> headphones) and a pile of phantom devices.
-var Variant string
-
-func buildScript(enable bool, oldInfs []string, instanceID, infPath, catPath, logPath string) string {
-	inPlace := Variant != "remove" && instanceID != ""
+func buildScript(enable bool, oldInfs []string, instanceID, infPath, catPath, logPath, variant string) string {
+	inPlace := variant != "remove" && instanceID != ""
 	var s strings.Builder
 	w := func(line string) { s.WriteString(line); s.WriteString("\r\n") }
 	w("$ErrorActionPreference = 'Stop'")
@@ -366,8 +365,44 @@ func logTail(path string, n int) string {
 	return "\n  " + strings.Join(lines, "\n  ")
 }
 
+// The service and elevated helpers share the adapter and certificate stores.
+func lockDriverSwitch() (func(), error) {
+	sd, err := windows.SecurityDescriptorFromString("D:P(A;;GA;;;SY)(A;;GA;;;BA)")
+	if err != nil {
+		return nil, err
+	}
+	sa := &windows.SecurityAttributes{SecurityDescriptor: sd}
+	sa.Length = uint32(unsafe.Sizeof(*sa))
+	name := windows.StringToUTF16Ptr(`Global\SSCv2DriverSwitch`)
+	handle, err := windows.CreateMutex(sa, false, name)
+	if err != nil && !errors.Is(err, windows.ERROR_ALREADY_EXISTS) {
+		return nil, err
+	}
+	runtime.LockOSThread()
+	wait, err := windows.WaitForSingleObject(handle, 0)
+	if err == nil && (wait == windows.WAIT_OBJECT_0 || wait == windows.WAIT_ABANDONED) {
+		return func() {
+			_ = windows.ReleaseMutex(handle)
+			_ = windows.CloseHandle(handle)
+			runtime.UnlockOSThread()
+		}, nil
+	}
+	runtime.UnlockOSThread()
+	_ = windows.CloseHandle(handle)
+	if err != nil {
+		return nil, err
+	}
+	return nil, i18n.Error("переключение драйвера уже выполняется", "a driver switch is already in progress")
+}
+
 // Switch installs WinUSB (enable=true) or restores BTHUSB. Must run elevated.
-func Switch(id USBID, enable bool) (Result, error) {
+func Switch(id USBID, enable bool, variant string, logf func(string, ...any)) (Result, error) {
+	unlock, err := lockDriverSwitch()
+	if err != nil {
+		return Result{}, err
+	}
+	defer unlock()
+
 	st := Detect(id)
 	if st.Mode == NotPresent {
 		return Result{}, fmt.Errorf(i18n.T("адаптер %s не найден", "adapter %s not found"), id)
@@ -393,14 +428,14 @@ func Switch(id USBID, enable bool) (Result, error) {
 		}
 	}
 	// UTF-8 BOM so Windows PowerShell 5.1 reads non-ASCII paths correctly.
-	script := "\ufeff" + buildScript(enable, oldInfs, st.InstanceID, infPath, catPath, logPath)
+	script := "\ufeff" + buildScript(enable, oldInfs, st.InstanceID, infPath, catPath, logPath, variant)
 	if err := os.WriteFile(scriptPath, []byte(script), 0o644); err != nil {
 		return Result{}, err
 	}
 	_, err = run(7*time.Minute, "powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", scriptPath)
 	tail := logTail(logPath, 8)
-	if Logf != nil {
-		Logf("driver switch (winusb=%v) script log:%s", enable, logTail(logPath, 40))
+	if logf != nil {
+		logf("driver switch (winusb=%v) script log:%s", enable, logTail(logPath, 40))
 	}
 	if err != nil {
 		msg := i18n.T("переключение драйвера не удалось: ", "driver switch failed: ") + err.Error()
@@ -409,22 +444,22 @@ func Switch(id USBID, enable bool) (Result, error) {
 		}
 		return Result{}, errors.New(msg + tail)
 	}
-	if enable && Variant != "remove" && st.InstanceID != "" {
+	if enable && variant != "remove" && st.InstanceID != "" {
 		started := time.Now()
 		if probeErr := mtk.CheckWinUSB(id.VID, id.PID); probeErr != nil {
-			if Logf != nil {
-				Logf("WinUSB readiness check failed in %s, rescanning: %v", time.Since(started), probeErr)
+			if logf != nil {
+				logf("WinUSB readiness check failed in %s, rescanning: %v", time.Since(started), probeErr)
 			}
 			if _, scanErr := run(30*time.Second, "pnputil.exe", "/scan-devices"); scanErr != nil {
 				return Result{Changed: true}, fmt.Errorf("WinUSB readiness check: %v; rescan: %w", probeErr, scanErr)
 			}
-		} else if Logf != nil {
-			Logf("WinUSB ready in %s, skipped full device scan", time.Since(started))
+		} else if logf != nil {
+			logf("WinUSB ready in %s, skipped full device scan", time.Since(started))
 		}
 	}
 	// The in-place enable normally starts the Bluetooth child without
 	// a global rescan. Keep the scan as recovery if the child is missing.
-	if !enable && Variant != "remove" && st.InstanceID != "" && Detect(id).Mode != BthUSB {
+	if !enable && variant != "remove" && st.InstanceID != "" && Detect(id).Mode != BthUSB {
 		if _, scanErr := run(30*time.Second, "pnputil.exe", "/scan-devices"); scanErr != nil {
 			return Result{Changed: true}, fmt.Errorf("Bluetooth readiness rescan: %w", scanErr)
 		}

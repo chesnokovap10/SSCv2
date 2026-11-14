@@ -41,7 +41,6 @@ func Handle(req ipc.Request) (resp ipc.Response) {
 	case "ping":
 		resp.OK = true
 	case "driver":
-		driver.Logf = logx.Printf
 		t0 := time.Now()
 		defer func() { logx.Printf("helper: driver op took %s", time.Since(t0).Round(time.Millisecond)) }()
 		id := driver.USBID{VID: req.VID, PID: req.PID}
@@ -54,8 +53,7 @@ func Handle(req ipc.Request) (resp ipc.Response) {
 		if !known {
 			return fail(fmt.Errorf(i18n.T("?????????? %s ?? ?? ?????? ?????????????? MediaTek", "device %s is not a supported MediaTek adapter"), id))
 		}
-		driver.Variant = req.Variant
-		r, err := driver.Switch(id, req.WinUSB)
+		r, err := driver.Switch(id, req.WinUSB, req.Variant, logx.Printf)
 		if err != nil {
 			return fail(err)
 		}
