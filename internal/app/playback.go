@@ -404,15 +404,12 @@ func (a *App) onEngineExit(p *workerProcess, err error) {
 		a.eng = nil
 		a.scanning = false
 		a.pendingUHQ = false
-		if last.StreamStartFailed && last.MuteEndpoint != "" {
-			a.carry = &ipc.AudioCarry{MuteEndpoint: last.MuteEndpoint}
-		}
 		a.t.SetVolumeKeys(false)
 	}
 	mode, quitting := a.mode, a.quitting
 	a.mu.Unlock()
 	logf("engine exited unexpectedly: %v (phase %s: %s)", err, last.Phase, last.Message)
-	if current && !last.StreamStartFailed {
+	if current {
 		engine.RestoreAudio(last)
 	}
 	if !current || quitting || mode == config.ModeOff || last.StreamStartFailed {

@@ -112,7 +112,7 @@ func Run(in io.Reader, stdout *os.File) int {
 
 	err := e.run()
 	if errors.Is(err, errStreamStart) {
-		e.keep.Store(true)
+		e.keep.Store(false)
 	}
 	e.teardown()
 	if err != nil && !errors.Is(err, context.Canceled) {
