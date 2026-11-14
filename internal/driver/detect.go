@@ -4,6 +4,7 @@ package driver
 
 import (
 	"fmt"
+	"slices"
 	"sscv2/internal/i18n"
 	"strings"
 
@@ -57,12 +58,6 @@ type Status struct {
 	InstanceID string // PnP instance id of the whole-device node
 }
 
-func hwidMatches(hwid string, id USBID) bool {
-	u := strings.ToUpper(hwid)
-	return strings.Contains(u, fmt.Sprintf("VID_%04X", id.VID)) &&
-		strings.Contains(u, fmt.Sprintf("PID_%04X", id.PID))
-}
-
 func strProp(set windows.DevInfo, d *windows.DevInfoData, p windows.SPDRP) string {
 	v, err := set.DeviceRegistryProperty(d, p)
 	if err != nil {
@@ -98,16 +93,30 @@ func modeOf(service string) Mode {
 // targets the parent, so the parent is reported; a usbccgp parent with a
 // BTHUSB child counts as Windows Bluetooth mode.
 func Detect(id USBID) Status {
-	st := Status{ID: id}
+	return detectAdapters([]USBID{id})[0]
+}
+
+func detectAdapters(ids []USBID) []Status {
+	type detected struct {
+		parent, child  Status
+		bthChild, done bool
+		vid, pid       string
+	}
+	nodes := make([]detected, len(ids))
+	matches := make([]Status, len(ids))
+	for i, id := range ids {
+		matches[i].ID = id
+		nodes[i].vid = fmt.Sprintf("VID_%04X", id.VID)
+		nodes[i].pid = fmt.Sprintf("PID_%04X", id.PID)
+	}
 	set, err := windows.SetupDiGetClassDevsEx(nil, "", 0,
 		windows.DIGCF_ALLCLASSES|windows.DIGCF_PRESENT, 0, "")
 	if err != nil {
-		return st
+		return matches
 	}
 	defer set.Close()
 
-	var parent, lastChild Status
-	haveParent, childBth := false, false
+	pending := len(ids)
 	for i := 0; ; i++ {
 		d, err := set.EnumDeviceInfo(i)
 		if err != nil {
@@ -117,57 +126,62 @@ func Detect(id USBID) Status {
 		if err != nil {
 			continue
 		}
-		ids, _ := v.([]string)
-		matched := false
-		for _, h := range ids {
-			if hwidMatches(h, id) {
-				matched = true
-				break
+		hwids, _ := v.([]string)
+		for j := range hwids {
+			hwids[j] = strings.ToUpper(hwids[j])
+		}
+		for j, id := range ids {
+			node := &nodes[j]
+			if node.done || !slices.ContainsFunc(hwids, func(h string) bool {
+				return strings.Contains(h, node.vid) && strings.Contains(h, node.pid)
+			}) {
+				continue
+			}
+			cur := Status{ID: id}
+			cur.InstanceID, _ = set.DeviceInstanceID(d)
+			cur.Name = strProp(set, d, windows.SPDRP_FRIENDLYNAME)
+			if cur.Name == "" {
+				cur.Name = strProp(set, d, windows.SPDRP_DEVICEDESC)
+			}
+			cur.Service = strProp(set, d, windows.SPDRP_SERVICE)
+			cur.Mode = modeOf(cur.Service)
+			if strings.Contains(strings.ToUpper(cur.InstanceID), "&MI_") {
+				node.child = cur
+				node.bthChild = node.bthChild || cur.Mode == BthUSB
+				continue
+			}
+			node.parent = cur
+			node.done = cur.Mode == WinUSB || cur.Mode == BthUSB
+			if node.done {
+				pending--
 			}
 		}
-		if !matched {
-			continue
-		}
-		cur := Status{ID: id}
-		cur.InstanceID, _ = set.DeviceInstanceID(d)
-		cur.Name = strProp(set, d, windows.SPDRP_FRIENDLYNAME)
-		if cur.Name == "" {
-			cur.Name = strProp(set, d, windows.SPDRP_DEVICEDESC)
-		}
-		cur.Service = strProp(set, d, windows.SPDRP_SERVICE)
-		cur.Mode = modeOf(cur.Service)
-
-		if strings.Contains(strings.ToUpper(cur.InstanceID), "&MI_") {
-			if cur.Mode == BthUSB {
-				childBth = true
-			}
-			lastChild = cur
-			continue
-		}
-		parent, haveParent = cur, true
-		if cur.Mode == WinUSB || cur.Mode == BthUSB {
+		if pending == 0 {
 			break
 		}
 	}
-	if !haveParent {
-		return lastChild
+	for i, node := range nodes {
+		if node.parent.ID.VID != 0 {
+			if node.parent.Mode == Other && node.bthChild {
+				node.parent.Mode = BthUSB
+			}
+			matches[i] = node.parent
+		} else if node.child.ID.VID != 0 {
+			matches[i] = node.child
+		}
 	}
-	if parent.Mode == Other && childBth {
-		parent.Mode = BthUSB
-	}
-	return parent
+	return matches
 }
 
 // FindAdapter returns the first known MediaTek adapter that is present,
 // preferring `want` when it is non-zero.
 func FindAdapter(want USBID) (Status, bool) {
-	if want.VID != 0 {
-		if st := Detect(want); st.Mode != NotPresent {
-			return st, true
-		}
+	ids := KnownMediaTek
+	if want.VID != 0 && (len(ids) == 0 || ids[0] != want) {
+		ids = append([]USBID{want}, ids...)
 	}
-	for _, id := range KnownMediaTek {
-		if st := Detect(id); st.Mode != NotPresent {
+	for _, st := range detectAdapters(ids) {
+		if st.Mode != NotPresent {
 			return st, true
 		}
 	}
