@@ -80,7 +80,7 @@ func (a *App) initializePlayback() {
 	case st.Mode == driver.NotPresent:
 		a.t.Balloon("SSCv2", T("Встроенный адаптер MediaTek не найден.", "The built-in MediaTek adapter was not found."), 1)
 	case want.Streaming():
-		a.setMode(config.ModeOff)
+		logf("saved codec %s requires the helper to resume automatically", want)
 	case st.Mode == driver.WinUSB:
 		a.t.Balloon("SSCv2", T("Адаптер остался в режиме WinUSB. Выберите «Кодек > Выкл», чтобы вернуть Bluetooth Windows.",
 			"The adapter is still in WinUSB mode. Choose \"Codec > Off\" to give Bluetooth back to Windows."), 1)
