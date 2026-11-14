@@ -171,10 +171,10 @@ func (e *engine) commands(r *ipc.Reader) {
 
 func (e *engine) update(f func(*ipc.EngineStatus)) {
 	e.mu.Lock()
+	defer e.mu.Unlock()
 	prev := e.st
 	f(&e.st)
 	snap := e.st
-	e.mu.Unlock()
 	if logx.Debug() && (prev.Phase != snap.Phase || prev.Message != snap.Message || prev.Connected != snap.Connected ||
 		prev.Streaming != snap.Streaming || prev.AVRCP != snap.AVRCP || prev.Volume != snap.Volume || prev.MouseState != snap.MouseState) {
 		logx.Dbgf("state", "phase=%s msg=%q connected=%v streaming=%v avrcp=%v volume=%d mouse=%q",
