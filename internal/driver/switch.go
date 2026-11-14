@@ -23,6 +23,7 @@ package driver
 // Everything here must run elevated (helper service or UAC'd helper).
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -126,26 +127,16 @@ DeviceName="%s"
 
 // run starts a hidden console program and waits (with a timeout).
 func run(timeout time.Duration, exe string, args ...string) (string, error) {
-	cmd := exec.Command(exe, args...)
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, exe, args...)
 	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true, CreationFlags: 0x08000000}
-	type res struct {
-		out []byte
-		err error
+	cmd.WaitDelay = 2 * time.Second
+	out, err := cmd.CombinedOutput()
+	if ctx.Err() != nil {
+		return string(out), fmt.Errorf("%s: timeout after %s: %w", filepath.Base(exe), timeout, ctx.Err())
 	}
-	ch := make(chan res, 1)
-	go func() {
-		o, e := cmd.CombinedOutput()
-		ch <- res{o, e}
-	}()
-	select {
-	case r := <-ch:
-		return string(r.out), r.err
-	case <-time.After(timeout):
-		if cmd.Process != nil {
-			_ = cmd.Process.Kill()
-		}
-		return "", fmt.Errorf("%s: timeout after %s", filepath.Base(exe), timeout)
-	}
+	return string(out), err
 }
 
 // Variant (diagnostics): "remove" switches the old way, by uninstalling the
@@ -168,15 +159,19 @@ func buildScript(enable bool, oldInfs []string, instanceID, infPath, catPath, lo
 	w("$id = " + psLit(instanceID))
 	w("Set-Content -Path $log -Value '' -Encoding UTF8")
 	w("function Log([string]$m) { Add-Content -Path $log -Value ((Get-Date -Format 'HH:mm:ss.fff') + ' ' + $m) -Encoding UTF8 }")
+	w("$deadline = (Get-Date).AddMinutes(4)")
 	// Every tool call is time-limited: a wedged PnP operation must never hang.
 	w(`function Run([string]$exe, [string[]]$a, [int[]]$ok = @(0), [int]$timeout = 90) {
   $ErrorActionPreference = 'Continue'
+  $remaining = [int][Math]::Floor(($deadline - (Get-Date)).TotalMilliseconds)
+  if ($remaining -le 0) { throw 'driver operation deadline expired' }
   $q = @($a | ForEach-Object { if ($_ -match '\s') { '"' + $_ + '"' } else { $_ } })
   $o = [IO.Path]::GetTempFileName()
   $p = Start-Process -FilePath $exe -ArgumentList $q -NoNewWindow -PassThru -RedirectStandardOutput $o
   $null = $p.Handle
-  if (-not $p.WaitForExit($timeout * 1000)) {
+  if (-not $p.WaitForExit([Math]::Min($remaining, $timeout * 1000))) {
     Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue
+    Remove-Item $o -ErrorAction SilentlyContinue
     Log "> $exe $($a -join ' ') -> TIMEOUT after $timeout s"
     throw "$exe timed out"
   }
@@ -319,12 +314,19 @@ func buildScript(enable bool, oldInfs []string, instanceID, infPath, catPath, lo
 	w("  $rc = 0")
 	w("} catch {")
 	w("  Log (\"ERROR: \" + $_.Exception.Message)")
+	w("  $deadline = (Get-Date).AddMinutes(2)")
 	if enable {
 		// A half-done switch must not leave our package staged: after a
 		// reboot Windows would bind it and Bluetooth would be gone.
 		w(`  try {
-    Get-ChildItem "$env:windir\INF\oem*.inf" | Where-Object { (Get-Content $_.FullName -Raw) -match '` + infDeviceName + `' } | ForEach-Object {
-      Run 'pnputil.exe' @('/delete-driver', $_.Name) @(0, 3010) 30
+    $hardware = ($id -split '\\')[1]
+    if ($hardware) {
+      Get-ChildItem "$env:windir\INF\oem*.inf" | Where-Object {
+        $content = Get-Content $_.FullName -Raw
+        $content -match '` + infDeviceName + `' -and $content -match [regex]::Escape($hardware)
+      } | ForEach-Object {
+        Run 'pnputil.exe' @('/delete-driver', $_.Name, '/uninstall') @(0, 3010) 30
+      }
     }
   } catch { Log ("rollback ERROR: " + $_.Exception.Message) }`)
 	}
@@ -332,12 +334,15 @@ func buildScript(enable bool, oldInfs []string, instanceID, infPath, catPath, lo
 		w(`  try { if ((Get-PnpDevice -InstanceId $id).Problem -eq 'CM_PROB_DISABLED') { Run 'pnputil.exe' @('/enable-device', $id) @(0, 3010) 60 } } catch {}`)
 	}
 	w("} finally {")
+	w("  $deadline = (Get-Date).AddSeconds(30)")
 	// whatever failed: the adapter must not stay removed from the device tree
 	w("  try { if (-not (Present)) { Log 'adapter missing - rescanning'; Run 'pnputil.exe' @('/scan-devices') @(0, 3010) } } catch { Log (\"rescan ERROR: \" + $_.Exception.Message) }")
-	w("  try { Remove-Signer } catch { Log (\"cleanup ERROR: \" + $_.Exception.Message); $rc = 2 }")
 	if !enable {
 		w("  try { if ((Get-Service BthAvctpSvc).Status -ne 'Running') { Start-Avctp } } catch {}")
+	} else {
+		w("  try { if ($rc -ne 0 -and (Get-Service BthAvctpSvc).Status -ne 'Running') { Start-Avctp } } catch {}")
 	}
+	w("  try { Remove-Signer } catch { Log (\"cleanup ERROR: \" + $_.Exception.Message); if ($rc -eq 0) { $rc = 2 } }")
 	w("}")
 	w("exit $rc")
 	return s.String()
@@ -392,7 +397,7 @@ func Switch(id USBID, enable bool) (Result, error) {
 	if err := os.WriteFile(scriptPath, []byte(script), 0o644); err != nil {
 		return Result{}, err
 	}
-	_, err = run(5*time.Minute, "powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", scriptPath)
+	_, err = run(7*time.Minute, "powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", scriptPath)
 	tail := logTail(logPath, 8)
 	if Logf != nil {
 		Logf("driver switch (winusb=%v) script log:%s", enable, logTail(logPath, 40))

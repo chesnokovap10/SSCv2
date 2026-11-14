@@ -86,6 +86,11 @@ func (a *App) startWinUSBPlaybackLocked(m config.Mode, eng *workerProcess, strea
 		_, err := helper.Call(ipc.Request{Op: "driver", VID: st.ID.VID, PID: st.ID.PID, WinUSB: true, Variant: variant})
 		if err != nil {
 			logf("driver winusb: %v", err)
+			if a.refreshAdapter().Mode == driver.WinUSB {
+				if _, restoreErr := helper.Call(ipc.Request{Op: "driver", VID: st.ID.VID, PID: st.ID.PID, Variant: variant}); restoreErr != nil {
+					logf("restore Bluetooth after WinUSB switch failure: %v", restoreErr)
+				}
+			}
 			a.t.Balloon(T("Не удалось включить поток", "Could not start streaming"), err.Error(), 2)
 			a.refreshAdapter()
 			a.markStreamStartFailed()
