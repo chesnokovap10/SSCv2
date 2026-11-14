@@ -657,13 +657,13 @@ func (e *engine) startAudio() error {
 
 var evNames = map[bt.EventKind]string{bt.EvDisconnected: "disconnected", bt.EvVolume: "volume", bt.EvLinkKey: "link key",
 	bt.EvMouse: "mouse", bt.EvAVRCPConnected: "AVRCP connected", bt.EvVolumeApplied: "volume applied",
-	bt.EvACLUp: "ACL up", bt.EvA2DPReady: "A2DP ready", bt.EvMediaKey: "media key"}
+	bt.EvACLUp: "ACL up", bt.EvA2DPReady: "A2DP ready", bt.EvMediaKey: "media key", bt.EvStreamReleased: "media channel released"}
 
 func (e *engine) btEvents() {
 	for ev := range bt.Events() {
 		logx.Dbgf("bt", "event %s %s vol=%d %s", evNames[ev.Kind], ev.Addr, ev.Volume, ev.Mouse)
 		switch ev.Kind {
-		case bt.EvDisconnected:
+		case bt.EvDisconnected, bt.EvStreamReleased:
 			select {
 			case e.disc <- struct{}{}:
 			default:

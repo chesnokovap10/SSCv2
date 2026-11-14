@@ -92,6 +92,7 @@ const (
 	EvACLUp                           // a BR/EDR link came up (e.g. headphones reconnecting)
 	EvA2DPReady                       // A2DP signalling + codec discovery done (any direction)
 	EvMediaKey                        // a button on the headphones (Key: MediaPlayPause, MediaNext, ...)
+	EvStreamReleased                  // the peer closed the media channel
 )
 
 // Media keys the headphones send (AVRCP PASS_THROUGH, button pressed).

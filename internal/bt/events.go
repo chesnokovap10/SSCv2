@@ -310,7 +310,12 @@ func (s *stackT) onA2DP(cp *C.uint8_t, p []byte) {
 	case C.A2DP_SUBEVENT_STREAM_RELEASED:
 		s.logf("bt: stream released")
 		s.streaming.Store(false)
-		sig(s.releaseCh, nil)
+		s.resetMedia()
+		if s.releaseCh != nil {
+			sig(s.releaseCh, nil)
+		} else {
+			s.emit(Event{Kind: EvStreamReleased, Addr: s.remote})
+		}
 
 	case C.A2DP_SUBEVENT_SIGNALING_CONNECTION_RELEASED:
 		s.logf("bt: A2DP signalling released")
