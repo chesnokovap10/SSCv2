@@ -23,6 +23,7 @@ var (
 )
 
 const (
+	mediaPlay          = 10 // IGlobalSystemMediaTransportControlsSession::TryPlayAsync
 	mediaNextTrack     = 16 // IGlobalSystemMediaTransportControlsSession::TrySkipNextAsync
 	mediaPreviousTrack = 17
 )
@@ -69,13 +70,13 @@ func (obj *mediaObject) await(result unsafe.Pointer) error {
 	}
 }
 
-func mediaTrackCommand(slot int) {
-	if err := skipMediaTrack(slot); err != nil {
-		logx.Printf("media track command: %v", err)
+func runMediaCommand(slot int) {
+	if err := sendMediaCommand(slot); err != nil {
+		logx.Printf("media session command: %v", err)
 	}
 }
 
-func skipMediaTrack(slot int) error {
+func sendMediaCommand(slot int) error {
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
 	hr, _, _ := roInitialize.Call(1) // RO_INIT_MULTITHREADED
@@ -132,8 +133,8 @@ func skipMediaTrack(slot int) error {
 		return err
 	}
 	if accepted == 0 {
-		return fmt.Errorf("the player declined the track change")
+		return fmt.Errorf("the player declined the media command")
 	}
-	logx.Dbgf("media", "track change accepted (slot %d)", slot)
+	logx.Dbgf("media", "media command accepted (slot %d)", slot)
 	return nil
 }

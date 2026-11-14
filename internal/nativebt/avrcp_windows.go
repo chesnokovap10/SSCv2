@@ -80,7 +80,7 @@ func avrcpButton(p []byte) (response []byte, key int) {
 	}
 	switch p[6] & 0x7f {
 	case 0x44:
-		key = bt.MediaPlayPause
+		key = bt.MediaPlay
 	case 0x46:
 		key = bt.MediaPause
 	case 0x45:

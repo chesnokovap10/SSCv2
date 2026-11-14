@@ -102,6 +102,7 @@ const (
 	MediaPrev                 // BACKWARD (triple tap)
 	MediaStop
 	MediaPause // explicit AVRCP PAUSE
+	MediaPlay  // explicit AVRCP PLAY
 )
 
 // Event is delivered on Events().

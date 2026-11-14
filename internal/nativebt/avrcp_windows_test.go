@@ -55,7 +55,7 @@ func TestAVRCPTrackButtons(t *testing.T) {
 		t.Fatal(err)
 	}
 	checkStatus(avrcpFrame(0x82, 0x0c, 0x30, 0, 0, 0, 0, 0, 0, 0, 0, 1))
-	for i, op := range []byte{0x4b, 0xcb, 0x4c, 0xcc, 0x46, 0xc6} {
+	for i, op := range []byte{0x4b, 0xcb, 0x4c, 0xcc, 0x46, 0xc6, 0x44, 0xc4} {
 		label := byte(i+3) << 4
 		command := []byte{label, 0x11, 0x0e, 0, 0x48, 0x7c, op, 0}
 		if _, err := buds.Write(command); err != nil {
@@ -70,7 +70,7 @@ func TestAVRCPTrackButtons(t *testing.T) {
 			t.Fatalf("button 0x%02x: response %x, want %x", op, response, want)
 		}
 	}
-	for _, want := range []int{bt.MediaNext, bt.MediaPrev, bt.MediaPause} {
+	for _, want := range []int{bt.MediaNext, bt.MediaPrev, bt.MediaPause, bt.MediaPlay} {
 		select {
 		case key := <-keys:
 			if key != want {

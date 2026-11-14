@@ -59,10 +59,12 @@ func PauseOnLinkLoss(playing bool, logf func(string, ...any)) {
 // HandleMediaKey routes a headset button to the current Windows player.
 func HandleMediaKey(key int) {
 	switch key {
+	case bt.MediaPlay:
+		runMediaCommand(mediaPlay)
 	case bt.MediaNext:
-		mediaTrackCommand(mediaNextTrack)
+		runMediaCommand(mediaNextTrack)
 	case bt.MediaPrev:
-		mediaTrackCommand(mediaPreviousTrack)
+		runMediaCommand(mediaPreviousTrack)
 	case bt.MediaPlayPause, bt.MediaPause:
 		mediaPlayPause()
 	case bt.MediaStop:
