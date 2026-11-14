@@ -17,7 +17,7 @@ import (
 	"golang.org/x/sys/windows"
 
 	"sscv2/internal/bitrate"
-	"sscv2/internal/codec/ssc"
+	"sscv2/internal/codec/sscrate"
 	"sscv2/internal/config"
 	"sscv2/internal/helper"
 	"sscv2/internal/ipc"
@@ -226,13 +226,13 @@ func (a *App) ctl(args []string) string {
 		kbps := 0
 		if arg(1) != "auto" {
 			n, err := strconv.Atoi(arg(1))
-			if err != nil || !ssc.Valid(48000, n*1000) && !ssc.Valid(96000, n*1000) {
+			if err != nil || !sscrate.Valid(48000, n) && !sscrate.Valid(96000, n) {
 				return fmt.Sprintf("error: ssc auto|%v or UHQ %v", bitrate.Choices(config.ModeSSC)[1:], bitrate.Choices(config.ModeSSCUHQ)[1:])
 			}
 			kbps = n
 		}
 		a.mu.Lock()
-		if kbps > 0 && ssc.Valid(96000, kbps*1000) {
+		if sscrate.Valid(96000, kbps) {
 			a.s.SSCUHQBitrate = kbps
 		} else {
 			a.s.SSCBitrate = kbps
