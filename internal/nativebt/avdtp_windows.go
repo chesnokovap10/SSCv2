@@ -120,6 +120,7 @@ func inspect(ctx context.Context, link io.ReadWriter, out io.Writer, openMedia f
 	var experimentalSEID byte
 	var experimentalCodec []byte
 	var uhqSupported bool
+	var rejected error
 	for i := 0; i < len(endpoints); i += 2 {
 		seid := endpoints[i] >> 2
 		if endpoints[i+1]>>3 != 1 {
@@ -132,7 +133,14 @@ func inspect(ctx context.Context, link io.ReadWriter, out io.Writer, openMedia f
 			caps, err = p.command(getCapabilities, seid<<2)
 		}
 		if err != nil {
-			return fmt.Errorf("SEID %d capabilities: %w", seid, err)
+			err = fmt.Errorf("SEID %d capabilities: %w", seid, err)
+			var reject *rejection
+			if !errors.As(err, &reject) || openMedia == nil {
+				return err
+			}
+			rejected = errors.Join(rejected, err)
+			fmt.Fprintln(out, err)
+			continue
 		}
 		for len(caps) > 0 {
 			if len(caps) < 2 || int(caps[1]) > len(caps)-2 {
@@ -175,7 +183,7 @@ func inspect(ctx context.Context, link io.ReadWriter, out io.Writer, openMedia f
 	if selectedSEID == 0 {
 		selectedSEID, selectedCodec = experimentalSEID, experimentalCodec
 		if selectedSEID == 0 {
-			return fmt.Errorf("no idle %s sink supports the requested configuration", stream.Mode)
+			return errors.Join(fmt.Errorf("no idle %s sink supports the requested configuration", stream.Mode), rejected)
 		}
 		fmt.Fprintf(out, "trying SSC UHQ on SEID %d without advertised support\n", selectedSEID)
 	}
