@@ -118,7 +118,8 @@ func setA2DP(radio windows.Handle, info *stereoBluetoothDevice, enabled bool) er
 		state = 1
 	}
 	result, _, _ := stereoSetService.Call(uintptr(radio), uintptr(unsafe.Pointer(info)), uintptr(unsafe.Pointer(&sink)), state)
-	if result == uintptr(windows.ERROR_INVALID_PARAMETER) {
+	const invalidParameterHRESULT = 0x80070057
+	if result == uintptr(windows.ERROR_INVALID_PARAMETER) || uint32(result) == invalidParameterHRESULT {
 		// Verify the actual state before accepting the error as an idempotent update.
 		var services [32]windows.GUID
 		count := uint32(len(services))
@@ -133,7 +134,7 @@ func setA2DP(radio windows.Handle, info *stereoBluetoothDevice, enabled bool) er
 			}
 		}
 	}
-	if result != 0 && uint32(result) != 0x80070057 {
+	if result != 0 {
 		return windows.Errno(result)
 	}
 	return nil
