@@ -726,7 +726,10 @@ Return Value:
     }
     else
     {
+        WdfSpinLockAcquire(connection->ConnectionLock);
         connection->ConnectionState = ConnectionStateConnectFailed;
+        WdfSpinLockRelease(connection->ConnectionLock);
+        KeSetEvent(&connection->DisconnectEvent, IO_NO_INCREMENT, FALSE);
     }
 
     //
@@ -775,7 +778,8 @@ NTSTATUS SscAcceptIncoming(PBTHECHOSAMPLE_CLIENT_CONTEXT dev, WDFFILEOBJECT file
     brb.CallbackContext = connection;
     brb.ReferenceObject = WdfDeviceWdmGetDeviceObject(dev->Header.Device);
     brb.IncomingQueueDepth = 10;
-    status = BthEchoSharedSendBrbSynchronously(dev->Header.IoTarget, request, (PBRB)&brb, sizeof(brb));
+    status = BthEchoSharedSendBrbSynchronouslyWithTimeout(
+        dev->Header.IoTarget, request, (PBRB)&brb, sizeof(brb), SSC_L2CAP_OPEN_TIMEOUT);
     if (!NT_SUCCESS(status)) {
         connection->ConnectionState = ConnectionStateConnectFailed;
         return status;
@@ -910,7 +914,8 @@ Return Value:
         (PBRB) brb,
         sizeof(*brb),
         BthEchoCliRemoteConnectCompletion,
-        brb    //Context
+        brb,
+        SSC_L2CAP_OPEN_TIMEOUT
         );
 
     if (!NT_SUCCESS(status))
@@ -1101,7 +1106,10 @@ Return Value:
     }
     else
     {
+        WdfSpinLockAcquire(connection->ConnectionLock);
         connection->ConnectionState = ConnectionStateConnectFailed;
+        WdfSpinLockRelease(connection->ConnectionLock);
+        KeSetEvent(&connection->DisconnectEvent, IO_NO_INCREMENT, FALSE);
     }
 
     //
@@ -1220,7 +1228,8 @@ Return Value:
         (PBRB) brb,
         sizeof(*brb),
         BthEchoCliRemoteConnectCompletion,
-        brb    //Context
+        brb,
+        SSC_L2CAP_OPEN_TIMEOUT
         );
 
     if (!NT_SUCCESS(status))

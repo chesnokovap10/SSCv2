@@ -232,7 +232,8 @@ BthEchoSharedSendBrbAsync(
     _In_ PBRB Brb,
     _In_ size_t BrbSize,
     _In_ PFN_WDF_REQUEST_COMPLETION_ROUTINE ComplRoutine,
-    _In_opt_ WDFCONTEXT Context
+    _In_opt_ WDFCONTEXT Context,
+    _In_ LONGLONG Timeout
     )
 /*++
 
@@ -250,6 +251,7 @@ Arguments:
                    This must be specified because we are formatting the request
                    and hence not using SEND_AND_FORGET flag
     Context - (optional) context to be passed in to the completion routine
+    Timeout - Relative timeout in 100 ns units, or zero for no timeout
 
 Return Value:
 
@@ -270,6 +272,20 @@ Notes:
     NTSTATUS status         = BTH_ERROR_SUCCESS;
     WDF_OBJECT_ATTRIBUTES attributes;
     WDFMEMORY memoryArg1    = NULL;
+    WDF_REQUEST_SEND_OPTIONS options;
+    PWDF_REQUEST_SEND_OPTIONS sendOptions = NULL;
+
+    if (Timeout != 0)
+    {
+        status = WdfRequestAllocateTimer(Request);
+        if (!NT_SUCCESS(status))
+        {
+            return status;
+        }
+        WDF_REQUEST_SEND_OPTIONS_INIT(&options, 0);
+        WDF_REQUEST_SEND_OPTIONS_SET_TIMEOUT(&options, Timeout);
+        sendOptions = &options;
+    }
 
     if (BrbSize <= 0)
     {
@@ -342,7 +358,7 @@ Notes:
     if (FALSE == WdfRequestSend(
         Request,
         IoTarget,
-        NULL
+        sendOptions
         ))
     {
         status = WdfRequestGetStatus(Request);
@@ -368,6 +384,19 @@ BthEchoSharedSendBrbSynchronously(
     _In_ WDFREQUEST Request,
     _In_ PBRB Brb,
     _In_ ULONG BrbSize
+    )
+{
+    return BthEchoSharedSendBrbSynchronouslyWithTimeout(IoTarget, Request, Brb, BrbSize, 0);
+}
+
+_IRQL_requires_max_(PASSIVE_LEVEL)
+NTSTATUS
+BthEchoSharedSendBrbSynchronouslyWithTimeout(
+    _In_ WDFIOTARGET IoTarget,
+    _In_ WDFREQUEST Request,
+    _In_ PBRB Brb,
+    _In_ ULONG BrbSize,
+    _In_ LONGLONG Timeout
     )
 /*++
 
@@ -399,6 +428,8 @@ Notes:
     NTSTATUS status;
     WDF_REQUEST_REUSE_PARAMS reuseParams;
     WDF_MEMORY_DESCRIPTOR OtherArg1Desc;
+    WDF_REQUEST_SEND_OPTIONS options;
+    PWDF_REQUEST_SEND_OPTIONS sendOptions = NULL;
 
     WDF_REQUEST_REUSE_PARAMS_INIT(
         &reuseParams,
@@ -410,6 +441,18 @@ Notes:
     if (!NT_SUCCESS(status))
     {
         goto exit;
+    }
+
+    if (Timeout != 0)
+    {
+        status = WdfRequestAllocateTimer(Request);
+        if (!NT_SUCCESS(status))
+        {
+            goto exit;
+        }
+        WDF_REQUEST_SEND_OPTIONS_INIT(&options, 0);
+        WDF_REQUEST_SEND_OPTIONS_SET_TIMEOUT(&options, Timeout);
+        sendOptions = &options;
     }
 
     WDF_MEMORY_DESCRIPTOR_INIT_BUFFER(
@@ -425,7 +468,7 @@ Notes:
         &OtherArg1Desc,
         NULL, //OtherArg2
         NULL, //OtherArg4
-        NULL, //RequestOptions
+        sendOptions,
         NULL  //BytesReturned
         );
 

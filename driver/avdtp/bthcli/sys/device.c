@@ -354,7 +354,8 @@ static NTSTATUS SscProbeRegistration(PBTHECHOSAMPLE_CLIENT_CONTEXT dev, WDFFILEO
     brb.reg.IndicationCallback = SscProbeIncoming;
     brb.reg.ReferenceObject = WdfDeviceWdmGetDeviceObject(dev->Header.Device);
     InterlockedExchangePointer(&SscIncomingHandle, NULL);
-    status = BthEchoSharedSendBrbSynchronously(dev->Header.IoTarget, request, (PBRB)&brb, sizeof(brb.reg));
+    status = BthEchoSharedSendBrbSynchronouslyWithTimeout(
+        dev->Header.IoTarget, request, (PBRB)&brb, sizeof(brb.reg), SSC_L2CAP_OPEN_TIMEOUT);
     if (NT_SUCCESS(status)) {
         L2CAP_SERVER_HANDLE server = brb.reg.ServerHandle;
         LARGE_INTEGER interval;

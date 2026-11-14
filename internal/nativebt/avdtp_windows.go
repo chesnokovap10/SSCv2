@@ -375,12 +375,19 @@ func requireTestSigning() error {
 }
 
 func openChannel(ctx context.Context, path string, retry bool) (*os.File, error) {
+	// The profile driver times out each L2CAP open independently.
 	deadline := time.Now().Add(5 * time.Second)
 	for {
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
 		link, err := os.OpenFile(path, os.O_RDWR|windows.O_FILE_FLAG_OVERLAPPED, 0)
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			if link != nil {
+				_ = link.Close()
+			}
+			return nil, ctxErr
+		}
 		if !retry || !errors.Is(err, windows.ERROR_REQ_NOT_ACCEP) || time.Now().After(deadline) {
 			return link, err
 		}

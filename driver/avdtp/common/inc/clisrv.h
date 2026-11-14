@@ -40,6 +40,7 @@ Environment:
 #include "public.h"
 
 #define POOLTAG_BTHECHOSAMPLE 'htbw'
+#define SSC_L2CAP_OPEN_TIMEOUT WDF_REL_TIMEOUT_IN_SEC(5)
 
 
 enum _BTHECHOSAMPLE_MAX_DATA_LENGTH
@@ -124,6 +125,16 @@ BthEchoSharedSendBrbSynchronously(
     _In_ ULONG BrbSize
     );
 
+_IRQL_requires_max_(PASSIVE_LEVEL)
+NTSTATUS
+BthEchoSharedSendBrbSynchronouslyWithTimeout(
+    _In_ WDFIOTARGET IoTarget,
+    _In_ WDFREQUEST Request,
+    _In_ PBRB Brb,
+    _In_ ULONG BrbSize,
+    _In_ LONGLONG Timeout
+    );
+
 _IRQL_requires_max_(DISPATCH_LEVEL)
 NTSTATUS
 BthEchoSharedSendBrbAsync(
@@ -132,6 +143,7 @@ BthEchoSharedSendBrbAsync(
     _In_ PBRB Brb,
     _In_ size_t BrbSize,
     _In_ PFN_WDF_REQUEST_COMPLETION_ROUTINE ComplRoutine,
-    _In_opt_ WDFCONTEXT Context
+    _In_opt_ WDFCONTEXT Context,
+    _In_ LONGLONG Timeout
     );
 

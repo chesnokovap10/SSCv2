@@ -1091,7 +1091,8 @@ Return Value:
         (PBRB) disconnectBrb,
         sizeof(*disconnectBrb),
         BthEchoConnectionObjectDisconnectCompletion,
-        Connection
+        Connection,
+        0
         );
 
     if (!NT_SUCCESS(status))
