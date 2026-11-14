@@ -325,7 +325,7 @@ func wndProc(hwnd, msg, wparam, lparam uintptr) uintptr {
 	if t != nil && msg == wmTimer && wparam == 1 && t.openMenu != nil {
 		t.refreshInfoHover()
 	}
-	if t != nil && (t.infoMessage(msg, lparam) || t.sliderMessage(msg, wparam, lparam)) {
+	if t != nil && (t.ownerDrawMessage(msg, lparam) || t.sliderMessage(msg, wparam, lparam)) {
 		return 1
 	}
 	switch uint32(msg) {
@@ -410,4 +410,35 @@ func wndProc(hwnd, msg, wparam, lparam uintptr) uintptr {
 	}
 	r, _, _ := pDefWindowProcW.Call(hwnd, msg, wparam, lparam)
 	return r
+}
+
+// LPARAM is an integer for many window messages. Read the native structure
+// only for owner-draw messages, where Windows passes a pointer in that slot.
+//
+//go:uintptrescapes
+func (t *Tray) ownerDrawMessage(msg, lparam uintptr) bool {
+	process := windows.CurrentProcess()
+	switch msg {
+	case wmMeasureItem:
+		var item measureMenuItem
+		buf := (*byte)(unsafe.Pointer(&item))
+		size := unsafe.Sizeof(item)
+		if windows.ReadProcessMemory(process, lparam, buf, size, nil) != nil {
+			return false
+		}
+		if t.measureInfoRow(&item) || t.measureSlider(&item) {
+			return windows.WriteProcessMemory(process, lparam, buf, size, nil) == nil
+		}
+	case wmDrawItem:
+		var item drawMenuItem
+		if windows.ReadProcessMemory(process, lparam, (*byte)(unsafe.Pointer(&item)), unsafe.Sizeof(item), nil) != nil {
+			return false
+		}
+		if row := t.infoRows[uint32(item.data)]; item.kind == 1 && row != nil {
+			t.drawInfoRow(&item, row)
+			return true
+		}
+		return t.drawSlider(&item)
+	}
+	return false
 }

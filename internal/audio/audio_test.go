@@ -2,7 +2,6 @@ package audio
 
 import (
 	"errors"
-	"runtime"
 	"syscall"
 	"testing"
 	"time"
@@ -10,6 +9,23 @@ import (
 
 	"golang.org/x/sys/windows"
 )
+
+func TestVolumeCallbackNativeArguments(t *testing.T) {
+	var level float32
+	cb := newVolCallback(func(_ windows.GUID, _ bool, value float32) { level = value })
+	defer liveCbs.Delete(cb)
+	var iface *volCallback
+	result, _, _ := syscall.SyscallN(cb.vtbl[0], uintptr(unsafe.Pointer(cb)),
+		uintptr(unsafe.Pointer(&iidIAudioEndpointVolumeCb)), uintptr(unsafe.Pointer(&iface)))
+	if result != 0 || iface != cb {
+		t.Fatalf("QueryInterface returned %#x, interface %p", result, iface)
+	}
+	data := volNotify{master: 0.25}
+	syscall.SyscallN(cb.vtbl[3], uintptr(unsafe.Pointer(cb)), uintptr(unsafe.Pointer(&data)))
+	if level != data.master {
+		t.Fatalf("OnNotify delivered %v, want %v", level, data.master)
+	}
+}
 
 func TestFindRenderEndpointAfterReplacement(t *testing.T) {
 	const adapter = "SSCv2 Buds WaveRT"
@@ -35,20 +51,13 @@ func TestCaptureReportsInvalidatedEndpoint(t *testing.T) {
 	captureVTable := [6]uintptr{
 		5: syscall.NewCallback(func(uintptr, uintptr) uintptr { return uintptr(invalidated) }),
 	}
-	client, capture := &clientVTable[0], &captureVTable[0]
-	var pinned runtime.Pinner
-	pinned.Pin(client)
-	pinned.Pin(capture)
-	pinned.Pin(&client)
-	pinned.Pin(&capture)
-	defer pinned.Unpin()
 
 	event, err := windows.CreateEvent(nil, 0, 0, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer windows.CloseHandle(event)
-	c := &Capture{client: uintptr(unsafe.Pointer(&client)), capture: uintptr(unsafe.Pointer(&capture)), event: event}
+	c := &Capture{client: &comObject{vtable: &clientVTable[0]}, capture: &comObject{vtable: &captureVTable[0]}, event: event}
 	if err := c.Start(nil); err != nil {
 		t.Fatal(err)
 	}

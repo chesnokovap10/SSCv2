@@ -64,17 +64,17 @@ var (
 type propVariant struct {
 	vt  uint16
 	_   [3]uint16
-	val uintptr
+	val uintptr // native union, interpreted according to vt
 	_   uintptr
 }
 
 const vtLPWSTR = 31
 
 func (p *propVariant) str() string {
-	if p.vt != vtLPWSTR || p.val == 0 {
+	if p.vt != vtLPWSTR {
 		return ""
 	}
-	return windows.UTF16PtrToString((*uint16)(unsafe.Pointer(p.val)))
+	return windows.UTF16PtrToString(*(**uint16)(unsafe.Pointer(&p.val)))
 }
 
 func (p *propVariant) clear() { procPropVariantClear.Call(uintptr(unsafe.Pointer(p))) }
@@ -91,34 +91,42 @@ func hr(r uintptr) error {
 	return nil
 }
 
-// vcall invokes vtable entry idx of the COM object obj.
-func vcall(obj uintptr, idx int, args ...uintptr) uintptr {
-	vtbl := *(*uintptr)(unsafe.Pointer(obj))
-	fn := *(*uintptr)(unsafe.Pointer(vtbl + uintptr(idx)*unsafe.Sizeof(uintptr(0))))
+// comObject is the common first field of a COM interface.
+type comObject struct {
+	vtable *uintptr
+}
+
+// vcall invokes vtable entry idx of the COM object obj. The directive keeps
+// Go objects passed as native arguments alive and at stable addresses.
+//
+//go:uintptrescapes
+func vcall(obj *comObject, idx int, args ...uintptr) uintptr {
+	fn := *(*uintptr)(unsafe.Add(unsafe.Pointer(obj.vtable), uintptr(idx)*unsafe.Sizeof(uintptr(0))))
 	all := make([]uintptr, 0, len(args)+1)
-	all = append(all, obj)
+	all = append(all, uintptr(unsafe.Pointer(obj)))
 	all = append(all, args...)
 	r, _, _ := syscall.SyscallN(fn, all...)
+	runtime.KeepAlive(obj)
 	return r
 }
 
-func release(obj uintptr) {
-	if obj != 0 {
+func release(obj *comObject) {
+	if obj != nil {
 		vcall(obj, 2)
 	}
 }
 
-func coCreate(clsid, iid *windows.GUID) (uintptr, error) {
-	var obj uintptr
+func coCreate(clsid, iid *windows.GUID) (*comObject, error) {
+	var obj *comObject
 	r, _, _ := procCoCreateInstance.Call(uintptr(unsafe.Pointer(clsid)), 0, clsctxAll,
 		uintptr(unsafe.Pointer(iid)), uintptr(unsafe.Pointer(&obj)))
 	if err := hr(r); err != nil {
-		return 0, err
+		return nil, err
 	}
 	return obj, nil
 }
 
-func taskFree(p uintptr) { procCoTaskMemFree.Call(p) }
+func taskFree(p unsafe.Pointer) { procCoTaskMemFree.Call(uintptr(p)) }
 
 var (
 	mtaOnce sync.Once

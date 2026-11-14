@@ -5,6 +5,17 @@ import (
 	"unsafe"
 )
 
+func TestOwnerDrawMeasuresSlider(t *testing.T) {
+	tr := &Tray{volumeRow: &menuSlider{id: 7, scale: 96}}
+	item := measureMenuItem{kind: 1, id: 7}
+	if !tr.ownerDrawMessage(wmMeasureItem, uintptr(unsafe.Pointer(&item))) {
+		t.Fatal("slider measure was not handled")
+	}
+	if item.width != 236 || item.height != 48 {
+		t.Fatalf("slider size = %dx%d, want 236x48", item.width, item.height)
+	}
+}
+
 func TestRefreshWhileOldBitratePopupIsOpen(t *testing.T) {
 	bitrates := Item{ID: 1, Text: "Bitrate", LiveLabel: true, SubRevision: "ssc_uhq",
 		Sub: []Item{{ID: 2, Text: "Auto", Radio: true}}}

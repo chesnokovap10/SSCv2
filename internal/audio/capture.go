@@ -70,9 +70,9 @@ type Callback func(samples []float32, frames int, discontinuity bool)
 // Capture is a WASAPI shared-mode capture: loopback on a render endpoint,
 // direct capture on a recording endpoint (e.g. the cable's "CABLE Output").
 type Capture struct {
-	client  uintptr
+	client  *comObject
 	event   windows.Handle
-	capture uintptr
+	capture *comObject
 	Format  Format
 	Device  Endpoint
 	running atomic.Bool
@@ -88,7 +88,7 @@ func OpenCapture(id string) (*Capture, error) {
 		return nil, err
 	}
 	defer release(en)
-	var dev uintptr
+	var dev *comObject
 	if id == "" {
 		dev, err = defaultDevice(en, eRender)
 	} else {
@@ -100,7 +100,7 @@ func OpenCapture(id string) (*Capture, error) {
 	defer release(dev)
 
 	flow := uint32(eRender)
-	var ep uintptr
+	var ep *comObject
 	if hr(vcall(dev, 0, uintptr(unsafe.Pointer(&iidIMMEndpoint)), uintptr(unsafe.Pointer(&ep)))) == nil {
 		vcall(ep, 3, uintptr(unsafe.Pointer(&flow)))
 		release(ep)
@@ -119,7 +119,7 @@ func OpenCapture(id string) (*Capture, error) {
 		c.Close()
 		return nil, fmt.Errorf("GetMixFormat: %w", err)
 	}
-	defer taskFree(uintptr(unsafe.Pointer(wfx)))
+	defer taskFree(unsafe.Pointer(wfx))
 	c.Format = Format{SampleRate: int(wfx.samplesPerSec), Channels: int(wfx.channels), Bits: int(wfx.bits)}
 	c.Format.Float = wfx.tag == waveFormatFloat || (wfx.tag == waveFormatExt && wfx.subFormat == subtypeFloat)
 
@@ -155,7 +155,7 @@ func OpenCapture(id string) (*Capture, error) {
 
 // Start begins capturing on a dedicated, MMCSS-boosted OS thread.
 func (c *Capture) Start(cb Callback) error {
-	if c.client == 0 {
+	if c.client == nil {
 		return errors.New("capture not open")
 	}
 	if err := windows.ResetEvent(c.event); err != nil {
@@ -205,7 +205,7 @@ func (c *Capture) loop(cb Callback) error {
 			if pkt == 0 {
 				break
 			}
-			var data uintptr
+			var data unsafe.Pointer
 			var frames, flags uint32
 			var devPos, qpc uint64
 			if err := hr(vcall(c.capture, 3, uintptr(unsafe.Pointer(&data)), uintptr(unsafe.Pointer(&frames)),
@@ -220,17 +220,17 @@ func (c *Capture) loop(cb Callback) error {
 				}
 				out = c.conv[:n]
 				switch {
-				case flags&bufferFlagsSilent != 0 || data == 0:
+				case flags&bufferFlagsSilent != 0 || data == nil:
 					clear(out)
 				case c.Format.Float && c.Format.Bits == 32:
-					copy(out, unsafe.Slice((*float32)(unsafe.Pointer(data)), n))
+					copy(out, unsafe.Slice((*float32)(data), n))
 				case c.Format.Bits == 16:
-					src := unsafe.Slice((*int16)(unsafe.Pointer(data)), n)
+					src := unsafe.Slice((*int16)(data), n)
 					for i, v := range src {
 						out[i] = float32(v) / 32768
 					}
 				default: // 32-bit integer
-					src := unsafe.Slice((*int32)(unsafe.Pointer(data)), n)
+					src := unsafe.Slice((*int32)(data), n)
 					for i, v := range src {
 						out[i] = float32(float64(v) / 2147483648.0)
 					}
@@ -268,7 +268,7 @@ func (c *Capture) Stop() {
 	}
 	_ = windows.SetEvent(c.event)
 	c.wg.Wait()
-	if c.client != 0 {
+	if c.client != nil {
 		vcall(c.client, 11)
 	}
 }
@@ -277,9 +277,9 @@ func (c *Capture) Stop() {
 func (c *Capture) Close() {
 	c.Stop()
 	release(c.capture)
-	c.capture = 0
+	c.capture = nil
 	release(c.client)
-	c.client = 0
+	c.client = nil
 	if c.event != 0 {
 		_ = windows.CloseHandle(c.event)
 		c.event = 0

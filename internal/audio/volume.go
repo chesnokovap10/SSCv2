@@ -17,34 +17,34 @@ import (
 // so their notifications are not echoed back.
 var selfContext = guid("{6b1f3a52-2c4e-4d8a-9a51-3e0d715b229c}")
 
-func activateVolume(dev uintptr) (uintptr, error) {
-	var v uintptr
+func activateVolume(dev *comObject) (*comObject, error) {
+	var v *comObject
 	if err := hr(vcall(dev, 3, uintptr(unsafe.Pointer(&iidIAudioEndpointVolume)), clsctxAll, 0, uintptr(unsafe.Pointer(&v)))); err != nil {
-		return 0, err
+		return nil, err
 	}
 	return v, nil
 }
 
-func endpointVolume(id string) (uintptr, error) {
+func endpointVolume(id string) (*comObject, error) {
 	en, err := enumerator()
 	if err != nil {
-		return 0, err
+		return nil, err
 	}
 	defer release(en)
-	var dev uintptr
+	var dev *comObject
 	if id == "" {
 		dev, err = defaultDevice(en, eRender)
 	} else {
 		dev, err = deviceByID(en, id)
 	}
 	if err != nil {
-		return 0, err
+		return nil, err
 	}
 	defer release(dev)
 	return activateVolume(dev)
 }
 
-func getScalar(vol uintptr) (float32, error) {
+func getScalar(vol *comObject) (float32, error) {
 	var f float32
 	if err := hr(vcall(vol, 9, uintptr(unsafe.Pointer(&f)))); err != nil {
 		return 0, err
@@ -54,7 +54,7 @@ func getScalar(vol uintptr) (float32, error) {
 
 // Float args travel in XMM registers; Go's syscall layer mirrors the first
 // four integer argument registers into XMM0-3, so the bit pattern works.
-func setScalar(vol uintptr, f float32, ctx *windows.GUID) error {
+func setScalar(vol *comObject, f float32, ctx *windows.GUID) error {
 	return hr(vcall(vol, 7, uintptr(math.Float32bits(f)), uintptr(unsafe.Pointer(ctx))))
 }
 
@@ -159,30 +159,27 @@ type volNotify struct {
 }
 
 func initVtbl() {
-	cbVtbl[0] = syscall.NewCallback(func(this, riid, out uintptr) uintptr {
-		g := (*windows.GUID)(unsafe.Pointer(riid))
-		if *g == iidIUnknown || *g == iidIAudioEndpointVolumeCb {
-			*(*uintptr)(unsafe.Pointer(out)) = this
-			atomic.AddInt32(&(*volCallback)(unsafe.Pointer(this)).refs, 1)
+	cbVtbl[0] = syscall.NewCallback(func(this *volCallback, riid *windows.GUID, out **volCallback) uintptr {
+		if *riid == iidIUnknown || *riid == iidIAudioEndpointVolumeCb {
+			*out = this
+			atomic.AddInt32(&this.refs, 1)
 			return 0
 		}
-		*(*uintptr)(unsafe.Pointer(out)) = 0
+		*out = nil
 		return 0x80004002 // E_NOINTERFACE
 	})
-	cbVtbl[1] = syscall.NewCallback(func(this uintptr) uintptr {
-		return uintptr(atomic.AddInt32(&(*volCallback)(unsafe.Pointer(this)).refs, 1))
+	cbVtbl[1] = syscall.NewCallback(func(this *volCallback) uintptr {
+		return uintptr(atomic.AddInt32(&this.refs, 1))
 	})
-	cbVtbl[2] = syscall.NewCallback(func(this uintptr) uintptr {
-		return uintptr(atomic.AddInt32(&(*volCallback)(unsafe.Pointer(this)).refs, -1))
+	cbVtbl[2] = syscall.NewCallback(func(this *volCallback) uintptr {
+		return uintptr(atomic.AddInt32(&this.refs, -1))
 	})
-	cbVtbl[3] = syscall.NewCallback(func(this, data uintptr) uintptr {
-		cb := (*volCallback)(unsafe.Pointer(this))
-		f := cb.on.Load()
-		if data == 0 || f == nil {
+	cbVtbl[3] = syscall.NewCallback(func(this *volCallback, data *volNotify) uintptr {
+		f := this.on.Load()
+		if data == nil || f == nil {
 			return 0
 		}
-		d := (*volNotify)(unsafe.Pointer(data))
-		(*f)(d.ctx, d.muted != 0, d.master)
+		(*f)(data.ctx, data.muted != 0, data.master)
 		return 0
 	})
 }
@@ -276,12 +273,12 @@ func SetEndpointVolume(id string, level float32, muted bool) error {
 // WatchEndpointPCMGain tracks hardware controls that Windows delegates to WaveRT.
 // Windows can replace an endpoint when the driver is updated.
 func WatchEndpointPCMGain(id, adapter string, onHardwareVolume func(int32), onVolume func(string, float32, bool)) (read func() float32, stop func(), err error) {
-	var vol uintptr
+	var vol *comObject
 	var support uint32
 	var gain atomic.Uint32
 	lastLevel := float32(-1)
 	var lastMute int32
-	refresh := func(endpoint string, vol uintptr, support uint32, rebound, replaced bool) error {
+	refresh := func(endpoint string, vol *comObject, support uint32, rebound, replaced bool) error {
 		level, err := getScalar(vol)
 		if err != nil {
 			return err
@@ -373,13 +370,13 @@ func WatchEndpointPCMGain(id, adapter string, onHardwareVolume func(int32), onVo
 			case <-done:
 				return
 			case <-ticker.C:
-				if vol != 0 && refresh(id, vol, support, false, false) != nil {
+				if vol != nil && refresh(id, vol, support, false, false) != nil {
 					release(vol)
-					vol = 0
+					vol = nil
 					onVolume("", lastLevel, lastMute != 0)
 				}
 			case <-devices.C:
-				if vol != 0 {
+				if vol != nil {
 					continue
 				}
 				if next := resolve(); next != "" {

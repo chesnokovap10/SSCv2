@@ -74,13 +74,13 @@ func headphones(x, y float64) bool {
 func makeIcon(c Color, mode IconMode, px int) uintptr {
 	bih := bitmapInfoHeader{biWidth: int32(px), biHeight: -int32(px), biPlanes: 1, biBitCount: 32}
 	bih.biSize = uint32(unsafe.Sizeof(bih))
-	var bits uintptr
+	var bits *uint32
 	hbm, _, _ := pCreateDIBSection.Call(0, uintptr(unsafe.Pointer(&bih)), 0, uintptr(unsafe.Pointer(&bits)), 0, 0)
 	if hbm == 0 {
 		return 0
 	}
 	drawIconMode(hbm, mode, px)
-	pix := unsafe.Slice((*uint32)(unsafe.Pointer(bits)), px*px)
+	pix := unsafe.Slice(bits, px*px)
 	r, g, b := float64(c>>16&0xFF), float64(c>>8&0xFF), float64(c&0xFF)
 	for y := 0; y < px; y++ {
 		for x := 0; x < px; x++ {

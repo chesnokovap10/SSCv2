@@ -166,11 +166,10 @@ func (t *Tray) refreshMenuSlider() {
 
 // TrackPopupMenu consumes its own input. Intercept only the slider gesture
 // so the native menu still handles submenus, dismissal and other commands.
-func menuFilter(code, wparam, lparam uintptr) uintptr {
+func menuFilter(code, wparam uintptr, m *msgT) uintptr {
 	t := current
 	if int32(code) == 2 && t.openMenu != nil { // MSGF_MENU
 		s := t.volumeRow
-		m := (*msgT)(unsafe.Pointer(lparam))
 		if (s == nil || !s.dragging && !s.mutePressed) && t.handleIconClick(m) {
 			return 1
 		}
@@ -234,7 +233,7 @@ func menuFilter(code, wparam, lparam uintptr) uintptr {
 		}
 	}
 
-	result, _, _ := callNextHook.Call(0, code, wparam, lparam)
+	result, _, _ := callNextHook.Call(0, code, wparam, uintptr(unsafe.Pointer(m)))
 	return result
 }
 
@@ -244,19 +243,6 @@ func (t *Tray) sliderMessage(msg, wp, lp uintptr) bool {
 		return false
 	}
 	switch msg {
-	case wmMeasureItem:
-		it := (*measureMenuItem)(unsafe.Pointer(lp))
-		if it.kind == 1 && int(it.id) == s.id {
-			it.width, it.height = uint32(s.px(236)), uint32(s.px(48))
-			return true
-		}
-	case wmDrawItem:
-		it := (*drawMenuItem)(unsafe.Pointer(lp))
-		if it.kind == 1 && int(it.id) == s.id {
-			s.selected = it.state&1 != 0
-			s.draw(it)
-			return true
-		}
 	case wmMenuSelect:
 		if lp != s.menu || int(wp&0xffff) != s.id {
 			s.selected = false
@@ -268,6 +254,25 @@ func (t *Tray) sliderMessage(msg, wp, lp uintptr) bool {
 		}
 	}
 	return false
+}
+
+func (t *Tray) measureSlider(it *measureMenuItem) bool {
+	s := t.volumeRow
+	if s == nil || it.kind != 1 || int(it.id) != s.id {
+		return false
+	}
+	it.width, it.height = uint32(s.px(236)), uint32(s.px(48))
+	return true
+}
+
+func (t *Tray) drawSlider(it *drawMenuItem) bool {
+	s := t.volumeRow
+	if s == nil || it.kind != 1 || int(it.id) != s.id {
+		return false
+	}
+	s.selected = it.state&1 != 0
+	s.draw(it)
+	return true
 }
 
 // Handle the click before the menu loop passes it on to Explorer.

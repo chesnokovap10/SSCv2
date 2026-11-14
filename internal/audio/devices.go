@@ -54,40 +54,40 @@ func findRenderEndpoint(endpoints []Endpoint, adapter, preferred string) Endpoin
 	return match
 }
 
-func enumerator() (uintptr, error) {
+func enumerator() (*comObject, error) {
 	if err := InitCOM(); err != nil {
-		return 0, err
+		return nil, err
 	}
 	return coCreate(&clsidMMDeviceEnumerator, &iidIMMDeviceEnumerator)
 }
 
-func deviceByID(en uintptr, id string) (uintptr, error) {
+func deviceByID(en *comObject, id string) (*comObject, error) {
 	p, _ := windows.UTF16PtrFromString(id)
-	var dev uintptr
+	var dev *comObject
 	if err := hr(vcall(en, 5, uintptr(unsafe.Pointer(p)), uintptr(unsafe.Pointer(&dev)))); err != nil {
-		return 0, err
+		return nil, err
 	}
 	return dev, nil
 }
 
-func defaultDevice(en uintptr, flow int) (uintptr, error) {
-	var dev uintptr
+func defaultDevice(en *comObject, flow int) (*comObject, error) {
+	var dev *comObject
 	if err := hr(vcall(en, 4, uintptr(flow), eConsole, uintptr(unsafe.Pointer(&dev)))); err != nil {
-		return 0, err
+		return nil, err
 	}
 	return dev, nil
 }
 
-func deviceID(dev uintptr) string {
-	var p uintptr
-	if hr(vcall(dev, 5, uintptr(unsafe.Pointer(&p)))) != nil || p == 0 {
+func deviceID(dev *comObject) string {
+	var p *uint16
+	if hr(vcall(dev, 5, uintptr(unsafe.Pointer(&p)))) != nil || p == nil {
 		return ""
 	}
-	defer taskFree(p)
-	return windows.UTF16PtrToString((*uint16)(unsafe.Pointer(p)))
+	defer taskFree(unsafe.Pointer(p))
+	return windows.UTF16PtrToString(p)
 }
 
-func propString(ps uintptr, key *propKey) string {
+func propString(ps *comObject, key *propKey) string {
 	var v propVariant
 	if hr(vcall(ps, 5, uintptr(unsafe.Pointer(key)), uintptr(unsafe.Pointer(&v)))) != nil {
 		return ""
@@ -96,9 +96,9 @@ func propString(ps uintptr, key *propKey) string {
 	return v.str()
 }
 
-func describe(dev uintptr, capture bool) Endpoint {
+func describe(dev *comObject, capture bool) Endpoint {
 	e := Endpoint{ID: deviceID(dev), Capture: capture}
-	var ps uintptr
+	var ps *comObject
 	if hr(vcall(dev, 4, stgmRead, uintptr(unsafe.Pointer(&ps)))) == nil {
 		e.Name = propString(ps, &pkeyDeviceFriendlyName)
 		e.Desc = propString(ps, &pkeyDeviceDesc)
@@ -119,7 +119,7 @@ func List(capture bool, states uint32) []Endpoint {
 	if capture {
 		flow = eCapture
 	}
-	var col uintptr
+	var col *comObject
 	if hr(vcall(en, 3, uintptr(flow), uintptr(states), uintptr(unsafe.Pointer(&col)))) != nil {
 		return nil
 	}
@@ -128,7 +128,7 @@ func List(capture bool, states uint32) []Endpoint {
 	vcall(col, 3, uintptr(unsafe.Pointer(&n)))
 	out := make([]Endpoint, 0, n)
 	for i := uint32(0); i < n; i++ {
-		var dev uintptr
+		var dev *comObject
 		if hr(vcall(col, 4, uintptr(i), uintptr(unsafe.Pointer(&dev)))) != nil {
 			continue
 		}
@@ -149,7 +149,7 @@ func DefaultRenderRole(role int) (Endpoint, error) {
 		return Endpoint{}, err
 	}
 	defer release(en)
-	var dev uintptr
+	var dev *comObject
 	err = hr(vcall(en, 4, eRender, uintptr(role), uintptr(unsafe.Pointer(&dev))))
 	if err == hresult(0x80070490) {
 		return Endpoint{}, nil

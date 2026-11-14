@@ -40,7 +40,7 @@ type monitor struct {
 	logf  func(string, ...any)
 	ev    chan monEvent
 	stop  chan struct{}
-	en    uintptr
+	en    *comObject
 	nc    *notifyClient
 	mu    sync.Mutex
 	names map[string]string
@@ -50,7 +50,7 @@ type monitor struct {
 }
 
 type watchedVol struct {
-	vol uintptr
+	vol *comObject
 	cb  *volCallback
 }
 
@@ -60,13 +60,6 @@ var (
 	monSeq atomic.Uint64
 )
 
-func ptrStr(p uintptr) string {
-	if p == 0 {
-		return ""
-	}
-	return windows.UTF16PtrToString((*uint16)(unsafe.Pointer(p)))
-}
-
 func (m *monitor) post(e monEvent) {
 	select {
 	case m.ev <- e:
@@ -75,60 +68,59 @@ func (m *monitor) post(e monEvent) {
 }
 
 func initNcVtbl() {
-	get := func(this uintptr) *monitor {
+	get := func() *monitor {
 		monMu.Lock()
 		defer monMu.Unlock()
 		return curMon
 	}
-	ncVtbl[0] = syscall.NewCallback(func(this, riid, out uintptr) uintptr {
-		g := (*windows.GUID)(unsafe.Pointer(riid))
-		if *g == iidIUnknown || *g == iidIMMNotificationClient {
-			*(*uintptr)(unsafe.Pointer(out)) = this
-			atomic.AddInt32(&(*notifyClient)(unsafe.Pointer(this)).refs, 1)
+	ncVtbl[0] = syscall.NewCallback(func(this *notifyClient, riid *windows.GUID, out **notifyClient) uintptr {
+		if *riid == iidIUnknown || *riid == iidIMMNotificationClient {
+			*out = this
+			atomic.AddInt32(&this.refs, 1)
 			return 0
 		}
-		*(*uintptr)(unsafe.Pointer(out)) = 0
+		*out = nil
 		return 0x80004002
 	})
-	ncVtbl[1] = syscall.NewCallback(func(this uintptr) uintptr {
-		return uintptr(atomic.AddInt32(&(*notifyClient)(unsafe.Pointer(this)).refs, 1))
+	ncVtbl[1] = syscall.NewCallback(func(this *notifyClient) uintptr {
+		return uintptr(atomic.AddInt32(&this.refs, 1))
 	})
-	ncVtbl[2] = syscall.NewCallback(func(this uintptr) uintptr {
-		return uintptr(atomic.AddInt32(&(*notifyClient)(unsafe.Pointer(this)).refs, -1))
+	ncVtbl[2] = syscall.NewCallback(func(this *notifyClient) uintptr {
+		return uintptr(atomic.AddInt32(&this.refs, -1))
 	})
 	// OnDeviceStateChanged(LPCWSTR, DWORD)
-	ncVtbl[3] = syscall.NewCallback(func(this, id, state uintptr) uintptr {
-		if m := get(this); m != nil {
-			m.post(monEvent{kind: "state", id: ptrStr(id), state: uint32(state)})
+	ncVtbl[3] = syscall.NewCallback(func(_ *notifyClient, id *uint16, state uint32) uintptr {
+		if m := get(); m != nil {
+			m.post(monEvent{kind: "state", id: windows.UTF16PtrToString(id), state: state})
 		}
 		return 0
 	})
 	// OnDeviceAdded(LPCWSTR)
-	ncVtbl[4] = syscall.NewCallback(func(this, id uintptr) uintptr {
-		if m := get(this); m != nil {
-			m.post(monEvent{kind: "added", id: ptrStr(id)})
+	ncVtbl[4] = syscall.NewCallback(func(_ *notifyClient, id *uint16) uintptr {
+		if m := get(); m != nil {
+			m.post(monEvent{kind: "added", id: windows.UTF16PtrToString(id)})
 		}
 		return 0
 	})
 	// OnDeviceRemoved(LPCWSTR)
-	ncVtbl[5] = syscall.NewCallback(func(this, id uintptr) uintptr {
-		if m := get(this); m != nil {
-			m.post(monEvent{kind: "removed", id: ptrStr(id)})
+	ncVtbl[5] = syscall.NewCallback(func(_ *notifyClient, id *uint16) uintptr {
+		if m := get(); m != nil {
+			m.post(monEvent{kind: "removed", id: windows.UTF16PtrToString(id)})
 		}
 		return 0
 	})
 	// OnDefaultDeviceChanged(EDataFlow, ERole, LPCWSTR)
-	ncVtbl[6] = syscall.NewCallback(func(this, flow, role, id uintptr) uintptr {
-		if m := get(this); m != nil {
-			m.post(monEvent{kind: "default", id: ptrStr(id), flow: uint32(flow), role: uint32(role)})
+	ncVtbl[6] = syscall.NewCallback(func(_ *notifyClient, flow, role uint32, id *uint16) uintptr {
+		if m := get(); m != nil {
+			m.post(monEvent{kind: "default", id: windows.UTF16PtrToString(id), flow: flow, role: role})
 		}
 		return 0
 	})
 	// OnPropertyValueChanged(LPCWSTR, PROPERTYKEY) - the key is passed by
 	// value (20 bytes > 8, so as a pointer on x64).
-	ncVtbl[7] = syscall.NewCallback(func(this, id, key uintptr) uintptr {
-		if m := get(this); m != nil && key != 0 {
-			m.post(monEvent{kind: "prop", id: ptrStr(id), key: *(*propKey)(unsafe.Pointer(key))})
+	ncVtbl[7] = syscall.NewCallback(func(_ *notifyClient, id *uint16, key *propKey) uintptr {
+		if m := get(); m != nil && key != nil {
+			m.post(monEvent{kind: "prop", id: windows.UTF16PtrToString(id), key: *key})
 		}
 		return 0
 	})

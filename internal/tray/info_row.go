@@ -36,23 +36,14 @@ func (t *Tray) menuPixels(n int32) int32 {
 	return (n*int32(max(dpi, 96)) + 48) / 96
 }
 
-func (t *Tray) infoMessage(msg, lp uintptr) bool {
-	switch msg {
-	case wmMeasureItem:
-		it := (*measureMenuItem)(unsafe.Pointer(lp))
-		if row := t.infoRows[uint32(it.data)]; it.kind == 1 && row != nil {
-			it.width = uint32(t.menuPixels(max(infoWidth, row.minWidth)))
-			it.height = uint32(t.menuPixels(22))
-			return true
-		}
-	case wmDrawItem:
-		it := (*drawMenuItem)(unsafe.Pointer(lp))
-		if row := t.infoRows[uint32(it.data)]; it.kind == 1 && row != nil {
-			t.drawInfoRow(it, row)
-			return true
-		}
+func (t *Tray) measureInfoRow(it *measureMenuItem) bool {
+	row := t.infoRows[uint32(it.data)]
+	if it.kind != 1 || row == nil {
+		return false
 	}
-	return false
+	it.width = uint32(t.menuPixels(max(infoWidth, row.minWidth)))
+	it.height = uint32(t.menuPixels(22))
+	return true
 }
 
 func (t *Tray) drawInfoRow(it *drawMenuItem, row *menuInfoRow) {
