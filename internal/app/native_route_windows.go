@@ -141,7 +141,7 @@ func (a *App) resumeNativeStereo() error {
 	for role := range previous {
 		current, err := audio.DefaultRenderRole(role)
 		// A disappeared WaveRT endpoint can leave a role without a default.
-		wasDefault[role] = output != "" && (err != nil || current.ID == output || isBudsRender(current))
+		wasDefault[role] = output != "" && (err != nil || current.ID == "" || current.ID == output || isBudsRender(current))
 	}
 	if address == "" {
 		return hideNativeRender()
