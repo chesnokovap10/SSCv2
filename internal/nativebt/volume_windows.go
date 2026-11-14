@@ -35,13 +35,13 @@ func (v *budsVolume) target() int32 {
 
 func (v *budsVolume) gain(fallback func() float32) float32 {
 	level := v.wanted.Load()
+	if level == 0 {
+		return 0
+	}
 	// Keep one gain stage while AVRCP is healthy. Changing PCM gain while
 	// waiting for an acknowledgment would queue doubly attenuated audio.
 	if level >= 0 && v.hardware.Load() {
 		return 1
-	}
-	if level == 0 {
-		return 0
 	}
 	return fallback()
 }

@@ -144,8 +144,8 @@ func TestAVRCPVolumeTracksTheLatestLevel(t *testing.T) {
 	}
 	ack(lower)
 	volume.set(0)
-	if gain := volume.gain(fallback); gain != 1 {
-		t.Fatalf("PCM gain changed while AVRCP was handling mute: %v", gain)
+	if gain := volume.gain(fallback); gain != 0 {
+		t.Fatalf("PCM gain before AVRCP acknowledged mute = %v, want 0", gain)
 	}
 	ack(receiveLevel(0))
 	volume.set(5)
