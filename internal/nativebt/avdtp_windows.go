@@ -81,49 +81,71 @@ func (p *avdtpSession) command(signal byte, payload ...byte) ([]byte, error) {
 	}
 
 	reply := make([]byte, 65535)
+	var fragments []byte
+	var remaining byte
+	var responseKind byte
 	for {
 		n, err = p.link.Read(reply)
 		if err != nil {
 			return nil, err
 		}
-		if n < 2 || reply[0]&3 != 0 {
-			break
+		if n == 0 {
+			return nil, io.ErrUnexpectedEOF
 		}
-		// We initiate signaling and have no endpoints to offer to the peer.
-		switch reply[0] & 0x0c {
-		case 0, 4:
-			signalIndex := 1 + int(reply[0]>>2&1)
-			if n <= signalIndex {
-				return nil, fmt.Errorf("truncated incoming AVDTP command: % x", reply[:n])
+		header := reply[0]
+		packetType, kind := header>>2&3, header&3
+		if kind == 0 {
+			// We initiate signaling and have no endpoints to offer to the peer.
+			if packetType <= 1 {
+				signalIndex := 1 + int(packetType)
+				if n <= signalIndex {
+					return nil, fmt.Errorf("truncated incoming AVDTP command: % x", reply[:n])
+				}
+				reject := []byte{header&0xf0 | 1, reply[signalIndex] & 0x3f}
+				written, err := p.link.Write(reject)
+				if err != nil {
+					return nil, err
+				}
+				if written != len(reject) {
+					return nil, io.ErrShortWrite
+				}
 			}
-			reject := []byte{reply[0]&0xf0 | 1, reply[signalIndex] & 0x3f}
-			written, err := p.link.Write(reject)
-			if err != nil {
-				return nil, err
+			continue
+		}
+		if header>>4 != label {
+			return nil, fmt.Errorf("unexpected AVDTP transaction: % x", reply[:n])
+		}
+		switch packetType {
+		case 0:
+			if remaining != 0 || n < 2 || reply[1] != signal {
+				return nil, fmt.Errorf("unexpected AVDTP signal: % x", reply[:n])
 			}
-			if written != len(reject) {
-				return nil, io.ErrShortWrite
+			return avdtpResponse(kind, reply[2:n])
+		case 1:
+			if remaining != 0 || n < 3 || reply[1] < 2 || reply[2] != signal {
+				return nil, fmt.Errorf("invalid AVDTP start fragment: % x", reply[:n])
+			}
+			remaining, responseKind = reply[1]-1, kind
+			fragments = append(fragments, reply[3:n]...)
+		default:
+			if remaining == 0 || kind != responseKind || (packetType == 3) != (remaining == 1) ||
+				len(fragments)+n-1 > len(reply) {
+				return nil, fmt.Errorf("invalid AVDTP continuation: % x", reply[:n])
+			}
+			fragments = append(fragments, reply[1:n]...)
+			remaining--
+			if remaining == 0 {
+				return avdtpResponse(kind, fragments)
 			}
 		}
 	}
-	reply = reply[:n]
-	if len(reply) == 0 || reply[0]>>4 != label {
-		return nil, fmt.Errorf("unexpected AVDTP transaction: % x", reply)
+}
+
+func avdtpResponse(kind byte, payload []byte) ([]byte, error) {
+	if kind == 2 {
+		return payload, nil
 	}
-	if reply[0]&0x0c != 0 {
-		return nil, fmt.Errorf("fragmented AVDTP response")
-	}
-	if len(reply) < 2 || reply[1] != signal {
-		return nil, fmt.Errorf("unexpected AVDTP signal: % x", reply)
-	}
-	switch kind := reply[0] & 3; kind {
-	case 2:
-		return reply[2:], nil
-	case 1, 3:
-		return nil, &rejection{kind, reply[2:]}
-	default:
-		return nil, fmt.Errorf("invalid AVDTP response: % x", reply)
-	}
+	return nil, &rejection{kind, payload}
 }
 
 func inspect(ctx context.Context, link io.ReadWriter, out io.Writer, openMedia func() (io.WriteCloser, error), send func(io.Writer, int) error, stream ipc.NativeStream, capabilities func(bool)) error {
