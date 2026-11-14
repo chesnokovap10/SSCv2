@@ -52,13 +52,12 @@ func (a *App) setBitrate(kbps int) {
 		return
 	}
 	codec, eng, streaming := a.codecChange(m), a.eng, a.st.Streaming
+	a.mu.Unlock()
 	if eng != nil && eng.running() && streaming {
 		if err := eng.in.Write(ipc.Command{Cmd: ipc.CommandCodec, Codec: &codec}); err == nil {
-			a.mu.Unlock()
 			return
 		}
 	}
-	a.mu.Unlock()
 	a.restartWinUSBLocked()
 }
 
@@ -184,7 +183,13 @@ func (a *App) uhqUnavailable() bool {
 
 // nativeStreamLocked requires a.mu.
 func (a *App) nativeStreamLocked(mode config.Mode) ipc.NativeStream {
-	return ipc.NativeStream{Mode: mode, BitrateKbps: a.nativeBitrateLocked(mode), TryUHQ: mode == config.ModeSSCUHQ && a.s.AllBitrates}
+	policy, _ := a.bitratePolicy(mode, true)
+	kbps := policy.Selected(mode, a.s.Bitrate(mode))
+	autoAAC := mode == config.ModeAAC && kbps == 0
+	if kbps == 0 {
+		kbps = policy.NativeAuto(mode)
+	}
+	return ipc.NativeStream{Mode: mode, BitrateKbps: kbps, AutoAAC: autoAAC, TryUHQ: mode == config.ModeSSCUHQ && a.s.AllBitrates}
 }
 
 // noBitrate: nothing can be offered for the codec on these headphones (not
@@ -204,12 +209,4 @@ func (a *App) unsupportedText(m config.Mode) string {
 func (a *App) winUSBBitrate(m config.Mode) int {
 	policy, _ := a.bitratePolicy(m, false)
 	return policy.Selected(m, a.s.Bitrate(m))
-}
-
-func (a *App) nativeBitrateLocked(mode config.Mode) int {
-	policy, _ := a.bitratePolicy(mode, true)
-	if kbps := policy.Selected(mode, a.s.Bitrate(mode)); kbps != 0 {
-		return kbps
-	}
-	return policy.NativeAuto(mode)
 }

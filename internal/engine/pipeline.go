@@ -2,6 +2,7 @@ package engine
 
 import (
 	"math"
+	"math/bits"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -79,7 +80,7 @@ func clip(v float32) float32 {
 func clamp16(v float32) int16 { return int16(clip(v) * 32767) }
 
 // onCapture receives `frames` interleaved frames of `ch` channels.
-func (p *pipeline) onCapture(s []float32, frames, ch, rate int, discontinuity bool) {
+func (p *pipeline) onCapture(s []float32, frames, ch, rate int, discontinuity bool, mix [][2]float32) {
 	p.frames.Add(uint64(frames))
 	p.activity.Observe(s[:frames*ch])
 	if !p.active.Load() {
@@ -99,14 +100,14 @@ func (p *pipeline) onCapture(s []float32, frames, ch, rate int, discontinuity bo
 	// mixed in rather than dropped.
 	var peak float32
 	switch {
-	case ch == 2:
+	case ch == 2 && mix == nil:
 		for _, v := range s[:frames*2] {
 			p.pcm = append(p.pcm, clip(v))
 			if a := float32(math.Abs(float64(v))); a > peak {
 				peak = a
 			}
 		}
-	case ch == 1:
+	case ch == 1 && mix == nil:
 		for _, v := range s[:frames] {
 			x := clip(v)
 			p.pcm = append(p.pcm, x, x)
@@ -114,15 +115,11 @@ func (p *pipeline) onCapture(s []float32, frames, ch, rate int, discontinuity bo
 	default:
 		for f := 0; f < frames; f++ {
 			c := s[f*ch : f*ch+ch]
-			at := func(i int) float32 {
-				if i < ch {
-					return c[i]
-				}
-				return 0
+			var l, r float32
+			for i, gain := range mix {
+				l += c[i] * gain[0]
+				r += c[i] * gain[1]
 			}
-			fc, lfe := at(2), at(3)
-			l := c[0] + 0.707107*fc + 0.707107*(at(4)+at(6)) + 0.5*lfe
-			r := c[1] + 0.707107*fc + 0.707107*(at(5)+at(7)) + 0.5*lfe
 			p.pcm = append(p.pcm, clip(l), clip(r))
 		}
 	}
@@ -195,6 +192,50 @@ func (p *pipeline) onCapture(s []float32, frames, ch, rate int, discontinuity bo
 	// keep the residual for the next callback
 	n := copy(p.pcm, p.pcm[off:])
 	p.pcm = p.pcm[:n]
+}
+
+// stereoMix maps the Windows speaker order to left and right gains.
+func stereoMix(channels int, mask uint32) [][2]float32 {
+	if bits.OnesCount32(mask) != channels {
+		switch channels {
+		case 1, 2:
+			return nil
+		case 4:
+			mask = 0x33 // Quad
+		case 5:
+			mask = 0x37 // FL, FR, FC, BL, BR
+		default:
+			order := [...]uint32{1, 2, 4, 8, 16, 32, 512, 1024}
+			mask = 0
+			for _, speaker := range order[:min(channels, len(order))] {
+				mask |= speaker
+			}
+		}
+	}
+	if channels == 2 && mask == 3 || channels == 1 && mask == 4 {
+		return nil
+	}
+	const surround = float32(0.707107)
+	mix := make([][2]float32, channels)
+	for i := 0; mask != 0; i++ {
+		position := bits.TrailingZeros32(mask)
+		mask &= mask - 1
+		switch position {
+		case 0:
+			mix[i][0] = 1
+		case 1:
+			mix[i][1] = 1
+		case 2, 8, 11, 13, 16:
+			mix[i] = [2]float32{surround, surround}
+		case 3:
+			mix[i] = [2]float32{0.5, 0.5}
+		case 4, 6, 9, 12, 15:
+			mix[i][0] = surround
+		case 5, 7, 10, 14, 17:
+			mix[i][1] = surround
+		}
+	}
+	return mix
 }
 
 func (p *pipeline) setVolume(level uint8, muted bool) {

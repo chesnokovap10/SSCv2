@@ -275,13 +275,13 @@ func SetEndpointVolume(id string, level float32, muted bool) error {
 
 // WatchEndpointPCMGain tracks hardware controls that Windows delegates to WaveRT.
 // Windows can replace an endpoint when the driver is updated.
-func WatchEndpointPCMGain(id, adapter string, onHardwareVolume func(int32)) (read func() float32, stop func(), err error) {
+func WatchEndpointPCMGain(id, adapter string, onHardwareVolume func(int32), onVolume func(string, float32, bool)) (read func() float32, stop func(), err error) {
 	var vol uintptr
 	var support uint32
 	var gain atomic.Uint32
 	lastLevel := float32(-1)
 	var lastMute int32
-	refresh := func(vol uintptr, support uint32, rebound, replaced bool) error {
+	refresh := func(endpoint string, vol uintptr, support uint32, rebound, replaced bool) error {
 		level, err := getScalar(vol)
 		if err != nil {
 			return err
@@ -328,6 +328,7 @@ func WatchEndpointPCMGain(id, adapter string, onHardwareVolume func(int32)) (rea
 			}
 		}
 		onHardwareVolume(value)
+		onVolume(endpoint, level, muted != 0)
 		return nil
 	}
 	bind := func(next string) error {
@@ -340,7 +341,7 @@ func WatchEndpointPCMGain(id, adapter string, onHardwareVolume func(int32)) (rea
 			release(newVol)
 			return err
 		}
-		if err := refresh(newVol, newSupport, true, next != id); err != nil {
+		if err := refresh(next, newVol, newSupport, true, next != id); err != nil {
 			release(newVol)
 			return err
 		}
@@ -372,12 +373,16 @@ func WatchEndpointPCMGain(id, adapter string, onHardwareVolume func(int32)) (rea
 			case <-done:
 				return
 			case <-ticker.C:
-				if vol != 0 && refresh(vol, support, false, false) != nil {
+				if vol != 0 && refresh(id, vol, support, false, false) != nil {
 					release(vol)
 					vol = 0
+					onVolume("", lastLevel, lastMute != 0)
 				}
 			case <-devices.C:
-				if next := resolve(); next != "" && (vol == 0 || next != id) {
+				if vol != 0 {
+					continue
+				}
+				if next := resolve(); next != "" {
 					_ = bind(next)
 				}
 			}

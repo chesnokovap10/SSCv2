@@ -210,7 +210,7 @@ Return Value:
         return ntStatus;
     }
     m_ulPin = Pin_;
-    m_ulDmaMovementRate = pWfEx->nAvgBytesPerSec;
+    m_ulDmaMovementRate = pWfEx->nSamplesPerSec * pWfEx->nBlockAlign;
 
     m_pDpc = (PRKDPC)ExAllocatePool2(POOL_FLAG_NON_PAGED, sizeof(KDPC), MINWAVERTSTREAM_POOLTAG);
     if (!m_pDpc)
@@ -218,12 +218,13 @@ Return Value:
         return STATUS_INSUFFICIENT_RESOURCES;
     }
 
-    m_pWfExt = (PWAVEFORMATEXTENSIBLE)ExAllocatePool2(POOL_FLAG_NON_PAGED, sizeof(WAVEFORMATEX) + pWfEx->cbSize, MINWAVERTSTREAM_POOLTAG);
+    const SIZE_T formatSize = pWfEx->wFormatTag == WAVE_FORMAT_EXTENSIBLE ? sizeof(WAVEFORMATEXTENSIBLE) : sizeof(WAVEFORMATEX);
+    m_pWfExt = (PWAVEFORMATEXTENSIBLE)ExAllocatePool2(POOL_FLAG_NON_PAGED, formatSize, MINWAVERTSTREAM_POOLTAG);
     if (m_pWfExt == NULL)
     {
         return STATUS_INSUFFICIENT_RESOURCES;
     }
-    RtlCopyMemory(m_pWfExt, pWfEx, sizeof(WAVEFORMATEX) + pWfEx->cbSize);
+    RtlCopyMemory(m_pWfExt, pWfEx, formatSize);
 
     m_pbMuted = (PBOOL)ExAllocatePool2(POOL_FLAG_NON_PAGED, m_pWfExt->Format.nChannels * sizeof(BOOL), MINWAVERTSTREAM_POOLTAG);
     if (m_pbMuted == NULL)
@@ -851,7 +852,7 @@ NTSTATUS CMiniportWaveRTStream::GetPresentationPosition(_Out_  KSAUDIO_PRESENTAT
         return status;
     }
 
-    _pPresentationPosition->u64PositionInBlocks = ullPresentationPosition * m_pWfExt->Format.nSamplesPerSec / m_pWfExt->Format.nAvgBytesPerSec;
+    _pPresentationPosition->u64PositionInBlocks = ullPresentationPosition * m_pWfExt->Format.nSamplesPerSec / m_ulDmaMovementRate;
     _pPresentationPosition->u64QPCPosition = (UINT64)timeStamp.QuadPart;
 
     return STATUS_SUCCESS;

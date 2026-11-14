@@ -52,6 +52,7 @@ type NativeStream struct {
 	Mode        config.Mode `json:"mode"`
 	BitrateKbps int         `json:"bitrateKbps"`
 	TryUHQ      bool        `json:"tryUhq,omitempty"`
+	AutoAAC     bool        `json:"autoAac,omitempty"`
 }
 
 func (s NativeStream) Valid() bool {
@@ -145,21 +146,30 @@ const (
 	EventNativeError    EventKind = "nativeError"
 	EventNativeLinkLost EventKind = "nativeLinkLost"
 	EventNativeCaps     EventKind = "nativeCaps"
+	EventNativeVolume   EventKind = "nativeVolume"
 )
 
 // Event from a playback worker to the tray.
+type NativeVolume struct {
+	Endpoint string `json:"endpoint"`
+	Level    uint8  `json:"level"`
+	Muted    bool   `json:"muted"`
+}
+
 type Event struct {
-	Codec   *CodecChange  `json:"codec,omitempty"`
-	Volume  *uint8        `json:"volume,omitempty"`
-	Ev      EventKind     `json:"ev"`
-	Status  *EngineStatus `json:"status,omitempty"`
-	Devices []Found       `json:"devices,omitempty"`
-	Addr    string        `json:"addr,omitempty"`
-	Key     string        `json:"key,omitempty"`
-	KeyType int           `json:"keyType,omitempty"`
-	Name    string        `json:"name,omitempty"`
-	Msg     string        `json:"msg,omitempty"`
-	Native  *NativeStream `json:"native,omitempty"`
+	NativeVolume *NativeVolume `json:"nativeVolume,omitempty"`
+	BitrateKbps  int           `json:"bitrateKbps,omitempty"`
+	Codec        *CodecChange  `json:"codec,omitempty"`
+	Volume       *uint8        `json:"volume,omitempty"`
+	Ev           EventKind     `json:"ev"`
+	Status       *EngineStatus `json:"status,omitempty"`
+	Devices      []Found       `json:"devices,omitempty"`
+	Addr         string        `json:"addr,omitempty"`
+	Key          string        `json:"key,omitempty"`
+	KeyType      int           `json:"keyType,omitempty"`
+	Name         string        `json:"name,omitempty"`
+	Msg          string        `json:"msg,omitempty"`
+	Native       *NativeStream `json:"native,omitempty"`
 }
 
 // ---- tray -> helper ------------------------------------------------------------

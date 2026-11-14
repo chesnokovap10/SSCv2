@@ -11,6 +11,7 @@ import (
 
 	"golang.org/x/sys/windows"
 
+	"sscv2/internal/bitrate"
 	"sscv2/internal/config"
 	"sscv2/internal/driver"
 	"sscv2/internal/ipc"
@@ -31,6 +32,7 @@ const (
 type avdtpSession struct {
 	link  io.ReadWriter
 	label byte
+	ctx   context.Context
 }
 
 type rejection struct {
@@ -43,6 +45,30 @@ func (r *rejection) Error() string {
 }
 
 func (p *avdtpSession) command(signal byte, payload ...byte) ([]byte, error) {
+	ctx := p.ctx
+	timeout := 2 * time.Second
+	if signal == abort {
+		// Give Abort its own bounded window after cancellation of the stream.
+		ctx, timeout = context.Background(), 500*time.Millisecond
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if link, ok := p.link.(interface{ SetDeadline(time.Time) error }); ok {
+		if err := link.SetDeadline(time.Now().Add(timeout)); err != nil {
+			return nil, err
+		}
+		fired := make(chan struct{})
+		stop := context.AfterFunc(ctx, func() {
+			_ = link.SetDeadline(time.Now())
+			close(fired)
+		})
+		defer func() {
+			if !stop() {
+				<-fired
+			}
+		}()
+	}
 	label := p.label
 	p.label = (label + 1) & 15
 	packet := append([]byte{label << 4, signal}, payload...)
@@ -79,8 +105,8 @@ func (p *avdtpSession) command(signal byte, payload ...byte) ([]byte, error) {
 	}
 }
 
-func inspect(link io.ReadWriter, out io.Writer, openMedia func() (io.WriteCloser, error), send func(io.Writer) error, stream ipc.NativeStream, capabilities func(bool)) error {
-	p := avdtpSession{link: link}
+func inspect(ctx context.Context, link io.ReadWriter, out io.Writer, openMedia func() (io.WriteCloser, error), send func(io.Writer, int) error, stream ipc.NativeStream, capabilities func(bool)) error {
+	p := avdtpSession{link: link, ctx: ctx}
 	endpoints, err := p.command(discover)
 	if err != nil {
 		return fmt.Errorf("discover: %w", err)
@@ -90,6 +116,7 @@ func inspect(link io.ReadWriter, out io.Writer, openMedia func() (io.WriteCloser
 	}
 	var selectedSEID byte
 	var selectedCodec []byte
+	selectedRate := stream.BitrateKbps
 	var experimentalSEID byte
 	var experimentalCodec []byte
 	var uhqSupported bool
@@ -119,11 +146,15 @@ func inspect(link io.ReadWriter, out io.Writer, openMedia func() (io.WriteCloser
 				}
 				fmt.Fprintf(out, "  media type %#x, codec %#02x, data % x\n", value[0]>>4, value[1], value[2:])
 				uhqSupported = uhqSupported || sscSupportsRate(value, 0x02)
-				if selectedSEID == 0 && endpoints[i]&2 == 0 && openMedia != nil {
-					selectedCodec = codecConfiguration(stream.Mode, value, stream.BitrateKbps)
-					if selectedCodec != nil {
-						selectedSEID = seid
-					} else if experimentalSEID == 0 && stream.Mode == config.ModeSSCUHQ && stream.TryUHQ && sscSupportsRate(value, 0x04) {
+				if endpoints[i]&2 == 0 && openMedia != nil && (selectedSEID == 0 || stream.AutoAAC && selectedRate < stream.BitrateKbps) {
+					rate := stream.BitrateKbps
+					if stream.Mode == config.ModeAAC && stream.AutoAAC {
+						rate = autoAACRate(value, rate)
+					}
+					codec := codecConfiguration(stream.Mode, value, rate)
+					if codec != nil && (selectedSEID == 0 || rate > selectedRate) {
+						selectedSEID, selectedCodec, selectedRate = seid, codec, rate
+					} else if codec == nil && experimentalSEID == 0 && stream.Mode == config.ModeSSCUHQ && stream.TryUHQ && sscSupportsRate(value, 0x04) {
 						experimentalSEID = seid
 						experimentalCodec = sscConfiguration(value, 0x02)
 					}
@@ -131,7 +162,7 @@ func inspect(link io.ReadWriter, out io.Writer, openMedia func() (io.WriteCloser
 			}
 			caps = caps[2+size:]
 		}
-		if selectedSEID != 0 && capabilities == nil {
+		if selectedSEID != 0 && selectedRate == stream.BitrateKbps && capabilities == nil {
 			break
 		}
 	}
@@ -148,7 +179,18 @@ func inspect(link io.ReadWriter, out io.Writer, openMedia func() (io.WriteCloser
 		}
 		fmt.Fprintf(out, "trying SSC UHQ on SEID %d without advertised support\n", selectedSEID)
 	}
-	return p.stream(out, selectedSEID, selectedCodec, openMedia, send, stream.Mode)
+	return p.stream(out, selectedSEID, selectedCodec, openMedia, func(media io.Writer) error { return send(media, selectedRate) }, stream.Mode)
+}
+
+func autoAACRate(codec []byte, ceiling int) int {
+	if !supportsAAC(codec, 0) {
+		return 0
+	}
+	rate := min(ceiling, bitrate.MaxNativeAACKbps)
+	if limit := aacMaxBitrate(codec); limit > 0 {
+		rate = min(rate, limit/1000)
+	}
+	return rate
 }
 
 func supportsAAC(codec []byte, bitrate int) bool {
@@ -156,8 +198,12 @@ func supportsAAC(codec []byte, bitrate int) bool {
 		codec[2]&0x80 == 0 || codec[4]&0x84 != 0x84 {
 		return false
 	}
-	maxBitrate := int(codec[5]&0x7f)<<16 | int(codec[6])<<8 | int(codec[7])
+	maxBitrate := aacMaxBitrate(codec)
 	return maxBitrate == 0 || maxBitrate >= bitrate
+}
+
+func aacMaxBitrate(codec []byte) int {
+	return int(codec[5]&0x7f)<<16 | int(codec[6])<<8 | int(codec[7])
 }
 
 func sscSupportsRate(codec []byte, flag byte) bool {
@@ -182,7 +228,7 @@ func codecConfiguration(mode config.Mode, codec []byte, kbps int) []byte {
 		return sscConfiguration(codec, rateFlag)
 	}
 	bitrate := uint32(kbps * 1000)
-	if !supportsAAC(codec, int(bitrate)) {
+	if kbps <= 0 || !supportsAAC(codec, int(bitrate)) {
 		return nil
 	}
 	return []byte{0, 2, 0x80, 0, 0x84, byte(bitrate >> 16), byte(bitrate >> 8), byte(bitrate)}
@@ -226,7 +272,7 @@ func (p *avdtpSession) stream(out io.Writer, seid byte, codec []byte, openMedia 
 
 // runAVDTP opens the signaling channel and discovers the remote endpoints.
 // If send is provided, it negotiates a media stream and hands it to the sender.
-func runAVDTP(ctx context.Context, path string, out io.Writer, retry bool, stream ipc.NativeStream, send func(io.Writer) error, capabilities func(bool)) error {
+func runAVDTP(ctx context.Context, path string, out io.Writer, retry bool, stream ipc.NativeStream, send func(io.Writer, int) error, capabilities func(bool)) error {
 	started := time.Now()
 	link, err := openChannel(ctx, path, retry)
 	if err != nil {
@@ -237,10 +283,33 @@ func runAVDTP(ctx context.Context, path string, out io.Writer, retry bool, strea
 	var openMedia func() (io.WriteCloser, error)
 	if send != nil {
 		openMedia = func() (io.WriteCloser, error) {
-			return openChannel(ctx, path, retry)
+			media, err := openChannel(ctx, path, retry)
+			if err != nil {
+				return nil, err
+			}
+			return &avdtpMedia{File: media, ctx: ctx}, nil
 		}
 	}
-	return inspect(link, out, openMedia, send, stream, capabilities)
+	err = inspect(ctx, link, out, openMedia, send, stream, capabilities)
+	if ctx.Err() != nil {
+		return ctx.Err()
+	}
+	return err
+}
+
+type avdtpMedia struct {
+	*os.File
+	ctx context.Context
+}
+
+func (m *avdtpMedia) Write(packet []byte) (int, error) {
+	if err := m.ctx.Err(); err != nil {
+		return 0, err
+	}
+	if err := m.SetWriteDeadline(time.Now().Add(time.Second)); err != nil {
+		return 0, err
+	}
+	return m.File.Write(packet)
 }
 
 func requireTestSigning() error {
@@ -257,7 +326,10 @@ func requireTestSigning() error {
 func openChannel(ctx context.Context, path string, retry bool) (*os.File, error) {
 	deadline := time.Now().Add(5 * time.Second)
 	for {
-		link, err := os.OpenFile(path, os.O_RDWR, 0)
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		link, err := os.OpenFile(path, os.O_RDWR|windows.O_FILE_FLAG_OVERLAPPED, 0)
 		if !retry || !errors.Is(err, windows.ERROR_REQ_NOT_ACCEP) || time.Now().After(deadline) {
 			return link, err
 		}

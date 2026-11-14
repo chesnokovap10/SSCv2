@@ -32,14 +32,14 @@ func RunProbe(args []string, out io.Writer) error {
 		duration = time.Duration(seconds) * time.Second
 		args = args[2:]
 	}
-	var send func(io.Writer) error
+	var send func(io.Writer, int) error
 	if duration == 0 && len(args) > 0 {
 		switch args[0] {
 		case "-loopback-aac":
 			duration = -2 * time.Second
 			args = args[1:]
 		case "-configure-aac":
-			send = func(media io.Writer) error { return sendAACTone(media, out) }
+			send = func(media io.Writer, _ int) error { return sendAACTone(media, out) }
 			args = args[1:]
 		}
 	}
@@ -47,7 +47,7 @@ func RunProbe(args []string, out io.Writer) error {
 		return fmt.Errorf("usage: [-configure-aac|-loopback-aac|-stream-aac seconds] [profile-driver device interface path]")
 	}
 	if duration != 0 {
-		send = func(media io.Writer) error { return sendLoopback(media, out, duration) }
+		send = func(media io.Writer, _ int) error { return sendLoopback(media, out, duration) }
 	}
 
 	if err := requireTestSigning(); err != nil {
@@ -102,7 +102,7 @@ func RunRenderDiagnostic(ctx context.Context, address, wavePath string, out io.W
 	}
 	defer device.Close()
 	render := renderPCM{out: out, read: device.Read}
-	return render.stream(ctx, path, ipc.NativeStream{Mode: mode, BitrateKbps: bitrate.NativeDiagnosticDefault(mode)}, func() error {
+	return render.stream(ctx, path, ipc.NativeStream{Mode: mode, BitrateKbps: bitrate.NativeDiagnosticDefault(mode)}, func(int) error {
 		_, err := fmt.Fprintf(out, "native-%s-ready\n", mode)
 		return err
 	}, nil, nil)

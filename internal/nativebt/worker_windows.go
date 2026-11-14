@@ -52,7 +52,12 @@ func (w workerLog) Write(p []byte) (int, error) {
 func runWorker(cfg ipc.NativeConfig, reader *ipc.Reader, events *ipc.Writer, handleMediaKey func(int), pauseOnLinkLoss func(bool, func(string, ...any))) error {
 	out := workerLog{events: events}
 	volume := newBudsVolume()
-	readGain, stopVolume, err := audio.WatchEndpointPCMGain(cfg.RenderEndpoint, driver.BudsRenderName, volume.set)
+	readGain, stopVolume, err := audio.WatchEndpointPCMGain(cfg.RenderEndpoint, driver.BudsRenderName, volume.set,
+		func(endpoint string, level float32, muted bool) {
+			_ = events.Write(ipc.Event{Ev: ipc.EventNativeVolume, NativeVolume: &ipc.NativeVolume{
+				Endpoint: endpoint, Level: audio.ScalarTo127(level), Muted: muted,
+			}})
+		})
 	if err != nil {
 		return err
 	}
@@ -140,8 +145,8 @@ func runWorker(cfg ipc.NativeConfig, reader *ipc.Reader, events *ipc.Writer, han
 		ctx, cancel := context.WithCancel(context.Background())
 		done := make(chan error, 1)
 		go func(stream ipc.NativeStream) {
-			ready := func() error {
-				return events.Write(ipc.Event{Ev: ipc.EventNativeReady, Native: &stream})
+			ready := func(kbps int) error {
+				return events.Write(ipc.Event{Ev: ipc.EventNativeReady, Native: &stream, BitrateKbps: kbps})
 			}
 			render := renderPCM{out: out, read: pcm.Read, activity: activity, gain: func() float32 {
 				return volume.gain(readGain)
@@ -163,11 +168,15 @@ func runWorker(cfg ipc.NativeConfig, reader *ipc.Reader, events *ipc.Writer, han
 				return err
 			case next, open := <-commands:
 				cancel()
-				if err := <-done; err != nil && !errors.Is(err, context.Canceled) {
-					return err
-				}
+				err := <-done
 				if !open {
-					return readErr
+					if errors.Is(err, context.Canceled) {
+						err = nil
+					}
+					return errors.Join(readErr, err)
+				}
+				if err != nil && !errors.Is(err, context.Canceled) {
+					return err
 				}
 				stream = next
 			}

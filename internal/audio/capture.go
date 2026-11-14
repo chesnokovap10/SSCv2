@@ -18,6 +18,7 @@ import (
 const (
 	shareModeShared     = 0
 	streamFlagsLoopback = 0x00020000
+	streamFlagsEvent    = 0x00040000
 	bufferDiscontinuity = 0x1
 	bufferFlagsSilent   = 0x2
 	waveFormatFloat     = 0x0003
@@ -28,9 +29,6 @@ var (
 	avrt                  = windows.NewLazySystemDLL("avrt.dll")
 	procAvSetMmThreadChar = avrt.NewProc("AvSetMmThreadCharacteristicsW")
 	procAvRevertMmThread  = avrt.NewProc("AvRevertMmThreadCharacteristics")
-	winmm                 = windows.NewLazySystemDLL("winmm.dll")
-	procTimeBeginPeriod   = winmm.NewProc("timeBeginPeriod")
-	procTimeEndPeriod     = winmm.NewProc("timeEndPeriod")
 )
 
 // waveFormatEx (+ extensible tail)
@@ -49,10 +47,11 @@ type waveFormatEx struct {
 
 // Format of the captured stream.
 type Format struct {
-	SampleRate int
-	Channels   int
-	Bits       int  // container bits per sample
-	Float      bool // IEEE float samples
+	SampleRate  int
+	Channels    int
+	ChannelMask uint32
+	Bits        int  // container bits per sample
+	Float       bool // IEEE float samples
 }
 
 func (f Format) String() string {
@@ -72,6 +71,7 @@ type Callback func(samples []float32, frames int, discontinuity bool)
 // direct capture on a recording endpoint (e.g. the cable's "CABLE Output").
 type Capture struct {
 	client  uintptr
+	event   windows.Handle
 	capture uintptr
 	Format  Format
 	Device  Endpoint
@@ -123,11 +123,24 @@ func OpenCapture(id string) (*Capture, error) {
 	c.Format = Format{SampleRate: int(wfx.samplesPerSec), Channels: int(wfx.channels), Bits: int(wfx.bits)}
 	c.Format.Float = wfx.tag == waveFormatFloat || (wfx.tag == waveFormatExt && wfx.subFormat == subtypeFloat)
 
-	// 40 ms buffer, polled every 5 ms (the verified mode).
+	if wfx.tag == waveFormatExt && wfx.cbSize >= 22 {
+		c.Format.ChannelMask = wfx.channelMask
+	}
+
+	// Shared-mode loopback signals capture events on supported Windows versions.
 	const hns = 40 * 10000
-	if err := hr(vcall(c.client, 3, shareModeShared, loop, hns, 0, uintptr(unsafe.Pointer(wfx)), 0)); err != nil {
+	if err := hr(vcall(c.client, 3, shareModeShared, loop|streamFlagsEvent, hns, 0, uintptr(unsafe.Pointer(wfx)), 0)); err != nil {
 		c.Close()
 		return nil, fmt.Errorf("IAudioClient.Initialize: %w", err)
+	}
+	c.event, err = windows.CreateEvent(nil, 0, 0, nil)
+	if err != nil {
+		c.Close()
+		return nil, err
+	}
+	if err := hr(vcall(c.client, 13, uintptr(c.event))); err != nil {
+		c.Close()
+		return nil, fmt.Errorf("IAudioClient.SetEventHandle: %w", err)
 	}
 	if err := hr(vcall(c.client, 14, uintptr(unsafe.Pointer(&iidIAudioCaptureClient)), uintptr(unsafe.Pointer(&c.capture)))); err != nil {
 		c.Close()
@@ -144,6 +157,9 @@ func OpenCapture(id string) (*Capture, error) {
 func (c *Capture) Start(cb Callback) error {
 	if c.client == 0 {
 		return errors.New("capture not open")
+	}
+	if err := windows.ResetEvent(c.event); err != nil {
+		return err
 	}
 	if err := hr(vcall(c.client, 10)); err != nil {
 		return fmt.Errorf("IAudioClient.Start: %w", err)
@@ -169,8 +185,6 @@ func (c *Capture) loop(cb Callback) error {
 	task := uint32(0)
 	name, _ := windows.UTF16PtrFromString("Audio")
 	h, _, _ := procAvSetMmThreadChar.Call(uintptr(unsafe.Pointer(name)), uintptr(unsafe.Pointer(&task)))
-	procTimeBeginPeriod.Call(1)
-	defer procTimeEndPeriod.Call(1)
 	if h != 0 {
 		defer procAvRevertMmThread.Call(h)
 	}
@@ -178,7 +192,11 @@ func (c *Capture) loop(cb Callback) error {
 	ch := c.Format.Channels
 	var lastPacket time.Time
 	for c.running.Load() {
-		time.Sleep(5 * time.Millisecond)
+		// Check device health at low frequency even if an invalidated endpoint
+		// stopped signaling altogether.
+		if _, err := windows.WaitForSingleObject(c.event, 1000); err != nil {
+			return fmt.Errorf("capture event: %w", err)
+		}
 		for c.running.Load() {
 			var pkt uint32
 			if err := hr(vcall(c.capture, 5, uintptr(unsafe.Pointer(&pkt)))); err != nil {
@@ -248,6 +266,7 @@ func (c *Capture) Stop() {
 	if !c.running.Swap(false) {
 		return
 	}
+	_ = windows.SetEvent(c.event)
 	c.wg.Wait()
 	if c.client != 0 {
 		vcall(c.client, 11)
@@ -261,4 +280,8 @@ func (c *Capture) Close() {
 	c.capture = 0
 	release(c.client)
 	c.client = 0
+	if c.event != 0 {
+		_ = windows.CloseHandle(c.event)
+		c.event = 0
+	}
 }

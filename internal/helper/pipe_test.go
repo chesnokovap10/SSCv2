@@ -50,6 +50,10 @@ func TestPipeRejectsOtherProcessBeforeSending(t *testing.T) {
 		f := os.NewFile(uintptr(h), "test pipe")
 		defer f.Close()
 		if err := windows.ConnectNamedPipe(h, nil); err != nil && err != windows.ERROR_PIPE_CONNECTED {
+			// The mismatched client can reject and close before this goroutine runs.
+			if errors.Is(err, windows.ERROR_NO_DATA) {
+				err = nil
+			}
 			done <- err
 			return
 		}

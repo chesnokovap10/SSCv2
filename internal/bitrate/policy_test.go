@@ -74,3 +74,12 @@ func TestWorkingMax(t *testing.T) {
 		t.Errorf("AAC not profiled: %d", k)
 	}
 }
+
+func TestSavedInvalidSSCBitrateFallsBackToAuto(t *testing.T) {
+	for _, native := range []bool{false, true} {
+		p := Policy{Native: native}
+		if got := p.Selected(config.ModeSSC, 123); got != 0 {
+			t.Fatalf("native=%v: selected %d kbps, want Auto", native, got)
+		}
+	}
+}

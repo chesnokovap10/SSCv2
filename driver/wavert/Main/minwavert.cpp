@@ -1026,7 +1026,7 @@ CMiniportWaveRT::IsFormatSupported
         if (!IsEqualGUIDAligned(pFormat->DataFormat.MajorFormat, _pDataFormat->MajorFormat)) { continue; }
         if (!IsEqualGUIDAligned(pFormat->DataFormat.SubFormat, _pDataFormat->SubFormat)) { continue; }
         if (!IsEqualGUIDAligned(pFormat->DataFormat.Specifier, _pDataFormat->Specifier)) { continue; }
-        if (pFormat->DataFormat.FormatSize < sizeof(KSDATAFORMAT_WAVEFORMATEX)) { continue; }
+        if (_pDataFormat->FormatSize < sizeof(KSDATAFORMAT_WAVEFORMATEX)) { continue; }
 
         // WAVEFORMATEX VALIDATION
         PWAVEFORMATEX pWaveFormat = reinterpret_cast<PWAVEFORMATEX>(_pDataFormat + 1);
@@ -1038,6 +1038,7 @@ CMiniportWaveRT::IsFormatSupported
         if (pWaveFormat->nChannels  != pFormat->WaveFormatExt.Format.nChannels) { continue; }
         if (pWaveFormat->nSamplesPerSec != pFormat->WaveFormatExt.Format.nSamplesPerSec) { continue; }
         if (pWaveFormat->nBlockAlign != pFormat->WaveFormatExt.Format.nBlockAlign) { continue; }
+        if (pWaveFormat->nAvgBytesPerSec != pWaveFormat->nSamplesPerSec * pWaveFormat->nBlockAlign) { continue; }
         if (pWaveFormat->wBitsPerSample != pFormat->WaveFormatExt.Format.wBitsPerSample) { continue; }
         if (pWaveFormat->wFormatTag != WAVE_FORMAT_EXTENSIBLE)
         {
@@ -1046,7 +1047,8 @@ CMiniportWaveRT::IsFormatSupported
         }
 
         // WAVEFORMATEXTENSIBLE VALIDATION
-        if (pWaveFormat->cbSize < sizeof(WAVEFORMATEXTENSIBLE) - sizeof(WAVEFORMATEX)) { continue; }
+        if (_pDataFormat->FormatSize < sizeof(KSDATAFORMAT_WAVEFORMATEXTENSIBLE) ||
+            pWaveFormat->cbSize != sizeof(WAVEFORMATEXTENSIBLE) - sizeof(WAVEFORMATEX)) { continue; }
 
         PWAVEFORMATEXTENSIBLE pWaveFormatExt = reinterpret_cast<PWAVEFORMATEXTENSIBLE>(pWaveFormat);
         if (pWaveFormatExt->Samples.wValidBitsPerSample != pFormat->WaveFormatExt.Samples.wValidBitsPerSample) { continue; }

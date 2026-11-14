@@ -5,6 +5,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"sync"
 	"sync/atomic"
 	"time"
 	"unsafe"
@@ -17,13 +18,16 @@ import (
 
 // workerProcess owns the process and JSON lines exchanged over its pipes.
 type workerProcess struct {
-	process *os.Process
-	stdin   *os.File
-	stdout  *os.File
-	in      *ipc.Writer
-	done    chan struct{}
-	waitErr error // read after done is closed
-	stopReq atomic.Bool
+	process       *os.Process
+	stdin         *os.File
+	stdout        *os.File
+	in            *ipc.Writer
+	done          chan struct{}
+	waitErr       error // read after done is closed
+	stopReq       atomic.Bool
+	volumeMu      sync.Mutex
+	volumePending *ipc.Command
+	volumeWriting bool
 }
 
 func startWorkerProcess(command, stderrLog string, cfg any) (*workerProcess, error) {
@@ -101,16 +105,46 @@ func (p *workerProcess) watch(onEvent func(ipc.Event), onExit func(error)) {
 
 func (p *workerProcess) send(c ipc.Command) { _ = p.in.Write(c) }
 
+// queueVolume keeps IPC writes off the tray thread and coalesces slider updates.
+func (p *workerProcess) queueVolume(command ipc.Command) {
+	p.volumeMu.Lock()
+	defer p.volumeMu.Unlock()
+	p.volumePending = &command
+	if p.volumeWriting {
+		return
+	}
+	p.volumeWriting = true
+	go func() {
+		for {
+			p.volumeMu.Lock()
+			update := p.volumePending
+			p.volumePending = nil
+			if update == nil || p.stopReq.Load() {
+				p.volumeWriting = false
+				p.volumeMu.Unlock()
+				return
+			}
+			p.volumeMu.Unlock()
+			p.send(*update)
+		}
+	}()
+}
+
 // stop requests a graceful shutdown and kills the worker if it does not exit.
 // keep transfers WinUSB audio routing to its replacement.
 func (p *workerProcess) stop(timeout time.Duration, keep bool) (forced bool) {
 	p.stopReq.Store(true)
-	p.send(ipc.Command{Cmd: ipc.CommandStop, Keep: keep})
-	if p.stdin != nil {
-		_ = p.stdin.Close()
+	if !p.running() {
+		return false
 	}
 	timer := time.NewTimer(timeout)
 	defer timer.Stop()
+	go func() {
+		p.send(ipc.Command{Cmd: ipc.CommandStop, Keep: keep})
+		if p.stdin != nil {
+			_ = p.stdin.Close()
+		}
+	}()
 	select {
 	case <-p.done:
 		return false

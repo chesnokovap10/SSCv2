@@ -88,7 +88,7 @@ func (a *App) menu() []tray.Item {
 		autoRate := ""
 		var activeRate int
 		if p := a.native; p != nil && p.Mode == mode && p.ready {
-			activeRate = p.BitrateKbps
+			activeRate = p.activeKbps
 		} else if a.st.Streaming && a.st.Codec == modeName(mode) {
 			activeRate = a.st.BitrateKbps
 		}
@@ -261,12 +261,24 @@ func (a *App) command(id int) {
 	case id == idScan:
 		a.mu.Lock()
 		eng := a.eng
+		if a.scanning {
+			eng = nil
+		}
 		if eng != nil {
 			a.scanning, a.scan = true, nil
 		}
 		a.mu.Unlock()
 		if eng != nil {
-			eng.send(ipc.Command{Cmd: "scan"})
+			go func() {
+				if err := eng.in.Write(ipc.Command{Cmd: "scan"}); err != nil {
+					a.mu.Lock()
+					if a.eng == eng {
+						a.scanning = false
+					}
+					a.mu.Unlock()
+					a.t.RefreshMenu()
+				}
+			}()
 			a.t.Balloon(T("Поиск устройств", "Searching for devices"), T("10 секунд… Переведите наушники в режим сопряжения.",
 				"10 seconds… Put the headphones into pairing mode."), 0)
 		}

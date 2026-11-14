@@ -9,6 +9,7 @@ import "math"
 type Upsampler2x struct {
 	h    []float32 // odd-phase taps, h[k] for input offset k-half+1 .. k-half
 	hist [2][]float32
+	buf  [2][]float32
 	out  []float32
 }
 
@@ -48,18 +49,20 @@ func (u *Upsampler2x) Process(in []float32) []float32 {
 		u.out = make([]float32, 0, 4*n)
 	}
 	u.out = u.out[:4*n]
-	var buf [2][]float32
-	for c := 0; c < 2; c++ {
-		b := make([]float32, 0, len(u.hist[c])+n)
+	for c := range u.buf {
+		b := u.buf[c][:0]
+		if cap(b) < upTaps-1+n {
+			b = make([]float32, 0, upTaps-1+n)
+		}
 		b = append(b, u.hist[c]...)
 		for i := 0; i < n; i++ {
 			b = append(b, in[2*i+c])
 		}
-		buf[c] = b
+		u.buf[c] = b
 	}
 	half := upTaps / 2
 	for c := 0; c < 2; c++ {
-		b := buf[c]
+		b := u.buf[c]
 		for i := 0; i < n; i++ {
 			// input sample i sits at b[i+upTaps-1]; delay the even phase by
 			// half-1 so both phases share the filter's centre

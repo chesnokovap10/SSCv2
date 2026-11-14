@@ -53,13 +53,19 @@ func installOrUpdate() bool {
 		if out != "ok" {
 			stopLegacyTray() // a version without "quit"
 		}
-		for i := 0; i < 120; i++ {
+		stopped := false
+		for deadline := time.Now().Add(30 * time.Second); time.Now().Before(deadline); {
 			if _, err := Ctl([]string{"status"}); err != nil {
+				stopped = true
 				break
 			}
 			time.Sleep(250 * time.Millisecond)
 		}
-		time.Sleep(300 * time.Millisecond)
+		if !stopped {
+			tray.Warn("SSCv2", T("Обновление отложено. Запущенный SSCv2 ещё не завершился.",
+				"Update postponed. The running SSCv2 instance has not exited."))
+			return true
+		}
 	}
 	code, err := helper.RunElevated("install --owner " + helper.CurrentUserSID())
 	if err == nil && code != 0 {

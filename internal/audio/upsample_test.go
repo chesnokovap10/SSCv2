@@ -41,3 +41,12 @@ func TestUpsample(t *testing.T) {
 		}
 	}
 }
+
+func TestUpsampleReusesFrameBuffers(t *testing.T) {
+	u := NewUpsampler2x()
+	frame := make([]float32, 432*2)
+	u.Process(frame)
+	if n := testing.AllocsPerRun(10, func() { u.Process(frame) }); n != 0 {
+		t.Fatalf("UHQ upsampling allocates %g times per frame", n)
+	}
+}

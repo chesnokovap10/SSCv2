@@ -1,7 +1,7 @@
 package app
 
 import (
-	"bytes"
+	"io"
 	"testing"
 
 	"sscv2/internal/ipc"
@@ -17,9 +17,17 @@ func TestStopWinUSBEngineTransfersMutedOutputOnlyForRestart(t *testing.T) {
 		{"restart WinUSB", true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			var input bytes.Buffer
-			p := &workerProcess{done: make(chan struct{}), in: ipc.NewWriter(&input)}
-			close(p.done)
+			input, writer := io.Pipe()
+			defer input.Close()
+			defer writer.Close()
+			p := &workerProcess{done: make(chan struct{}), in: ipc.NewWriter(writer)}
+			commands := make(chan ipc.Command, 1)
+			go func() {
+				var command ipc.Command
+				_ = ipc.NewReader(input).Read(&command)
+				commands <- command
+				close(p.done)
+			}()
 			a := &App{
 				t:          &tray.Tray{},
 				eng:        p,
@@ -37,10 +45,7 @@ func TestStopWinUSBEngineTransfersMutedOutputOnlyForRestart(t *testing.T) {
 			} else if a.carry != nil {
 				t.Fatalf("output carried across a transport change: %+v", a.carry)
 			}
-			var command ipc.Command
-			if err := ipc.NewReader(&input).Read(&command); err != nil {
-				t.Fatal(err)
-			}
+			command := <-commands
 			if command.Cmd != "stop" || command.Keep != tc.keep {
 				t.Fatalf("unexpected stop command: %+v", command)
 			}

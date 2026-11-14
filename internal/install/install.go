@@ -103,60 +103,104 @@ func Install() error {
 	if self == "" {
 		return errors.New("os.Executable")
 	}
-	restart := stopService()
 	if err := os.MkdirAll(Dir(), 0o755); err != nil {
 		return err
 	}
+	restart := stopService()
+	var copyErr error
 	if !sameFile(self, Exe()) {
-		if err := copyFile(self, Exe()); err != nil {
-			if restart {
-				startService()
-			}
-			return fmt.Errorf(i18n.T("копирование в %s: %w", "copying to %s: %w"), Dir(), err)
+		copyErr = CopyExecutable(self, Exe())
+		if copyErr != nil {
+			copyErr = fmt.Errorf(i18n.T("копирование в %s: %w", "copying to %s: %w"), Dir(), copyErr)
 		}
 	}
 	if restart {
-		startService()
+		copyErr = errors.Join(copyErr, startService())
+	}
+	if copyErr != nil {
+		return copyErr
 	}
 	logx.Printf("install: %s -> %s (version %s)", self, Exe(), ipc.Version)
 	return nil
 }
 
-func copyFile(src, dst string) error {
+// CopyExecutable stages a complete image and preserves the previous image on failure.
+func CopyExecutable(src, dst string) error {
 	in, err := os.Open(src)
 	if err != nil {
 		return err
 	}
 	defer in.Close()
-	tmp := dst + ".new"
-	out, err := os.Create(tmp)
+	out, err := os.CreateTemp(filepath.Dir(dst), filepath.Base(dst)+"-*.new")
 	if err != nil {
 		return err
 	}
-	if _, err := io.Copy(out, in); err != nil {
-		out.Close()
-		os.Remove(tmp)
+	tmp := out.Name()
+	defer os.Remove(tmp)
+	_, copyErr := io.Copy(out, in)
+	if err := errors.Join(copyErr, out.Close()); err != nil {
 		return err
 	}
-	if err := out.Close(); err != nil {
-		os.Remove(tmp)
+
+	// Serialize replacements from both the updater and the service installer.
+	lock, err := os.OpenFile(dst+".lock", os.O_CREATE|os.O_RDWR, 0o600)
+	if err != nil {
 		return err
 	}
+	defer lock.Close()
+	var region windows.Overlapped
+	handle := windows.Handle(lock.Fd())
+	if err := windows.LockFileEx(handle, windows.LOCKFILE_EXCLUSIVE_LOCK, 0, 1, 0, &region); err != nil {
+		return err
+	}
+	defer windows.UnlockFileEx(handle, 0, 1, 0, &region)
+	return replaceExecutable(tmp, dst, 10*time.Second)
+}
+
+func replaceExecutable(tmp, dst string, timeout time.Duration) error {
 	// A running image cannot be overwritten but can be renamed.
-	var err2 error
-	for i := 0; i < 40; i++ {
-		_ = os.Remove(dst + ".old")
-		_ = os.Rename(dst, dst+".old")
-		if err2 = os.Rename(tmp, dst); err2 == nil {
-			if os.Remove(dst+".old") != nil {
-				deleteOnReboot(dst + ".old")
+	backup := tmp + ".old"
+	hadPrevious := false
+	var err error
+	deadline := time.Now().Add(timeout)
+	for {
+		if err = os.Rename(tmp, dst); err == nil {
+			if hadPrevious && os.Remove(backup) != nil {
+				deleteOnReboot(backup)
 			}
 			return nil
 		}
-		time.Sleep(250 * time.Millisecond)
+		// Sharing violations can apply to either file. Only move the old
+		// image aside once the staged image is available for renaming.
+		if !hadPrevious && canRenameExecutable(tmp) {
+			hadPrevious = os.Rename(dst, backup) == nil
+		}
+		if remaining := time.Until(deadline); remaining > 0 {
+			time.Sleep(min(remaining, 250*time.Millisecond))
+		} else {
+			break
+		}
 	}
-	os.Remove(tmp)
-	return err2
+	if hadPrevious {
+		if restoreErr := os.Rename(backup, dst); restoreErr != nil {
+			return errors.Join(err, fmt.Errorf("restore previous executable from %s: %w", backup, restoreErr))
+		}
+	}
+	return err
+}
+
+func canRenameExecutable(path string) bool {
+	name, err := windows.UTF16PtrFromString(path)
+	if err != nil {
+		return false
+	}
+	h, err := windows.CreateFile(name, windows.DELETE, windows.FILE_SHARE_READ|windows.FILE_SHARE_WRITE|windows.FILE_SHARE_DELETE,
+		nil, windows.OPEN_EXISTING, 0, 0)
+	if err != nil {
+		return false
+	}
+	_ = windows.CloseHandle(h)
+	return true
 }
 
 func deleteOnReboot(p string) {
@@ -194,16 +238,18 @@ func stopService() bool {
 	return true
 }
 
-func startService() {
+func startService() error {
 	m, err := mgr.Connect()
 	if err != nil {
-		return
+		return err
 	}
 	defer m.Disconnect()
-	if s, err := m.OpenService(serviceName); err == nil {
-		_ = s.Start()
-		s.Close()
+	s, err := m.OpenService(serviceName)
+	if err != nil {
+		return err
 	}
+	defer s.Close()
+	return s.Start()
 }
 
 // ---- elevated: uninstall ---------------------------------------------------

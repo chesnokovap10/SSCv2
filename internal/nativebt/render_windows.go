@@ -34,15 +34,19 @@ const (
 	renderFadeFrames   = 96 // 2 ms at 48 kHz
 )
 
-func (r *renderPCM) stream(ctx context.Context, path string, stream ipc.NativeStream, ready func() error, linkLost, capabilities func(bool)) error {
+func (r *renderPCM) stream(ctx context.Context, path string, stream ipc.NativeStream, ready func(int) error, linkLost, capabilities func(bool)) error {
 	if err := requireTestSigning(); err != nil {
 		return err
 	}
-	return runAVDTP(ctx, path, r.out, true, stream, func(media io.Writer) error {
+	return runAVDTP(ctx, path, r.out, true, stream, func(media io.Writer, kbps int) error {
 		link := &renderMedia{Writer: media}
-		err := sendPCM(link, r.out, stream.Mode, stream.BitrateKbps, 0, "Buds WaveRT", true, func(pcm []float32) error {
+		var onReady func() error
+		if ready != nil {
+			onReady = func() error { return ready(kbps) }
+		}
+		err := sendPCM(link, r.out, stream.Mode, kbps, 0, "Buds WaveRT", true, func(pcm []float32) error {
 			return r.fill(ctx, pcm)
-		}, ready)
+		}, onReady)
 		if linkLost != nil && ctx.Err() == nil && link.lost {
 			linkLost(r.activity.PlayingOnLinkLoss())
 		}

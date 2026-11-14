@@ -165,7 +165,14 @@ func (a *App) beginShutdown(keepMode bool) bool {
 
 	a.t.CloseMenu()
 	if needsRestore {
-		a.switchModeLocked(config.ModeOff)
+		ok := a.stopPlaybackLocked()
+		a.setBusy("")
+		if !ok {
+			a.mu.Lock()
+			a.quitting = false
+			a.mu.Unlock()
+			return false
+		}
 	}
 	if keepMode && mode.Streaming() {
 		a.mu.Lock()
@@ -242,6 +249,9 @@ func (a *App) cancelVolumeRestoreLocked() {
 	if a.stopVolumeRestore != nil {
 		a.stopVolumeRestore()
 		a.stopVolumeRestore = nil
+		a.mu.Lock()
+		a.volSettled = nil
+		a.mu.Unlock()
 	}
 }
 
@@ -255,6 +265,7 @@ func (a *App) stopWinUSBEngineLocked(keep bool) {
 	}
 	a.pendingUHQ = false
 	if eng != nil {
+		a.scanning = false
 		a.t.SetVolumeKeys(false)
 	}
 	a.mu.Unlock()
@@ -362,14 +373,9 @@ func (a *App) disableNativePlaybackLocked() bool {
 }
 
 func (a *App) failNativePlaybackLocked(mode config.Mode, err error) {
-	a.mu.Lock()
-	hasNativeRoute := a.native != nil
-	a.mu.Unlock()
-	if hasNativeRoute {
-		// Keep WaveRT as the output until the user chooses another route.
-		a.stopNativeWorker()
-	} else {
-		err = errors.Join(err, a.stopNativePlaybackLocked())
+	if restoreErr := a.stopNativePlaybackLocked(); restoreErr != nil {
+		a.reportNativeError(errors.Join(err, restoreErr))
+		return
 	}
 	logf("native %s: %v", mode, err)
 	a.mu.Lock()
@@ -396,6 +402,7 @@ func (a *App) onEngineExit(p *workerProcess, err error) {
 	current := a.eng == p
 	if current {
 		a.eng = nil
+		a.scanning = false
 		a.pendingUHQ = false
 		if last.StreamStartFailed && last.MuteEndpoint != "" {
 			a.carry = &ipc.AudioCarry{MuteEndpoint: last.MuteEndpoint}

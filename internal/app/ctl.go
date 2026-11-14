@@ -319,14 +319,7 @@ func (a *App) ctl(args []string) string {
 				dev.Name = c.Name
 			}
 		}
-		a.mu.Lock()
-		a.s.Headphones = dev
-		_ = config.Save(a.s)
-		eng := a.eng
-		a.mu.Unlock()
-		if eng != nil {
-			eng.send(ipc.Command{Cmd: "connect", Addr: arg(1)})
-		}
+		go a.selectHeadphones(dev)
 		return "ok"
 	case "mouse":
 		a.mu.Lock()

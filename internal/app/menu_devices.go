@@ -64,15 +64,46 @@ func (a *App) selectMenuDevice(id int) {
 	}
 	if mouse {
 		a.s.Mouse = device
-	} else {
-		a.s.Headphones = device
-	}
-	_ = config.Save(a.s)
-	eng := a.eng
-	a.mu.Unlock()
-	if mouse {
+		_ = config.Save(a.s)
+		a.mu.Unlock()
 		go a.restartWinUSB()
-	} else if eng != nil {
+		return
+	}
+	a.mu.Unlock()
+	go a.selectHeadphones(device)
+}
+
+func (a *App) selectHeadphones(device *config.Device) {
+	a.opMu.Lock()
+	defer a.opMu.Unlock()
+	a.mu.Lock()
+	previous, mode, eng := a.s.Headphones, a.mode, a.eng
+	native := mode.Streaming() && a.prefersNativeBitrates()
+	restoreRoute := native || a.s.NativeA2DPAddress != ""
+	quitting := a.quitting
+	a.mu.Unlock()
+	if quitting {
+		return
+	}
+	if restoreRoute && (previous == nil || !strings.EqualFold(previous.Addr, device.Addr)) {
+		// Restore the old address and its volume before changing the selection.
+		a.setBusy(T("смена наушников", "changing headphones"))
+		defer a.setBusy("")
+		if err := a.stopNativePlaybackLocked(); err != nil {
+			a.reportNativeError(err)
+			return
+		}
+	}
+	a.mu.Lock()
+	a.s.Headphones = device
+	_ = config.Save(a.s)
+	a.mu.Unlock()
+
+	switch {
+	case native:
+		a.switchModeLocked(mode)
+	case eng != nil:
 		eng.send(ipc.Command{Cmd: "connect", Addr: device.Addr})
 	}
+	a.t.RefreshMenu()
 }

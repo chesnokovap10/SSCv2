@@ -58,7 +58,8 @@ func (p Policy) Offered(mode config.Mode, kbps int) bool {
 	case config.ModeAAC:
 		return kbps <= aacCeiling(packetPayload)
 	case config.ModeSSC, config.ModeSSCUHQ:
-		return ssc.FrameBytes(sscSampleRate(mode), kbps*1000) <= packetPayload
+		rate := sscSampleRate(mode)
+		return sscrate.Valid(rate, kbps) && ssc.FrameBytes(rate, kbps*1000) <= packetPayload
 	default:
 		return false
 	}

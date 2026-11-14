@@ -7,6 +7,8 @@ import (
 	"testing"
 	"time"
 	"unsafe"
+
+	"golang.org/x/sys/windows"
 )
 
 func TestFindRenderEndpointAfterReplacement(t *testing.T) {
@@ -41,11 +43,19 @@ func TestCaptureReportsInvalidatedEndpoint(t *testing.T) {
 	pinned.Pin(&capture)
 	defer pinned.Unpin()
 
-	c := &Capture{client: uintptr(unsafe.Pointer(&client)), capture: uintptr(unsafe.Pointer(&capture))}
+	event, err := windows.CreateEvent(nil, 0, 0, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer windows.CloseHandle(event)
+	c := &Capture{client: uintptr(unsafe.Pointer(&client)), capture: uintptr(unsafe.Pointer(&capture)), event: event}
 	if err := c.Start(nil); err != nil {
 		t.Fatal(err)
 	}
 	defer c.Stop()
+	if err := windows.SetEvent(event); err != nil {
+		t.Fatal(err)
+	}
 	select {
 	case err := <-c.Errors():
 		if !errors.Is(err, invalidated) {

@@ -3,6 +3,7 @@ package app
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -78,5 +79,54 @@ func TestWorkerProcessChild(t *testing.T) {
 	if err := w.Write(ipc.Event{Ev: ipc.EventNativeLog, Msg: "stopped"}); err != nil {
 		os.Exit(4)
 	}
+	os.Exit(0)
+}
+
+func TestStopWorkerWithBlockedInput(t *testing.T) {
+	t.Setenv("LOCALAPPDATA", t.TempDir())
+	t.Setenv("SSCV2_WORKER_BLOCKED_INPUT_TEST", "1")
+	p, err := startWorkerProcess("-test.run=^TestWorkerBlockedInputChild$", "blocked.log", ipc.NativeConfig{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer p.process.Kill()
+	ready := make(chan struct{})
+	p.watch(func(ipc.Event) { close(ready) }, func(error) {})
+	select {
+	case <-ready:
+	case <-time.After(5 * time.Second):
+		t.Fatal("worker did not start")
+	}
+	writing := make(chan struct{})
+	go func() {
+		close(writing)
+		p.send(ipc.Command{Cmd: "connect", Addr: strings.Repeat("x", 1<<20)})
+	}()
+	<-writing
+	time.Sleep(100 * time.Millisecond)
+	stopped := make(chan bool, 1)
+	go func() { stopped <- p.stop(50*time.Millisecond, false) }()
+	select {
+	case forced := <-stopped:
+		if !forced {
+			t.Fatal("expected forced stop")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("stop timeout did not cover IPC write")
+	}
+}
+
+func TestWorkerBlockedInputChild(t *testing.T) {
+	if os.Getenv("SSCV2_WORKER_BLOCKED_INPUT_TEST") == "" {
+		return
+	}
+	var cfg ipc.NativeConfig
+	if err := ipc.NewReader(os.Stdin).Read(&cfg); err != nil {
+		os.Exit(1)
+	}
+	if err := ipc.NewWriter(os.Stdout).Write(ipc.Event{Ev: ipc.EventNativeReady}); err != nil {
+		os.Exit(2)
+	}
+	time.Sleep(10 * time.Second)
 	os.Exit(0)
 }

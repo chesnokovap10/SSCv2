@@ -73,6 +73,7 @@ type stackT struct {
 	discCh    chan error
 	releaseCh chan error
 	inquiryCh chan error
+	scanMu    sync.Mutex
 
 	a2dpCid, avrcpCid         uint16
 	localSeid, remoteSeid     uint8
@@ -387,6 +388,10 @@ func Scan(ctx context.Context, d time.Duration) ([]Found, error) {
 	if !s.hciReady.Load() {
 		return nil, ErrNotReady
 	}
+	if !s.scanMu.TryLock() {
+		return nil, i18n.Error("поиск Bluetooth уже выполняется", "Bluetooth discovery is already running")
+	}
+	defer s.scanMu.Unlock()
 	units := int(d.Seconds()*10+12) / 13 // 1.28 s units
 	if units < 3 {
 		units = 3
@@ -418,6 +423,7 @@ func Scan(ctx context.Context, d time.Duration) ([]Found, error) {
 			C.gap_inquiry_stop()
 			s.inquiring = false
 		}
+		s.inquiryCh = nil
 		out = append(out, s.found...)
 	})
 	if err != nil && err != ErrTimeout {

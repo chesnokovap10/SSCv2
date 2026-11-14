@@ -41,6 +41,7 @@ type engine struct {
 
 	ctx         context.Context
 	cancel      context.CancelFunc
+	scanning    atomic.Bool
 	retarget    chan string
 	changeCodec chan ipc.CodecChange
 	incoming    chan incomingEv
@@ -145,7 +146,9 @@ func (e *engine) commands(r *ipc.Reader) {
 			e.keep.Store(c.Keep)
 			e.cancel()
 		case "scan":
-			go e.scan()
+			if e.scanning.CompareAndSwap(false, true) {
+				go e.scan()
+			}
 		case "volume":
 			e.setVolume(c.Volume, c.On)
 		case ipc.CommandCodec:
@@ -619,8 +622,9 @@ func (e *engine) startAudio() error {
 	if err != nil {
 		return err
 	}
+	mix := stereoMix(cp.Format.Channels, cp.Format.ChannelMask)
 	if err := cp.Start(func(samples []float32, frames int, discontinuity bool) {
-		e.pipe.onCapture(samples, frames, cp.Format.Channels, cp.Format.SampleRate, discontinuity)
+		e.pipe.onCapture(samples, frames, cp.Format.Channels, cp.Format.SampleRate, discontinuity, mix)
 	}); err != nil {
 		stopMuteGuard()
 		if !muted {
@@ -717,6 +721,7 @@ func (e *engine) scan() {
 			e.store.SetName(f.Addr.String(), f.Name, f.CoD)
 		}
 	}
+	e.scanning.Store(false)
 	logf("scan: %d device(s)", len(list))
 	_ = e.out.Write(ipc.Event{Ev: "scan", Devices: list})
 }

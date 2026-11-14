@@ -3,7 +3,6 @@ package app
 import (
 	"sscv2/internal/audio"
 	"sscv2/internal/config"
-	"sscv2/internal/driver"
 	"sscv2/internal/ipc"
 )
 
@@ -53,22 +52,14 @@ func (a *App) sliderVolume() (uint8, bool, bool) {
 }
 
 func (a *App) sliderVolumeLocked() (uint8, bool, bool) {
-	if id := a.nativeVolumeEndpointLocked(); id != "" {
-		level, muted, err := audio.EndpointVolume(id)
-		return audio.ScalarTo127(level), muted, err == nil
+	if p := a.native; p != nil && a.mode.Streaming() {
+		v := p.volume
+		if update := p.volumePending; update != nil && update.Endpoint == v.Endpoint {
+			v = *update
+		}
+		return v.Level, v.Muted, v.Endpoint != ""
 	}
 	return a.volumeLocked(), a.s.HeadphonesMuted, a.eng != nil && a.mode.Streaming()
-}
-
-func (a *App) nativeVolumeEndpointLocked() string {
-	if a.native != nil && a.mode.Streaming() {
-		saved := a.s.NativeRenderEndpoint
-		if endpoint := audio.FindRenderEndpoint(driver.BudsRenderName, saved, audio.StateActive); endpoint.ID != "" {
-			return endpoint.ID
-		}
-		return saved
-	}
-	return ""
 }
 
 func (a *App) setSliderVolume(value uint8) {
@@ -80,24 +71,54 @@ func (a *App) setSliderVolume(value uint8) {
 }
 
 func (a *App) setVolumeLocked(value uint8, muted bool) {
-	if id := a.nativeVolumeEndpointLocked(); id != "" {
-		if err := audio.SetEndpointVolume(id, float32(value)/127, muted); err != nil {
-			logf("Buds volume: %v", err)
-			return
+	if p := a.native; p != nil && p.volume.Endpoint != "" && a.mode.Streaming() {
+		p.volumePending = &ipc.NativeVolume{Endpoint: p.volume.Endpoint, Level: value, Muted: muted}
+		if !p.volumeWriting {
+			p.volumeWriting = true
+			go a.writeNativeVolume(p)
 		}
-		if !a.s.DisableAnimations {
-			a.t.PulseVolume()
-		}
+		return
+	}
+	if a.eng == nil {
 		return
 	}
 	changed := a.volumeLocked() != value || a.s.HeadphonesMuted != muted
-	if err := a.eng.in.Write(ipc.Command{Cmd: "volume", Volume: value, On: muted}); err != nil {
-		logf("headphone volume: %v", err)
-		return
-	}
+	a.eng.queueVolume(ipc.Command{Cmd: "volume", Volume: value, On: muted})
 	a.s.HeadphonesVolume, a.s.HeadphonesMuted = &value, muted
 	_ = config.Save(a.s)
 	if changed && !a.s.DisableAnimations {
 		a.t.PulseVolume()
+	}
+}
+
+func (a *App) writeNativeVolume(p *nativeProcess) {
+	// Finish writes before restoring Windows routing or opening another worker.
+	a.opMu.Lock()
+	defer a.opMu.Unlock()
+	for {
+		a.mu.Lock()
+		update := p.volumePending
+		if a.native != p || update == nil || update.Endpoint != p.volume.Endpoint {
+			p.volumePending = nil
+			p.volumeWriting = false
+			a.mu.Unlock()
+			return
+		}
+		a.mu.Unlock()
+		err := audio.SetEndpointVolume(update.Endpoint, float32(update.Level)/127, update.Muted)
+		a.mu.Lock()
+		if p.volumePending == update {
+			p.volumePending = nil
+		}
+		if err == nil && p.volume.Endpoint == update.Endpoint {
+			p.volume = *update
+		}
+		pulse := err == nil && !a.s.DisableAnimations
+		a.mu.Unlock()
+		if err != nil {
+			logf("Buds volume: %v", err)
+		} else if pulse {
+			a.t.PulseVolume()
+		}
 	}
 }

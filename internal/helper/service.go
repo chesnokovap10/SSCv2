@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
 	"time"
@@ -18,6 +17,7 @@ import (
 	"sscv2/internal/config"
 	"sscv2/internal/driver"
 	"sscv2/internal/i18n"
+	"sscv2/internal/install"
 	"sscv2/internal/ipc"
 	"sscv2/internal/logx"
 )
@@ -107,37 +107,6 @@ func installDir() string {
 	return filepath.Join(pf, config.AppName)
 }
 
-func copyFile(src, dst string) error {
-	in, err := os.Open(src)
-	if err != nil {
-		return err
-	}
-	defer in.Close()
-	tmp := dst + ".new"
-	out, err := os.Create(tmp)
-	if err != nil {
-		return err
-	}
-	if _, err := io.Copy(out, in); err != nil {
-		out.Close()
-		return err
-	}
-	out.Close()
-	// The old exe may still be held by an exiting service process: move it
-	// aside (allowed for a running image) and retry briefly.
-	var err2 error
-	for i := 0; i < 20; i++ {
-		_ = os.Remove(dst + ".old")
-		_ = os.Rename(dst, dst+".old")
-		if err2 = os.Rename(tmp, dst); err2 == nil {
-			_ = os.Remove(dst + ".old")
-			return nil
-		}
-		time.Sleep(250 * time.Millisecond)
-	}
-	return err2
-}
-
 // InstallService copies the executable to Program Files (a SYSTEM service
 // must not run from a user-writable folder), registers and starts it.
 func InstallService(owner string) error {
@@ -150,17 +119,29 @@ func InstallService(owner string) error {
 		return err
 	}
 	defer m.Disconnect()
-	if s, err := m.OpenService(ServiceName); err == nil {
-		stopAndWait(s)
-		s.Close()
-	}
 	dir := installDir()
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
 	}
+	var restart bool
+	if s, err := m.OpenService(ServiceName); err == nil {
+		if status, err := s.Query(); err == nil {
+			restart = status.State == svc.Running
+		}
+		stopAndWait(s)
+		s.Close()
+	}
 	exe := filepath.Join(dir, "ssc.exe")
 	if !sameFile(self, exe) {
-		if err := copyFile(self, exe); err != nil {
+		if err := install.CopyExecutable(self, exe); err != nil {
+			if restart {
+				if s, openErr := m.OpenService(ServiceName); openErr == nil {
+					err = errors.Join(err, s.Start())
+					s.Close()
+				} else {
+					err = errors.Join(err, openErr)
+				}
+			}
 			return fmt.Errorf(i18n.T("копирование в %s: %w", "copying to %s: %w"), dir, err)
 		}
 	}

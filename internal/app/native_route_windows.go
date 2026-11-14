@@ -140,10 +140,8 @@ func (a *App) resumeNativeStereo() error {
 	wasDefault := make([]bool, len(previous))
 	for role := range previous {
 		current, err := audio.DefaultRenderRole(role)
-		if err != nil {
-			return err
-		}
-		wasDefault[role] = output != "" && (current.ID == output || isBudsRender(current))
+		// A disappeared WaveRT endpoint can leave a role without a default.
+		wasDefault[role] = output != "" && (err != nil || current.ID == output || isBudsRender(current))
 	}
 	if address == "" {
 		return hideNativeRender()
@@ -160,9 +158,7 @@ func (a *App) resumeNativeStereo() error {
 		}()
 		defer func() { close(cancel); <-done }()
 	}
-	if _, err := helper.Call(ipc.Request{Op: op, Device: address}); err != nil {
-		return err
-	}
+	_, restoreErr := helper.Call(ipc.Request{Op: op, Device: address})
 	if output != "" {
 		endpoints := audio.List(false, audio.StateActive)
 		buds := budsStereoOutput(endpoints, output, budsName)
@@ -173,7 +169,7 @@ func (a *App) resumeNativeStereo() error {
 		}
 		if buds != "" && stereoVolume != nil {
 			if err := audio.SetEndpointVolume(buds, stereoVolume.Level, stereoVolume.Muted); err != nil {
-				return err
+				logf("restore Windows stereo volume: %v", err)
 			}
 		}
 		for role, id := range previous {
@@ -186,12 +182,12 @@ func (a *App) resumeNativeStereo() error {
 			}
 			if target != "" {
 				if err := audio.SetDefaultRenderRole(target, role); err != nil {
-					return err
+					restoreErr = errors.Join(restoreErr, err)
 				}
 			}
 		}
 	}
-	if err := hideNativeRender(); err != nil {
+	if err := errors.Join(restoreErr, hideNativeRender()); err != nil {
 		return err
 	}
 	a.mu.Lock()

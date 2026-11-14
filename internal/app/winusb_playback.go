@@ -225,6 +225,10 @@ func (a *App) onEngineEvent(p *workerProcess, ev ipc.Event) {
 		a.refresh()
 	case "scan":
 		a.mu.Lock()
+		if a.eng != p {
+			a.mu.Unlock()
+			return
+		}
 		a.scan, a.scanning = ev.Devices, false
 		a.mu.Unlock()
 		n := 0

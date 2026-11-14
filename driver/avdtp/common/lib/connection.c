@@ -1070,13 +1070,8 @@ Return Value:
     }
 
     Connection->ConnectionState = ConnectionStateDisconnecting;
-    WdfSpinLockRelease(Connection->ConnectionLock);
-
-    //
-    // We are now sending the disconnect, so clear the event.
-    //
-
     KeClearEvent(&Connection->DisconnectEvent);
+    WdfSpinLockRelease(Connection->ConnectionLock);
 
     DevCtxHdr->ProfileDrvInterface.BthReuseBrb(&Connection->ConnectDisconnectBrb, BRB_L2CA_CLOSE_CHANNEL);
 
@@ -1090,15 +1085,23 @@ Return Value:
     // disconnected, hence we don't assert for success
     //
 
-    (void) BthEchoSharedSendBrbAsync(
+    NTSTATUS status = BthEchoSharedSendBrbAsync(
         DevCtxHdr->IoTarget, 
         Connection->ConnectDisconnectRequest, 
         (PBRB) disconnectBrb,
         sizeof(*disconnectBrb),
         BthEchoConnectionObjectDisconnectCompletion,
         Connection
-        );    
+        );
 
+    if (!NT_SUCCESS(status))
+    {
+        // A request that was never sent has no completion callback.
+        WdfSpinLockAcquire(Connection->ConnectionLock);
+        Connection->ConnectionState = ConnectionStateDisconnected;
+        WdfSpinLockRelease(Connection->ConnectionLock);
+        KeSetEvent(&Connection->DisconnectEvent, IO_NO_INCREMENT, FALSE);
+    }
     return TRUE;
 }
 

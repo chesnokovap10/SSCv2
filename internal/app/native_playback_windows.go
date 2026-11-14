@@ -11,11 +11,15 @@ import (
 type nativeProcess struct {
 	*workerProcess
 	ipc.NativeStream
-	started      chan struct{}
-	ready        bool
-	linkLost     bool
-	uhqSupported *bool
-	lastMessage  string
+	started       chan struct{}
+	ready         bool
+	activeKbps    int
+	volume        ipc.NativeVolume
+	volumePending *ipc.NativeVolume
+	volumeWriting bool
+	linkLost      bool
+	uhqSupported  *bool
+	lastMessage   string
 }
 
 func (a *App) startNativeWorker(mode config.Mode, path, endpoint, address, stereo string) error {
@@ -60,11 +64,11 @@ func (a *App) requestNativeCodec(p *nativeProcess, mode config.Mode) (bool, erro
 	}
 	p.NativeStream, p.ready, p.started = stream, false, started
 	a.mu.Unlock()
+	go a.watchNativeStartup(p, started)
 	if err := p.in.Write(ipc.Command{Cmd: ipc.CommandCodec, Native: &stream}); err != nil {
 		return false, err
 	}
 	logf("native worker: switching to %s at %d kbps on PID %d", mode, stream.BitrateKbps, p.process.Pid)
-	go a.watchNativeStartup(p, started)
 	return true, nil
 }
 
@@ -103,11 +107,21 @@ func (a *App) onNativeEvent(p *nativeProcess, event ipc.Event) {
 			return
 		}
 		p.ready = true
+		p.activeKbps = event.BitrateKbps
+		if p.activeKbps == 0 {
+			p.activeKbps = stream.BitrateKbps
+		}
+		kbps := p.activeKbps
 		close(p.started)
 		a.mu.Unlock()
 		logf("native %s: ready", stream.Mode)
-		logf("native %s: streaming at %d kbps", stream.Mode, stream.BitrateKbps)
+		logf("native %s: streaming at %d kbps", stream.Mode, kbps)
 		a.refresh()
+	case ipc.EventNativeVolume:
+		if event.NativeVolume != nil {
+			p.volume = *event.NativeVolume
+		}
+		a.mu.Unlock()
 	case ipc.EventNativeLinkLost:
 		p.linkLost = true
 		a.mu.Unlock()
