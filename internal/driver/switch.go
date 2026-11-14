@@ -179,10 +179,12 @@ func buildScript(enable bool, oldInfs []string, instanceID, infPath, catPath, lo
   Log ("> $exe $($a -join ' ') -> $code")
   if ($ok -notcontains $code) { Log $out; throw "$exe failed ($code)" }
 }`)
-	w(`function Remove-Signer {
+	w(`$signerThumbprint = $null
+function Remove-Signer {
+  if (-not $signerThumbprint) { return }
   foreach ($st in 'My','Root','TrustedPublisher') {
-    Get-ChildItem "Cert:\LocalMachine\$st" | Where-Object { $_.Subject -like '*` + signerSubject + `*' } | ForEach-Object {
-      if ($_.HasPrivateKey) { Remove-Item -Path $_.PSPath -DeleteKey } else { Remove-Item -Path $_.PSPath }
+    Get-ChildItem "Cert:\LocalMachine\$st" | Where-Object Thumbprint -eq $signerThumbprint | ForEach-Object {
+      if ($st -eq 'My' -and $_.HasPrivateKey) { Remove-Item -LiteralPath $_.PSPath -DeleteKey } else { Remove-Item -LiteralPath $_.PSPath }
       Log "removed signer from $st"
     }
   }
@@ -231,11 +233,11 @@ func buildScript(enable bool, oldInfs []string, instanceID, infPath, catPath, lo
 	w("$rc = 1")
 	w("try {")
 	if enable {
-		w("  Remove-Signer")
 		w("  $inf = " + psLit(infPath))
 		w("  $cat = " + psLit(catPath))
 		w("  New-FileCatalog -Path $inf -CatalogFilePath $cat -CatalogVersion 2 | Out-Null")
 		w("  $cert = New-SelfSignedCertificate -Subject 'CN=" + signerSubject + " (ephemeral)' -Type CodeSigningCert -CertStoreLocation Cert:\\LocalMachine\\My -KeyExportPolicy NonExportable -KeySpec Signature -NotAfter (Get-Date).AddDays(1)")
+		w("  $signerThumbprint = $cert.Thumbprint")
 		w("  Log \"signer $($cert.Thumbprint)\"")
 		w("  $cer = Join-Path (Split-Path -Parent $cat) 'signer.cer'")
 		w("  Export-Certificate -Cert $cert -FilePath $cer | Out-Null")

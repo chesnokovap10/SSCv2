@@ -269,7 +269,7 @@ func startService() error {
 
 // ---- elevated: uninstall ---------------------------------------------------
 
-// UninstallSystem removes what needs admin rights: %ProgramData%\SSCv2, leftover driver-switch certificates and -
+// UninstallSystem removes what needs admin rights: %ProgramData%\SSCv2 and -
 // once process pid (the tray) has exited - the Program Files folder. The
 // service itself is removed by the caller beforehand.
 func UninstallSystem(pid int) error {
@@ -278,11 +278,7 @@ func UninstallSystem(pid int) error {
 	if pd == "" {
 		pd = `C:\ProgramData`
 	}
-	// Leftover ephemeral signer of the WinUSB switch (normally removed by
-	// the switch itself).
-	removeLater(0, []string{filepath.Join(pd, config.AppName)},
-		`foreach ($st in 'My','Root','TrustedPublisher') { Get-ChildItem "Cert:\LocalMachine\$st" -ErrorAction SilentlyContinue | `+
-			`Where-Object { $_.Subject -like '*SSCv2*' } | ForEach-Object { Remove-Item -Path $_.PSPath -DeleteKey -ErrorAction SilentlyContinue } }`)
+	removeLater(0, []string{filepath.Join(pd, config.AppName)}, "")
 	removeLater(pid, []string{Dir()}, "")
 	return nil
 }
