@@ -278,17 +278,13 @@ func UninstallSystem(pid int) error {
 	if pd == "" {
 		pd = `C:\ProgramData`
 	}
-	removeLater(0, []string{filepath.Join(pd, config.AppName)}, "")
-	removeLater(pid, []string{Dir()}, "")
-	return nil
+	return removeLater(pid, []string{filepath.Join(pd, config.AppName), Dir()})
 }
 
 // RemoveUserData deletes the user's settings, keys, logs and the desktop
 // shortcut once process pid has exited (its log files are still open).
-func RemoveUserData(pid int) {
-	if err := SetAutoStart(false); err != nil {
-		logx.Printf("remove autostart: %v", err)
-	}
+func RemoveUserData(pid int) error {
+	err := SetAutoStart(false)
 	var dirs []string
 	for _, env := range []string{"APPDATA", "LOCALAPPDATA"} {
 		if b := os.Getenv(env); b != "" {
@@ -298,35 +294,35 @@ func RemoveUserData(pid int) {
 	if p := ShortcutPath(); p != "" {
 		dirs = append(dirs, p)
 	}
-	removeLater(pid, dirs, "")
+	return errors.Join(err, removeLater(pid, dirs))
 }
 
 func psLit(s string) string { return "'" + strings.ReplaceAll(s, "'", "''") + "'" }
 
 // removeLater starts a hidden, detached PowerShell that waits for process
-// pid (0 = none), runs extra and deletes paths (retrying a few seconds,
-// files may still be released).
-func removeLater(pid int, paths []string, extra string) {
+// pid (0 = none) and deletes paths, reporting any that could not be removed.
+func removeLater(pid int, paths []string) error {
 	var b strings.Builder
 	if pid > 0 {
 		fmt.Fprintf(&b, "Wait-Process -Id %d -Timeout 60 -ErrorAction SilentlyContinue; ", pid)
 	}
-	if extra != "" {
-		b.WriteString(extra + "; ")
-	}
+	b.WriteString("$remaining = @(); ")
 	for _, p := range paths {
 		fmt.Fprintf(&b, "for ($i=0; $i -lt 20 -and (Test-Path -LiteralPath %s); $i++) { Remove-Item -LiteralPath %s -Recurse -Force -ErrorAction SilentlyContinue; Start-Sleep -Milliseconds 500 }; ",
 			psLit(p), psLit(p))
+		fmt.Fprintf(&b, "if (Test-Path -LiteralPath %s) { $remaining += %s }; ", psLit(p), psLit(p))
 	}
+	b.WriteString("if ($remaining.Count -gt 0) { $shell = New-Object -ComObject WScript.Shell; " +
+		"$null = $shell.Popup(" + psLit(i18n.T("Не удалось удалить:", "Could not remove:")) +
+		" + [Environment]::NewLine + ($remaining -join [Environment]::NewLine), 0, 'SSCv2', 48); exit 1 }")
 	cmd := exec.Command("powershell.exe", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
 		"-WindowStyle", "Hidden", "-Command", b.String())
 	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true,
 		CreationFlags: 0x08000000 | 0x00000008 | 0x00000200} // NO_WINDOW | DETACHED | NEW_PROCESS_GROUP
 	if err := cmd.Start(); err != nil {
-		logx.Printf("uninstall: cleanup process: %v", err)
-		return
+		return fmt.Errorf("start uninstall cleanup: %w", err)
 	}
-	_ = cmd.Process.Release()
+	return cmd.Process.Release()
 }
 
 // ---- user: shortcut ---------------------------------------------------------

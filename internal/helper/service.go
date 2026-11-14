@@ -131,7 +131,10 @@ func InstallService(owner string) error {
 		if status, err := s.Query(); err == nil {
 			restart = status.State == svc.Running
 		}
-		stopAndWait(s)
+		if err := stopAndWait(s); err != nil {
+			s.Close()
+			return err
+		}
 		s.Close()
 	}
 	exe := filepath.Join(dir, "ssc.exe")
@@ -181,20 +184,30 @@ func sameFile(a, b string) bool {
 	return err1 == nil && err2 == nil && os.SameFile(fa, fb)
 }
 
-func stopAndWait(s *mgr.Service) {
-	if _, err := s.Control(svc.Stop); err != nil {
-		return
+func stopAndWait(s *mgr.Service) error {
+	q, err := s.Query()
+	if err != nil || q.State == svc.Stopped {
+		return err
+	}
+	if q.State != svc.StopPending {
+		if _, err := s.Control(svc.Stop); err != nil {
+			if errors.Is(err, windows.ERROR_SERVICE_NOT_ACTIVE) {
+				return nil
+			}
+			return err
+		}
 	}
 	for i := 0; i < 50; i++ {
 		q, err := s.Query()
 		if err != nil || q.State == svc.Stopped {
-			return
+			return err
 		}
 		time.Sleep(200 * time.Millisecond)
 	}
+	return fmt.Errorf("%s did not stop within 10 seconds", s.Name)
 }
 
-// UninstallService stops and deletes the service and its files.
+// UninstallService stops and deletes the service. Its executable is shared with the tray.
 func UninstallService() error {
 	m, err := mgr.Connect()
 	if err != nil {
@@ -202,22 +215,17 @@ func UninstallService() error {
 	}
 	defer m.Disconnect()
 	s, err := m.OpenService(ServiceName)
-	if err != nil {
-		return errors.New(i18n.T("служба не установлена", "the service is not installed"))
+	if errors.Is(err, windows.ERROR_SERVICE_DOES_NOT_EXIST) || errors.Is(err, windows.ERROR_SERVICE_MARKED_FOR_DELETE) {
+		return nil
 	}
-	stopAndWait(s)
-	err = s.Delete()
-	s.Close()
 	if err != nil {
 		return err
 	}
-	time.Sleep(500 * time.Millisecond)
-	self, _ := os.Executable()
-	exe := filepath.Join(installDir(), "ssc.exe")
-	if !sameFile(self, exe) {
-		_ = os.RemoveAll(installDir())
+	defer s.Close()
+	if err := stopAndWait(s); err != nil {
+		return err
 	}
-	return nil
+	return s.Delete()
 }
 
 // ---- elevation ------------------------------------------------------------------

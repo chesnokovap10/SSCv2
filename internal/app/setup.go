@@ -167,8 +167,11 @@ func (a *App) uninstall(confirmed bool) {
 		a.t.Balloon(T("Программа не удалена", "Not uninstalled"), err.Error(), 2)
 		return
 	}
-	logf("uninstall: done, removing user data after exit")
-	install.RemoveUserData(os.Getpid())
+	if err := install.RemoveUserData(os.Getpid()); err != nil {
+		logf("schedule user data removal: %v", err)
+		tray.Warn(T("Удаление SSCv2", "Uninstall SSCv2"), err.Error())
+	}
+	logf("uninstall: deferred file cleanup scheduled")
 	logx.Close()
 	a.t.Quit()
 }
@@ -179,6 +182,7 @@ func UninstallSystem(pid int) int {
 	logx.Open(config.LogDir(), "helper.log", "helper")
 	if err := helper.UninstallService(); err != nil {
 		logf("uninstall: service: %v", err)
+		return 1
 	}
 	if err := install.UninstallSystem(pid); err != nil {
 		logf("uninstall: %v", err)
