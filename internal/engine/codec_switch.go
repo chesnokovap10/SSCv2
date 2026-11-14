@@ -9,7 +9,8 @@ import (
 )
 
 func (e *engine) switchCodec(ctx context.Context, caps bt.RemoteCaps, codec bt.Codec, previous *Encoder) (Encoder, int, error) {
-	rate, makeEncoder := e.srate, newAAC
+	rate, makeEncoder := e.srate, newSSC
+	var aacBitrate int
 	if codec == bt.CodecSSC {
 		if !caps.SSC || !sscUHQ() && caps.SSCCap&0x04 == 0 {
 			return nil, 0, fmt.Errorf("24-bit SSC endpoint unavailable (cap 0x%02X)", caps.SSCCap)
@@ -17,9 +18,16 @@ func (e *engine) switchCodec(ctx context.Context, caps bt.RemoteCaps, codec bt.C
 		if err := sscRateOK(rate); err != nil {
 			return nil, 0, err
 		}
-		rate, makeEncoder = sscEncodeRate(rate), newSSC
+		rate = sscEncodeRate(rate)
 	} else if !caps.AAC {
 		return nil, 0, bt.ErrNoCodec
+	} else {
+		var err error
+		aacBitrate, err = aacTarget(caps.AACBitrate)
+		if err != nil {
+			return nil, 0, err
+		}
+		makeEncoder = func(rate, mtu int) (Encoder, error) { return newAAC(rate, mtu, aacBitrate) }
 	}
 
 	handle := bt.ACLHandle()
@@ -32,7 +40,7 @@ func (e *engine) switchCodec(ctx context.Context, caps bt.RemoteCaps, codec bt.C
 		(*previous).Close()
 		*previous = nil
 	}
-	enc, mtu, err := e.openCodec(ctx, codec, rate, makeEncoder)
+	enc, mtu, err := e.openCodec(ctx, codec, rate, aacBitrate, makeEncoder)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -44,8 +52,8 @@ func (e *engine) switchCodec(ctx context.Context, caps bt.RemoteCaps, codec bt.C
 	return enc, mtu, nil
 }
 
-func (e *engine) openCodec(ctx context.Context, codec bt.Codec, rate int, makeEncoder func(int, int) (Encoder, error)) (Encoder, int, error) {
-	mtu, err := bt.Configure(ctx, codec, uint32(rate), 2, 256000)
+func (e *engine) openCodec(ctx context.Context, codec bt.Codec, rate, aacBitrate int, makeEncoder func(int, int) (Encoder, error)) (Encoder, int, error) {
+	mtu, err := bt.Configure(ctx, codec, uint32(rate), 2, uint32(aacBitrate))
 	if err != nil {
 		return nil, 0, err
 	}

@@ -447,6 +447,7 @@ func (e *engine) session(addrStr string) (result error) {
 
 	var codec bt.Codec
 	var mk func(int, int) (Encoder, error)
+	var aacBitrate int
 	// A stream the headphones configured themselves carries no codec list
 	// (no discovery): judge it below, before the capability checks.
 	switch e.cfg.Codec {
@@ -466,7 +467,12 @@ func (e *engine) session(addrStr string) (result error) {
 		if !caps.AAC && !remoteCfg {
 			return errors.New(i18n.T("наушники не поддерживают AAC", "the headphones do not support AAC"))
 		}
-		codec, mk = bt.CodecAAC, newAAC
+		codec = bt.CodecAAC
+		aacBitrate, err = aacTarget(caps.AACBitrate)
+		if err != nil {
+			return err
+		}
+		mk = func(rate, mtu int) (Encoder, error) { return newAAC(rate, mtu, aacBitrate) }
 	}
 
 	var mtu int
@@ -495,7 +501,7 @@ func (e *engine) session(addrStr string) (result error) {
 		if codec == bt.CodecSSC {
 			rate = sscEncodeRate(e.srate)
 		}
-		mtu, err = bt.Configure(ctx, codec, uint32(rate), 2, 256000)
+		mtu, err = bt.Configure(ctx, codec, uint32(rate), 2, uint32(aacBitrate))
 		if err != nil {
 			return err
 		}

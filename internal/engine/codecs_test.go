@@ -5,18 +5,33 @@ import "testing"
 func TestAACManualBitrateIsNotClamped(t *testing.T) {
 	defer func() { aacForced = 0 }()
 	aacForced = 256000
-	if enc, err := newAAC(48000, 667); err == nil {
+	if enc, err := newAAC(48000, 667, 256000); err == nil {
 		enc.Close()
 		t.Fatal("256 kbps should fail when it does not fit the packet")
 	}
 	aacForced = 0
-	enc, err := newAAC(48000, 667)
+	enc, err := newAAC(48000, 667, 256000)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer enc.Close()
 	if got := enc.BitrateKbps(); got != 250 {
 		t.Fatalf("Auto AAC bitrate = %d, want 250", got)
+	}
+}
+
+func TestAACBitrateHonorsSinkLimit(t *testing.T) {
+	defer func() { aacForced = 0 }()
+	if bitrate, err := aacTarget(192000); err != nil || bitrate != 192000 {
+		t.Fatalf("auto bitrate = %d, %v", bitrate, err)
+	}
+	aacForced = 128000
+	if bitrate, err := aacTarget(192000); err != nil || bitrate != 128000 {
+		t.Fatalf("manual bitrate = %d, %v", bitrate, err)
+	}
+	aacForced = 224000
+	if _, err := aacTarget(192000); err == nil {
+		t.Fatal("expected an error when the requested bitrate exceeds the sink limit")
 	}
 }
 

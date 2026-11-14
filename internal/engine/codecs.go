@@ -48,18 +48,28 @@ var aacMode = "fit"
 // aacForced: AAC bitrate from the settings (bps, 0 = as high as a packet allows).
 var aacForced int
 
-func newAAC(sampleRate, mtu int) (Encoder, error) {
+func aacTarget(sinkLimit uint32) (int, error) {
+	target := bitrate.MaxAACKbps * 1000
+	if sinkLimit > 0 {
+		target = min(target, int(sinkLimit))
+	}
+	if aacForced > 0 {
+		if aacForced > target {
+			return 0, fmt.Errorf("AAC: %d kbps exceeds the supported %d bps", aacForced/1000, target)
+		}
+		target = aacForced
+	}
+	return target, nil
+}
+
+func newAAC(sampleRate, mtu, target int) (Encoder, error) {
 	// mtu is the media payload of one packet (already raised in "over"
 	// mode), so "fit" and "over" both cap the frame to one packet.
 	budget := mtu
 	if aacMode == "frag" {
 		budget = 0
 	}
-	br := bitrate.MaxAACKbps * 1000
-	if aacForced > 0 && aacForced < br {
-		br = aacForced
-	}
-	e, err := aac.New(sampleRate, 2, br, budget)
+	e, err := aac.New(sampleRate, 2, target, budget)
 	if err != nil {
 		return nil, err
 	}
