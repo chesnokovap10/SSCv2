@@ -45,6 +45,10 @@ func (a *App) state() (tray.Color, string) {
 }
 
 func (a *App) stateLocked() (tray.Color, string) {
+	return a.stateWithBitratesLocked(a.workingMax)
+}
+
+func (a *App) stateWithBitratesLocked(workingMax func(config.Mode) (int, string)) (tray.Color, string) {
 	if a.busy != "" {
 		return tray.Amber, a.busy
 	}
@@ -70,8 +74,9 @@ func (a *App) stateLocked() (tray.Color, string) {
 		if a.st.StreamStartFailed {
 			return tray.Red, fmt.Sprintf(T("%s не запустился", "%s failed to start"), modeName(a.mode))
 		}
-		if a.noBitrate(a.mode) {
-			return tray.Red, a.unsupportedText(a.mode)
+		policy, model := a.bitratePolicyWith(a.mode, a.prefersNativeBitrates(), workingMax)
+		if !policy.Offered(a.mode, 0) {
+			return tray.Red, unsupportedBitrateText(a.mode, model)
 		}
 		return tray.Red, T("движок не запущен", "engine not running")
 	}

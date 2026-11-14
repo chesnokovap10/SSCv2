@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os/exec"
 	"strings"
+	"time"
 
 	"sscv2/internal/bitrate"
 	"sscv2/internal/config"
@@ -51,16 +52,82 @@ const (
 	idDeviceBase  = 2000
 )
 
-func (a *App) menu() []tray.Item {
-	_, s := a.state()
+type menuEnvironment struct {
+	readAt                    time.Time
+	bonds                     keys.File
+	installed, running        bool
+	autoStart, testSigning    bool
+	autoStartKnown, testKnown bool
+	headphones                *config.Device
+	deviceID                  bitrate.DevID
+}
+
+func readMenuEnvironment(headphones *config.Device) menuEnvironment {
 	store, _ := keys.Open()
-	snap := store.Snapshot()
 	installed, running := helper.ServiceState()
 	autoStart, autoStartErr := install.AutoStart()
 	testSigning, testSigningErr := driver.TestSigning()
+	env := menuEnvironment{
+		readAt: time.Now(), bonds: store.Snapshot(), installed: installed, running: running,
+		autoStart: autoStart, autoStartKnown: autoStartErr == nil,
+		testSigning: testSigning, testKnown: testSigningErr == nil,
+	}
+	if headphones != nil {
+		device := *headphones
+		env.headphones = &device
+		if device.Name == "" {
+			if bond, ok := store.FindClassic(device.Addr); ok {
+				device.Name = bond.Name
+			}
+		}
+		if src, vid, pid, _, ok := keys.DeviceID(device.Addr); ok {
+			env.deviceID = bitrate.DevID{Source: src, Vendor: vid, Product: pid}
+		}
+	}
+	return env
+}
 
+func (a *App) menu() []tray.Item {
+	a.mu.Lock()
+	headphones := a.s.Headphones
+	a.mu.Unlock()
+	return a.menuWithEnvironment(readMenuEnvironment(headphones))
+}
+
+func (a *App) liveMenu() []tray.Item {
+	a.mu.Lock()
+	var env menuEnvironment
+	if a.menuEnvironment != nil {
+		env = *a.menuEnvironment
+	}
+	if !a.menuReading && time.Since(env.readAt) >= time.Second {
+		a.menuReading = true
+		go func(headphones *config.Device) {
+			fresh := readMenuEnvironment(headphones)
+			a.mu.Lock()
+			a.menuEnvironment = &fresh
+			a.menuReading = false
+			a.mu.Unlock()
+			a.t.RefreshMenu()
+		}(a.s.Headphones)
+	}
+	a.mu.Unlock()
+	return a.menuWithEnvironment(env)
+}
+
+func (a *App) menuWithEnvironment(env menuEnvironment) []tray.Item {
 	a.mu.Lock()
 	defer a.mu.Unlock()
+	name, id := "", bitrate.DevID{}
+	if h := a.s.Headphones; h != nil {
+		name = h.Name
+		if cached := env.headphones; cached != nil && cached.Addr == h.Addr {
+			name, id = nz(name, cached.Name), env.deviceID
+		}
+	}
+	workingMax := func(mode config.Mode) (int, string) { return bitrate.WorkingMax(mode, id, name) }
+	_, s := a.stateWithBitratesLocked(workingMax)
+	snap := env.bonds
 	busy := a.busy != "" || a.pendingUHQ
 	mode := a.mode
 	engineUp := a.eng != nil
@@ -75,13 +142,13 @@ func (a *App) menu() []tray.Item {
 		{Text: T("Выкл (Bluetooth Windows)", "Off (Windows Bluetooth)"), ID: idModeOff, Radio: true, Checked: mode == config.ModeOff, Disabled: busy},
 		{Text: "AAC", ID: idModeAAC, Radio: true, Checked: mode == config.ModeAAC, Disabled: busy},
 		{Text: T("SSC (24 бит / 48 кГц)", "SSC (24 bit / 48 kHz)"), ID: idModeSSC, Radio: true, Checked: mode == config.ModeSSC, Disabled: busy},
-		{Text: T("SSC UHQ (96 кГц)", "SSC UHQ (96 kHz)"), ID: idModeUHQ, Radio: true, Checked: mode == config.ModeSSCUHQ, Disabled: busy || a.uhqUnavailable()},
+		{Text: T("SSC UHQ (96 кГц)", "SSC UHQ (96 kHz)"), ID: idModeUHQ, Radio: true, Checked: mode == config.ModeSSCUHQ, Disabled: busy || a.uhqUnavailableWith(workingMax)},
 	}
 	items = append(items, tray.Item{Text: T("Кодек: ", "Codec: ") + modeName(mode), Sub: codecs, LiveLabel: true})
-	if a.noBitrate(mode) {
-		items = append(items, tray.Item{ID: idBitrateMenu, Text: T("Битрейт: — (", "Bitrate: - (") + a.unsupportedText(mode) + ")", Sub: []tray.Item{}, Disabled: true, LiveLabel: true})
+	policy, model := a.bitratePolicyWith(mode, a.prefersNativeBitrates(), workingMax)
+	if mode.Streaming() && !policy.Offered(mode, 0) {
+		items = append(items, tray.Item{ID: idBitrateMenu, Text: T("Битрейт: — (", "Bitrate: - (") + unsupportedBitrateText(mode, model) + ")", Sub: []tray.Item{}, Disabled: true, LiveLabel: true})
 	} else if mode.Streaming() {
-		policy, model := a.bitratePolicy(mode, a.prefersNativeBitrates())
 		choices := bitrate.Choices(mode)
 		cur := policy.Selected(mode, a.s.Bitrate(mode))
 		label := T("Битрейт: ", "Bitrate: ") + bitrateText(cur)
@@ -177,20 +244,22 @@ func (a *App) menu() []tray.Item {
 
 	// settings submenu
 	svcState := T("не установлена", "not installed")
-	if installed {
+	if env.readAt.IsZero() {
+		svcState = T("проверяется", "checking")
+	} else if env.installed {
 		svcState = T("остановлена", "stopped")
-		if running {
+		if env.running {
 			svcState = T("работает", "running")
 		}
 	}
 	lang := i18n.Lang()
 	testSigningState := T("неизвестно", "unknown")
-	if testSigningErr == nil {
+	if env.testKnown {
 		testSigningState = T("выключена", "off")
-		if testSigning {
+		if env.testSigning {
 			testSigningState = T("включена", "on")
 		}
-		if testSigning != a.s.WindowsTestSigning {
+		if env.testSigning != a.s.WindowsTestSigning {
 			testSigningState += T(" (отличается от выбора)", " (differs from selection)")
 		}
 	}
@@ -199,7 +268,7 @@ func (a *App) menu() []tray.Item {
 			{Text: "Русский", ID: idLangRU, LiveLabel: true, Checked: lang == i18n.RU},
 			{Text: "English", ID: idLangEN, LiveLabel: true, Checked: lang == i18n.EN},
 		}},
-		{LiveLabel: true, MinWidth: 370, Text: T("Запускать при входе в Windows", "Start at Windows sign-in"), ID: idAutoStart, Checked: autoStart, Disabled: autoStartErr != nil},
+		{LiveLabel: true, MinWidth: 370, Text: T("Запускать при входе в Windows", "Start at Windows sign-in"), ID: idAutoStart, Checked: env.autoStart, Disabled: !env.autoStartKnown},
 		{LiveLabel: true, MinWidth: 370, Text: T("Анимации", "Animations"), ID: idAnimations, Checked: !a.s.DisableAnimations},
 		{Separator: true},
 		{LiveLabel: true, MinWidth: 370, Text: T("Макс. MTU для Samsung Galaxy Buds2 Pro (1017 байт)", "Max MTU for Samsung Galaxy Buds2 Pro (1017 bytes)"), ID: idMaxMTU, Checked: a.s.MaxMTU, Disabled: busy},
@@ -212,8 +281,8 @@ func (a *App) menu() []tray.Item {
 		{LiveLabel: true, MinWidth: 370, Text: T("Открыть папку журналов", "Open the log folder"), ID: idOpenLogs},
 		{Separator: true},
 		{LiveLabel: true, MinWidth: 370, Text: T("Служба: ", "Service: ") + svcState},
-		{LiveLabel: true, MinWidth: 370, Text: T("Запустить службу", "Start the service"), ID: idSvcInstall, Disabled: busy || running},
-		{LiveLabel: true, MinWidth: 370, Text: T("Удалить службу", "Remove the service"), ID: idSvcRemove, Disabled: busy || !installed},
+		{LiveLabel: true, MinWidth: 370, Text: T("Запустить службу", "Start the service"), ID: idSvcInstall, Disabled: busy || env.readAt.IsZero() || env.running},
+		{LiveLabel: true, MinWidth: 370, Text: T("Удалить службу", "Remove the service"), ID: idSvcRemove, Disabled: busy || !env.installed},
 		{Separator: true},
 		{LiveLabel: true, MinWidth: 370, Text: T("Удалить программу…", "Uninstall…"), ID: idUninstall, Disabled: busy},
 	}

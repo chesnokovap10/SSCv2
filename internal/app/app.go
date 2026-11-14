@@ -53,6 +53,8 @@ type App struct {
 	// carry: audio routing left by an engine stopped for a restart
 	carry             *ipc.AudioCarry
 	menuText          map[int]string
+	menuEnvironment   *menuEnvironment
+	menuReading       bool
 	menuDeviceIDs     map[menuDeviceKey]int
 	menuDeviceTargets []menuDevice
 }
@@ -84,7 +86,7 @@ func Run() int {
 	if a.s.Debug {
 		logx.SetDebug(true)
 	}
-	a.t = &tray.Tray{Menu: a.menu, Command: a.command, Resume: a.onResume, DismissBefore: func(id int) bool {
+	a.t = &tray.Tray{Menu: a.liveMenu, Command: a.command, Resume: a.onResume, DismissBefore: func(id int) bool {
 		switch id {
 		case idExit, idInfo, idRepository, idTestSigning:
 			return true

@@ -145,7 +145,11 @@ func (a *App) prefersNativeBitrates() bool {
 }
 
 func (a *App) bitratePolicy(m config.Mode, native bool) (bitrate.Policy, string) {
-	limit, model := a.workingMax(m)
+	return a.bitratePolicyWith(m, native, a.workingMax)
+}
+
+func (a *App) bitratePolicyWith(m config.Mode, native bool, workingMax func(config.Mode) (int, string)) (bitrate.Policy, string) {
+	limit, model := workingMax(m)
 	if m == config.ModeSSCUHQ && limit == bitrate.Unsupported {
 		supported := a.st.SSCUHQSupported
 		if native {
@@ -168,6 +172,10 @@ func (a *App) offered(m config.Mode, kbps int) bool {
 
 // uhqUnavailable requires a.mu.
 func (a *App) uhqUnavailable() bool {
+	return a.uhqUnavailableWith(a.workingMax)
+}
+
+func (a *App) uhqUnavailableWith(workingMax func(config.Mode) (int, string)) bool {
 	if a.s.AllBitrates {
 		return false
 	}
@@ -177,7 +185,7 @@ func (a *App) uhqUnavailable() bool {
 	if a.st.Connected && a.st.SSCUHQSupported != nil {
 		return !*a.st.SSCUHQSupported
 	}
-	limit, _ := a.workingMax(config.ModeSSCUHQ)
+	limit, _ := workingMax(config.ModeSSCUHQ)
 	return limit == bitrate.Unsupported
 }
 
@@ -201,6 +209,10 @@ func (a *App) noBitrate(m config.Mode) bool {
 // unsupportedText: the status / menu note for such a codec. a.mu held.
 func (a *App) unsupportedText(m config.Mode) string {
 	_, model := a.workingMax(m)
+	return unsupportedBitrateText(m, model)
+}
+
+func unsupportedBitrateText(m config.Mode, model string) string {
 	return fmt.Sprintf(T("%s не поддерживается %s - включите «Настройки ▸ Все битрейты»",
 		"%s is not supported by %s - turn on \"Settings > All bitrates\""), modeName(m), model)
 }
