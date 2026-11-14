@@ -21,12 +21,13 @@ const pipeName = `\\.\pipe\SSCv2Helper`
 // pipeSDDL lets SYSTEM, Administrators and the owner (the user who installed
 // the service) connect; nobody else may drive the privileged operations.
 func pipeSDDL(ownerSID string) string {
+	const admins = "D:P(A;;GA;;;SY)(A;;GA;;;BA)"
 	if ownerSID == "" {
-		ownerSID = "IU" // interactive users
+		return admins
 	}
 	// GENERIC_READ | FILE_WRITE_DATA. GENERIC_WRITE would also allow the
 	// client to create its own server instance under the same name.
-	return "D:P(A;;GA;;;SY)(A;;GA;;;BA)(A;;0x80000002;;;" + ownerSID + ")"
+	return admins + "(A;;0x80000002;;;" + ownerSID + ")"
 }
 
 // Serve accepts helper requests until the process exits.

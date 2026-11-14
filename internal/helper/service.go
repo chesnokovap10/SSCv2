@@ -110,6 +110,9 @@ func installDir() string {
 // InstallService copies the executable to Program Files (a SYSTEM service
 // must not run from a user-writable folder), registers and starts it.
 func InstallService(owner string) error {
+	if _, err := windows.StringToSid(owner); err != nil {
+		return fmt.Errorf("invalid helper service owner SID: %w", err)
+	}
 	self, err := os.Executable()
 	if err != nil {
 		return err
