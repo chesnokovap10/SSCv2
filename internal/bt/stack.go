@@ -43,6 +43,7 @@ type mpkt struct {
 	n      int
 	ts     uint32
 	marker bool
+	queued time.Time
 }
 
 type stackT struct {
@@ -696,7 +697,14 @@ func SendMediaMarker(payload []byte, timestamp uint32, marker bool) bool {
 		return false
 	}
 	s.mqmu.Lock()
-	if s.mqCount >= len(s.mq) || len(payload) > len(s.mq[0].data) {
+	if len(payload) > len(s.mq[0].data) {
+		s.mqmu.Unlock()
+		s.sendFails.Add(1)
+		return false
+	}
+	now := time.Now()
+	s.discardStaleMedia(now.Add(-maxMediaAge))
+	if s.mqCount == len(s.mq) {
 		s.mqmu.Unlock()
 		s.sendFails.Add(1)
 		return false
@@ -705,6 +713,7 @@ func SendMediaMarker(payload []byte, timestamp uint32, marker bool) bool {
 	slot.n = copy(slot.data[:], payload)
 	slot.ts = timestamp
 	slot.marker = marker
+	slot.queued = now
 	s.mqHead = (s.mqHead + 1) % len(s.mq)
 	s.mqCount++
 	s.mqmu.Unlock()
@@ -720,9 +729,28 @@ func SendMediaMarker(payload []byte, timestamp uint32, marker bool) bool {
 	return true
 }
 
+const maxMediaAge = 150 * time.Millisecond
+
+// discardStaleMedia requires mqmu. Discard every queued fragment sharing
+// an expired RTP timestamp so a receiver does not get the tail alone.
+func (s *stackT) discardStaleMedia(cutoff time.Time) {
+	for s.mqCount > 0 && s.mq[s.mqTail].queued.Before(cutoff) {
+		timestamp := s.mq[s.mqTail].ts
+		for {
+			s.mqTail = (s.mqTail + 1) % len(s.mq)
+			s.mqCount--
+			s.sendFails.Add(1)
+			if s.mqCount == 0 || s.mq[s.mqTail].ts != timestamp {
+				break
+			}
+		}
+	}
+}
+
 // BTstack thread: send one queued packet.
 func (s *stackT) canSendNow() {
 	s.mqmu.Lock()
+	s.discardStaleMedia(time.Now().Add(-maxMediaAge))
 	have := s.mqCount > 0
 	if have {
 		s.txBuf = s.mq[s.mqTail]
