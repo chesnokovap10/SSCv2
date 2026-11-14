@@ -53,37 +53,6 @@ type Result struct {
 
 func psLit(s string) string { return "'" + strings.ReplaceAll(s, "'", "''") + "'" }
 
-// findSDKTool locates makecat.exe / signtool.exe in the Windows 10+ SDK,
-// preferring the x64 build.
-func findSDKTool(name string) string {
-	roots := []string{
-		`C:\Program Files (x86)\Windows Kits\10\bin`,
-		`C:\Program Files\Windows Kits\10\bin`,
-	}
-	for _, root := range roots {
-		var fallback string
-		_ = filepath.WalkDir(root, func(p string, d os.DirEntry, err error) error {
-			if err != nil || d.IsDir() {
-				return nil
-			}
-			if strings.EqualFold(d.Name(), name) {
-				if strings.Contains(strings.ToLower(p), `\x64\`) {
-					fallback = p
-					return filepath.SkipAll
-				}
-				if fallback == "" {
-					fallback = p
-				}
-			}
-			return nil
-		})
-		if fallback != "" {
-			return fallback
-		}
-	}
-	return ""
-}
-
 // findWinUSBInfs lists oemNN.inf packages that reference winusb.inf AND
 // carry this VID:PID (ours, an older build's, or Zadig's). Vendor BTHUSB
 // packages never reference winusb.inf, so they are never touched.
@@ -179,28 +148,6 @@ func run(timeout time.Duration, exe string, args ...string) (string, error) {
 	}
 }
 
-func makeCatalog(dir, infPath string) error {
-	makecat := findSDKTool("makecat.exe")
-	if makecat == "" {
-		return errors.New(i18n.T("makecat.exe из Windows SDK не найден (нужны инструменты Windows 10+ SDK)", "makecat.exe from the Windows SDK not found (Windows 10+ SDK tools needed)"))
-	}
-	ddf := filepath.Join(dir, "sscv2_winusb.ddf")
-	body := "[CatalogHeader]\r\nName=" + catName + "\r\nResultDir=" + dir +
-		"\r\nCatalogVersion=2\r\nHashAlgorithms=SHA256\r\nPageHashes=false\r\nEncodingType=0x00010001\r\n\r\n" +
-		"[CatalogFiles]\r\n<HASH>" + infName + "=" + infPath + "\r\n"
-	if err := os.WriteFile(ddf, []byte(body), 0o644); err != nil {
-		return err
-	}
-	defer os.Remove(ddf)
-	if out, err := run(60*time.Second, makecat, ddf); err != nil {
-		return fmt.Errorf("makecat: %v %s", err, strings.TrimSpace(out))
-	}
-	if _, err := os.Stat(filepath.Join(dir, catName)); err != nil {
-		return errors.New(i18n.T("makecat не создал каталог", "makecat did not create the catalog"))
-	}
-	return nil
-}
-
 // Variant (diagnostics): "remove" switches the old way, by uninstalling the
 // devnode subtree (pnputil /remove-device /subtree) and re-scanning.
 //
@@ -212,7 +159,7 @@ func makeCatalog(dir, infPath string) error {
 // speakers -> headphones) and a pile of phantom devices.
 var Variant string
 
-func buildScript(enable bool, oldInfs []string, instanceID, infPath, catPath, signtool, logPath string) string {
+func buildScript(enable bool, oldInfs []string, instanceID, infPath, catPath, logPath string) string {
 	inPlace := Variant != "remove" && instanceID != ""
 	var s strings.Builder
 	w := func(line string) { s.WriteString(line); s.WriteString("\r\n") }
@@ -291,6 +238,18 @@ func buildScript(enable bool, oldInfs []string, instanceID, infPath, catPath, si
 	w("try {")
 	if enable {
 		w("  Remove-Signer")
+		w("  $inf = " + psLit(infPath))
+		w("  $cat = " + psLit(catPath))
+		w("  New-FileCatalog -Path $inf -CatalogFilePath $cat -CatalogVersion 2 | Out-Null")
+		w("  $cert = New-SelfSignedCertificate -Subject 'CN=" + signerSubject + " (ephemeral)' -Type CodeSigningCert -CertStoreLocation Cert:\\LocalMachine\\My -KeyExportPolicy NonExportable -KeySpec Signature -NotAfter (Get-Date).AddDays(1)")
+		w("  Log \"signer $($cert.Thumbprint)\"")
+		w("  $cer = Join-Path (Split-Path -Parent $cat) 'signer.cer'")
+		w("  Export-Certificate -Cert $cert -FilePath $cer | Out-Null")
+		w("  Import-Certificate -FilePath $cer -CertStoreLocation Cert:\\LocalMachine\\Root | Out-Null")
+		w("  Import-Certificate -FilePath $cer -CertStoreLocation Cert:\\LocalMachine\\TrustedPublisher | Out-Null")
+		w("  $signature = Set-AuthenticodeSignature -LiteralPath $cat -Certificate $cert -HashAlgorithm SHA256")
+		w("  if ($signature.Status -ne 'Valid') { throw \"WinUSB catalog signature: $($signature.StatusMessage)\" }")
+		w("  Log 'WinUSB catalog signed'")
 	}
 	if !enable {
 		// AVCTP (AVRCP) must already run when the radio comes back. Started
@@ -323,14 +282,6 @@ func buildScript(enable bool, oldInfs []string, instanceID, infPath, catPath, si
   }`)
 	}
 	if enable {
-		w("  $cert = New-SelfSignedCertificate -Subject 'CN=" + signerSubject + " (ephemeral)' -Type CodeSigningCert -CertStoreLocation Cert:\\LocalMachine\\My -KeyExportPolicy NonExportable -KeySpec Signature -NotAfter (Get-Date).AddDays(1)")
-		w("  Log \"signer $($cert.Thumbprint)\"")
-		w("  $cer = Join-Path $env:TEMP 'sscv2_ephemeral.cer'")
-		w("  Export-Certificate -Cert $cert -FilePath $cer | Out-Null")
-		w("  Import-Certificate -FilePath $cer -CertStoreLocation Cert:\\LocalMachine\\Root | Out-Null")
-		w("  Import-Certificate -FilePath $cer -CertStoreLocation Cert:\\LocalMachine\\TrustedPublisher | Out-Null")
-		w("  Remove-Item $cer")
-		w("  Run " + psLit(signtool) + " @('sign', '/sm', '/s', 'My', '/sha1', $cert.Thumbprint, '/fd', 'SHA256', " + psLit(catPath) + ")")
 		w("  Stop-Avctp")
 		if inPlace {
 			// Disable (stops the Bluetooth stack; the children keep their
@@ -431,20 +382,13 @@ func Switch(id USBID, enable bool) (Result, error) {
 	logPath := filepath.Join(dir, "switch.log")
 	scriptPath := filepath.Join(dir, "switch.ps1")
 
-	var signtool string
 	if enable {
-		if signtool = findSDKTool("signtool.exe"); signtool == "" {
-			return Result{}, errors.New(i18n.T("signtool.exe из Windows SDK не найден", "signtool.exe from the Windows SDK not found"))
-		}
 		if err := os.WriteFile(infPath, []byte(infText(id)), 0o644); err != nil {
-			return Result{}, err
-		}
-		if err := makeCatalog(dir, infPath); err != nil {
 			return Result{}, err
 		}
 	}
 	// UTF-8 BOM so Windows PowerShell 5.1 reads non-ASCII paths correctly.
-	script := "\ufeff" + buildScript(enable, oldInfs, st.InstanceID, infPath, catPath, signtool, logPath)
+	script := "\ufeff" + buildScript(enable, oldInfs, st.InstanceID, infPath, catPath, logPath)
 	if err := os.WriteFile(scriptPath, []byte(script), 0o644); err != nil {
 		return Result{}, err
 	}
