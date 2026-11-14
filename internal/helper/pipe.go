@@ -118,6 +118,19 @@ func callPipeAt(pipe string, servicePID uint32, req ipc.Request) (ipc.Response, 
 		return ipc.Response{}, err
 	}
 	defer f.Close()
+	// Driver transitions have a multi-minute deadline of their own.
+	timeout := 30 * time.Second
+	if req.Op == "driver" {
+		timeout = 8 * time.Minute
+	} else if req.Op == "test-signing" || req.Op == "native-profile-sync" ||
+		req.Op == "native-render-ensure" || req.Op == "native-render-restore" ||
+		req.Op == "native-avrcp-release" || req.Op == "native-a2dp-resume" ||
+		req.Op == "native-stereo-bind" || req.Op == "native-stereo-restore" {
+		timeout = 5 * time.Minute
+	}
+	if err := f.SetDeadline(time.Now().Add(timeout)); err != nil {
+		return ipc.Response{}, err
+	}
 	b, _ := json.Marshal(req)
 	if _, err := f.Write(append(b, '\n')); err != nil {
 		return ipc.Response{}, err
@@ -137,7 +150,7 @@ func connectPipe(pipe string, servicePID uint32) (*os.File, error) {
 	var err error
 	for i := 0; i < 20; i++ {
 		h, err = windows.CreateFile(name, windows.GENERIC_READ|windows.FILE_WRITE_DATA, 0, nil, windows.OPEN_EXISTING,
-			windows.SECURITY_SQOS_PRESENT|windows.SECURITY_IDENTIFICATION, 0)
+			windows.FILE_FLAG_OVERLAPPED|windows.SECURITY_SQOS_PRESENT|windows.SECURITY_IDENTIFICATION, 0)
 		if err == nil {
 			break
 		}
