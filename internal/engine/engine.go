@@ -256,6 +256,7 @@ func (e *engine) run() error {
 	// themselves when they are taken out.
 	backoff := 3 * time.Second
 	activeUntil := time.Now().Add(activeWindow)
+	var reconnectUntil time.Time
 	for {
 		if e.target == "" {
 			e.releaseSessionAudio()
@@ -273,6 +274,10 @@ func (e *engine) run() error {
 		}
 
 		if time.Now().After(activeUntil) {
+			if !reconnectUntil.IsZero() {
+				e.drainIncoming()
+				reconnectUntil = time.Time{}
+			}
 			e.releaseSessionAudio() // the headphones did not come: sound back to the speakers
 			// passive: wait until the headphones connect to us
 			e.update(func(s *ipc.EngineStatus) {
@@ -311,17 +316,22 @@ func (e *engine) run() error {
 			// back to the speakers, stop calling them.
 			e.onLinkLost()
 			activeUntil = time.Time{}
+			reconnectUntil = time.Time{}
 			e.drainIncoming()
 			continue
 		case errors.Is(err, errReconnect):
-			activeUntil = time.Now().Add(20 * time.Second)
-			backoff = time.Second
+			if reconnectUntil.IsZero() {
+				reconnectUntil = time.Now().Add(20 * time.Second)
+				backoff = time.Second
+			}
+			activeUntil = reconnectUntil
 			msg = i18n.T("переподключение на ", "reconnecting for ") + strings.ToUpper(e.cfg.Codec)
 		case err != nil:
 			e.releaseSessionAudio()
 			logf("session: %v", err)
 			msg = err.Error()
 		default:
+			reconnectUntil = time.Time{}
 			e.releaseSessionAudio()
 			backoff = 3 * time.Second
 		}
@@ -337,6 +347,7 @@ func (e *engine) run() error {
 			return e.ctx.Err()
 		case a := <-e.retarget:
 			e.target = a
+			reconnectUntil = time.Time{}
 			backoff = 3 * time.Second
 			activeUntil = time.Now().Add(activeWindow)
 		case in := <-e.incoming:
