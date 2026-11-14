@@ -247,6 +247,9 @@ func (p *pipeline) setVolume(level uint8, muted bool) {
 }
 
 func (p *pipeline) pcmGain(hardware bool, now int64) float32 {
+	// Allow one AVRCP response timeout plus the 250 ms hardware settling
+	// period before falling back to software volume.
+	const softwareVolumeDelay = 1250
 	elapsed := now - p.volumeStartedAt.Load()
 	if elapsed < 250 {
 		return 0
@@ -255,7 +258,7 @@ func (p *pipeline) pcmGain(hardware bool, now int64) float32 {
 		return 1
 	}
 	level := p.volume.Load()
-	if elapsed < 4000 || level >= 128 {
+	if elapsed < softwareVolumeDelay || level >= 128 {
 		return 0
 	}
 	gain := float32(level) / 127
