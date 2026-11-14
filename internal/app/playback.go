@@ -381,15 +381,13 @@ func (a *App) disableNativePlaybackLocked() bool {
 }
 
 func (a *App) failNativePlaybackLocked(mode config.Mode, err error) {
-	if restoreErr := a.stopNativePlaybackLocked(); restoreErr != nil {
-		a.reportNativeError(errors.Join(err, restoreErr))
-		return
-	}
+	err = errors.Join(err, a.stopNativePlaybackLocked())
 	logf("native %s: %v", mode, err)
 	a.mu.Lock()
 	a.st.StreamStartFailed = true
 	a.mu.Unlock()
 	a.setMode(mode)
+	a.t.Balloon(T("Ошибка через Bluetooth Windows", "Windows Bluetooth failed"), err.Error(), 2)
 }
 
 func (a *App) reportNativeError(err error) {
