@@ -7,6 +7,7 @@ import (
 	"errors"
 	"io"
 	"os"
+	"time"
 
 	"golang.org/x/sys/windows/svc"
 
@@ -84,6 +85,9 @@ func (r *budsPCMReader) Read(buffer []byte) (int, error) {
 
 func serveBudsPCM(f *os.File, input *bufio.Reader) {
 	reply := json.NewEncoder(f)
+	if err := f.SetWriteDeadline(time.Now().Add(5 * time.Second)); err != nil {
+		return
+	}
 	path, err := driver.BudsRenderInterface()
 	if err != nil {
 		_ = reply.Encode(ipc.Response{Error: err.Error()})
@@ -100,6 +104,9 @@ func serveBudsPCM(f *os.File, input *bufio.Reader) {
 	}
 	var packet [2 + budsPCMMax]byte
 	for {
+		if err := f.SetDeadline(time.Now().Add(5 * time.Second)); err != nil {
+			return
+		}
 		if _, err := io.ReadFull(input, packet[:2]); err != nil {
 			return
 		}

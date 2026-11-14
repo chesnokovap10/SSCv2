@@ -18,6 +18,11 @@ import (
 
 const pipeName = `\\.\pipe\SSCv2Helper`
 
+const (
+	maxHelperConnections = 32
+	maxHelperRequest     = 4096
+)
+
 // pipeSDDL lets SYSTEM, Administrators and the owner (the user who installed
 // the service) connect; nobody else may drive the privileged operations.
 func pipeSDDL(ownerSID string) string {
@@ -33,18 +38,45 @@ func pipeSDDL(ownerSID string) string {
 // Serve accepts helper requests until the process exits.
 func Serve(ownerSID string) error {
 	first := true
+	active := make(chan struct{}, maxHelperConnections)
 	for {
 		h, err := newPipeInstance(pipeName, ownerSID, first)
 		if err != nil {
 			return err
 		}
-		if err := windows.ConnectNamedPipe(h, nil); err != nil && err != windows.ERROR_PIPE_CONNECTED {
+		if err := acceptPipe(h); err != nil {
 			windows.CloseHandle(h)
 			time.Sleep(100 * time.Millisecond)
 			continue
 		}
 		first = false
-		go serveConn(h, ownerSID != "")
+		select {
+		case active <- struct{}{}:
+			go func() {
+				defer func() { <-active }()
+				serveConn(h, ownerSID != "")
+			}()
+		default:
+			windows.CloseHandle(h)
+		}
+	}
+}
+
+func acceptPipe(h windows.Handle) error {
+	event, err := windows.CreateEvent(nil, 1, 0, nil)
+	if err != nil {
+		return err
+	}
+	defer windows.CloseHandle(event)
+	op := windows.Overlapped{HEvent: event}
+	switch err := windows.ConnectNamedPipe(h, &op); err {
+	case nil, windows.ERROR_PIPE_CONNECTED:
+		return nil
+	case windows.ERROR_IO_PENDING:
+		var size uint32
+		return windows.GetOverlappedResult(h, &op, &size, true)
+	default:
+		return err
 	}
 }
 
@@ -54,7 +86,7 @@ func newPipeInstance(pipe, ownerSID string, first bool) (windows.Handle, error) 
 		return 0, fmt.Errorf("pipe SDDL: %w", err)
 	}
 	sa := &windows.SecurityAttributes{Length: uint32(unsafe.Sizeof(windows.SecurityAttributes{})), SecurityDescriptor: sd}
-	mode := uint32(windows.PIPE_ACCESS_DUPLEX)
+	mode := uint32(windows.PIPE_ACCESS_DUPLEX | windows.FILE_FLAG_OVERLAPPED)
 	if first {
 		mode |= windows.FILE_FLAG_FIRST_PIPE_INSTANCE
 	}
@@ -69,13 +101,12 @@ func newPipeInstance(pipe, ownerSID string, first bool) (windows.Handle, error) 
 
 func serveConn(h windows.Handle, allowPCM bool) {
 	f := os.NewFile(uintptr(h), "pipe")
-	defer func() {
-		windows.FlushFileBuffers(h)
-		windows.DisconnectNamedPipe(h)
-		f.Close()
-	}()
-	r := bufio.NewReader(f)
-	line, err := r.ReadBytes('\n')
+	defer f.Close()
+	if err := f.SetReadDeadline(time.Now().Add(5 * time.Second)); err != nil {
+		return
+	}
+	r := bufio.NewReaderSize(f, maxHelperRequest)
+	line, err := r.ReadSlice('\n')
 	if err != nil {
 		return
 	}
@@ -94,6 +125,9 @@ func serveConn(h windows.Handle, allowPCM bool) {
 	}
 	b, _ := json.Marshal(resp)
 	b = append(b, '\n')
+	if err := f.SetWriteDeadline(time.Now().Add(5 * time.Second)); err != nil {
+		return
+	}
 	if _, err := f.Write(b); err != nil {
 		logx.Printf("pipe write: %v", err)
 	}

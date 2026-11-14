@@ -24,7 +24,7 @@ func TestPipe(t *testing.T) {
 			pipe, h := testPipeInstance(t)
 			done := make(chan error, 1)
 			go func() {
-				if err := windows.ConnectNamedPipe(h, nil); err != nil && err != windows.ERROR_PIPE_CONNECTED {
+				if err := acceptPipe(h); err != nil {
 					windows.CloseHandle(h)
 					done <- err
 					return
@@ -49,7 +49,7 @@ func TestPipeRejectsOtherProcessBeforeSending(t *testing.T) {
 	go func() {
 		f := os.NewFile(uintptr(h), "test pipe")
 		defer f.Close()
-		if err := windows.ConnectNamedPipe(h, nil); err != nil && err != windows.ERROR_PIPE_CONNECTED {
+		if err := acceptPipe(h); err != nil {
 			// The mismatched client can reject and close before this goroutine runs.
 			if errors.Is(err, windows.ERROR_NO_DATA) {
 				err = nil
