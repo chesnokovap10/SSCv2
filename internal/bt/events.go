@@ -241,6 +241,9 @@ func (s *stackT) onA2DP(cp *C.uint8_t, p []byte) {
 		s.caps.AACBitrate = uint32(C.a2dp_subevent_signaling_media_codec_mpeg_aac_capability_get_bit_rate(cp))
 		s.logf("bt: sink supports AAC (seid %d, max %d bps)", s.caps.AACSeid, s.caps.AACBitrate)
 
+	case C.A2DP_SUBEVENT_SIGNALING_MEDIA_CODEC_MPEG_AAC_CONFIGURATION:
+		s.aacRate.Store(uint32(C.a2dp_subevent_signaling_media_codec_mpeg_aac_configuration_get_sampling_frequency(cp)))
+
 	case C.A2DP_SUBEVENT_SIGNALING_CAPABILITIES_COMPLETE:
 		s.logf("bt: codecs SBC=%v AAC=%v SSC=%v", s.caps.SBC, s.caps.AAC, s.caps.SSC)
 		s.connected.Store(true)
@@ -323,6 +326,7 @@ func (s *stackT) onA2DP(cp *C.uint8_t, p []byte) {
 		s.connected.Store(false)
 		s.streaming.Store(false)
 		s.sscCfg.Store(0)
+		s.aacRate.Store(0)
 		s.resetMedia()
 		s.a2dpCid = 0
 		if s.avrcpCid != 0 {

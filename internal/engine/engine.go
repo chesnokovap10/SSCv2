@@ -484,6 +484,10 @@ func (e *engine) session(addrStr string) (result error) {
 			bt.Disconnect()
 			return errReconnect
 		}
+		if rc == bt.CodecAAC && bt.AACSampleRate() != e.srate {
+			logf("headphones configured AAC at %d Hz, capture is %d Hz; renegotiating", bt.AACSampleRate(), e.srate)
+			return errReconnect
+		}
 		logf("using the %s stream the headphones set up", rc)
 		mtu = rmtu
 	} else {

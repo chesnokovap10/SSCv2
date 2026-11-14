@@ -96,6 +96,7 @@ type stackT struct {
 	// connected to us); codec in remoteCodec. Reset by Configure/Connect.
 	remoteCfg   atomic.Bool
 	remoteCodec atomic.Int32
+	aacRate     atomic.Uint32
 	// sscCfg: capability byte of the SSC configuration in force (0x0C basic,
 	// 0x0E with the 96 kHz UHQ bit), whoever set it
 	sscCfg atomic.Uint32
@@ -453,6 +454,7 @@ func Connect(ctx context.Context, addr Addr) (RemoteCaps, error) {
 		s.remote, s.hasRemote = addr, true
 		s.caps = RemoteCaps{}
 		s.remoteCfg.Store(false)
+		s.aacRate.Store(0)
 		s.connectCh = ch
 		s.connected.Store(false)
 		s.streaming.Store(false)
@@ -564,6 +566,9 @@ func RemoteConfigured() (Codec, int, bool) {
 
 // SSCConfig is the capability byte of the configured SSC stream (0 if none).
 func SSCConfig() uint8 { return uint8(stack.sscCfg.Load()) }
+
+// AACSampleRate is the frequency from the last AAC SetConfiguration.
+func AACSampleRate() int { return int(stack.aacRate.Load()) }
 
 // StartStream sends AVDTP START and waits for it.
 func StartStream(ctx context.Context) error {
