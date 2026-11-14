@@ -106,7 +106,10 @@ func Install() error {
 	if err := os.MkdirAll(Dir(), 0o755); err != nil {
 		return err
 	}
-	restart := stopService()
+	restart, err := stopService()
+	if err != nil {
+		return err
+	}
 	var copyErr error
 	if !sameFile(self, Exe()) {
 		copyErr = CopyExecutable(self, Exe())
@@ -211,31 +214,43 @@ func deleteOnReboot(p string) {
 }
 
 // stopService stops the helper service if it runs; reports whether it did.
-func stopService() bool {
+func stopService() (bool, error) {
 	m, err := mgr.Connect()
 	if err != nil {
-		return false
+		return false, err
 	}
 	defer m.Disconnect()
 	s, err := m.OpenService(serviceName)
+	if errors.Is(err, windows.ERROR_SERVICE_DOES_NOT_EXIST) {
+		return false, nil
+	}
 	if err != nil {
-		return false
+		return false, err
 	}
 	defer s.Close()
 	q, err := s.Query()
 	if err != nil || q.State == svc.Stopped {
-		return false
+		return false, err
 	}
-	if _, err := s.Control(svc.Stop); err != nil {
-		return false
+	if q.State != svc.StopPending {
+		if _, err := s.Control(svc.Stop); err != nil {
+			if errors.Is(err, windows.ERROR_SERVICE_NOT_ACTIVE) {
+				return true, nil
+			}
+			return false, err
+		}
 	}
 	for i := 0; i < 50; i++ {
-		if q, err := s.Query(); err != nil || q.State == svc.Stopped {
-			break
+		q, err := s.Query()
+		if err != nil {
+			return false, err
+		}
+		if q.State == svc.Stopped {
+			return true, nil
 		}
 		time.Sleep(200 * time.Millisecond)
 	}
-	return true
+	return false, fmt.Errorf("%s did not stop within 10 seconds", serviceName)
 }
 
 func startService() error {
