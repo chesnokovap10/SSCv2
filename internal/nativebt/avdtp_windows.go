@@ -81,9 +81,30 @@ func (p *avdtpSession) command(signal byte, payload ...byte) ([]byte, error) {
 	}
 
 	reply := make([]byte, 65535)
-	n, err = p.link.Read(reply)
-	if err != nil {
-		return nil, err
+	for {
+		n, err = p.link.Read(reply)
+		if err != nil {
+			return nil, err
+		}
+		if n < 2 || reply[0]&3 != 0 {
+			break
+		}
+		// We initiate signaling and have no endpoints to offer to the peer.
+		switch reply[0] & 0x0c {
+		case 0, 4:
+			signalIndex := 1 + int(reply[0]>>2&1)
+			if n <= signalIndex {
+				return nil, fmt.Errorf("truncated incoming AVDTP command: % x", reply[:n])
+			}
+			reject := []byte{reply[0]&0xf0 | 1, reply[signalIndex] & 0x3f}
+			written, err := p.link.Write(reject)
+			if err != nil {
+				return nil, err
+			}
+			if written != len(reject) {
+				return nil, io.ErrShortWrite
+			}
+		}
 	}
 	reply = reply[:n]
 	if len(reply) == 0 || reply[0]>>4 != label {
@@ -101,7 +122,7 @@ func (p *avdtpSession) command(signal byte, payload ...byte) ([]byte, error) {
 	case 1, 3:
 		return nil, &rejection{kind, reply[2:]}
 	default:
-		return nil, fmt.Errorf("received an AVDTP command while waiting for a response")
+		return nil, fmt.Errorf("invalid AVDTP response: % x", reply)
 	}
 }
 
