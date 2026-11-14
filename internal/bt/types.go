@@ -1,6 +1,7 @@
 package bt
 
 import (
+	"encoding/hex"
 	"fmt"
 	"sscv2/internal/i18n"
 	"strings"
@@ -21,12 +22,8 @@ func ParseAddr(s string) (Addr, error) {
 	if len(h) != 12 {
 		return a, fmt.Errorf(i18n.T("неверный адрес %q", "invalid address %q"), s)
 	}
-	for i := 0; i < 6; i++ {
-		var b byte
-		if _, err := fmt.Sscanf(h[i*2:i*2+2], "%02x", &b); err != nil {
-			return a, fmt.Errorf(i18n.T("неверный адрес %q", "invalid address %q"), s)
-		}
-		a[i] = b
+	if _, err := hex.Decode(a[:], []byte(h)); err != nil {
+		return Addr{}, fmt.Errorf(i18n.T("неверный адрес %q", "invalid address %q"), s)
 	}
 	return a, nil
 }

@@ -17,6 +17,7 @@ import (
 	"golang.org/x/sys/windows"
 
 	"sscv2/internal/bitrate"
+	"sscv2/internal/bt"
 	"sscv2/internal/codec/sscrate"
 	"sscv2/internal/config"
 	"sscv2/internal/helper"
@@ -313,7 +314,11 @@ func (a *App) ctl(args []string) string {
 		if arg(1) == "" {
 			return "error: address needed"
 		}
-		dev := &config.Device{Addr: strings.ToUpper(arg(1))}
+		addr, err := bt.ParseAddr(arg(1))
+		if err != nil || addr == (bt.Addr{}) {
+			return "error: invalid Bluetooth address"
+		}
+		dev := &config.Device{Addr: addr.String()}
 		if store, err := keys.Open(); err == nil {
 			if c, ok := store.FindClassic(dev.Addr); ok {
 				dev.Name = c.Name
