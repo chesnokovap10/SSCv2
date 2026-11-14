@@ -322,6 +322,14 @@ func (a *App) launchWinUSBLocked() {
 	if err := a.startWinUSBEngineLocked(); err != nil {
 		defer a.setBusy("")
 		logf("start engine: %v", err)
+		if st := a.refreshAdapter(); st.Mode == driver.WinUSB {
+			a.mu.Lock()
+			variant := a.driverVariant
+			a.mu.Unlock()
+			_, restoreErr := helper.Call(ipc.Request{Op: "driver", VID: st.ID.VID, PID: st.ID.PID, Variant: variant})
+			err = errors.Join(err, restoreErr)
+			a.refreshAdapter()
+		}
 		a.t.Balloon("SSCv2", T("Не удалось запустить движок: ", "Could not start the engine: ")+err.Error(), 2)
 		a.markStreamStartFailed()
 	}
