@@ -133,7 +133,7 @@ func (a *App) menuWithEnvironment(env menuEnvironment) []tray.Item {
 	engineUp := a.eng != nil
 
 	items := []tray.Item{
-		{Text: "SSCv2 " + ipc.Version + " — " + s, ID: idRepository, LiveLabel: true},
+		{Text: "SSCv2 " + ipc.Version + " — " + s + a.batteryMenuSuffixLocked(), ID: idRepository, LiveLabel: true},
 		{Separator: true},
 		{Text: T("Громкость наушников", "Headphone volume"), ID: idVolume, Slider: true},
 	}

@@ -21,6 +21,13 @@ func goBtPacket(src C.int, ptype C.uint8_t, channel C.uint16_t, packet *C.uint8_
 	stack.onPacket(int(src), uint8(ptype), uint16(channel), p, packet)
 }
 
+//export goBudsPacket
+func goBudsPacket(ptype C.uint8_t, channel C.uint16_t, packet *C.uint8_t, size C.uint16_t) {
+	if packet != nil && size != 0 {
+		stack.onBudsPacket(uint8(ptype), uint16(channel), unsafe.Slice((*byte)(unsafe.Pointer(packet)), int(size)), packet)
+	}
+}
+
 //export goBtHci
 func goBtHci(ptype C.uint8_t, in C.uint8_t, packet *C.uint8_t, size C.uint16_t) {
 	if packet == nil {

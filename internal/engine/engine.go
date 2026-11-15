@@ -417,6 +417,7 @@ func (e *engine) session(addrStr string) (result error) {
 	e.update(func(s *ipc.EngineStatus) {
 		s.Phase, s.Message = "connecting", i18n.T("подключение к ", "connecting to ")+name
 		s.Headphones, s.HeadphonesName = addr.String(), name
+		s.Battery = nil
 	})
 	for len(e.disc) > 0 {
 		<-e.disc
@@ -727,6 +728,7 @@ func (e *engine) ticker() {
 			s.AVRCP = bt.AVRCPConnected()
 			s.Streaming = bt.Streaming()
 			s.Connected = bt.Connected()
+			s.Battery = bt.PollBudsBattery(s.Headphones, s.HeadphonesName)
 			if s.Mouse != "" {
 				s.MouseState, s.MouseReports = mstate, mrep
 			}

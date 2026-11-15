@@ -9,6 +9,7 @@ import (
 	"io"
 	"sync"
 
+	"sscv2/internal/battery"
 	"sscv2/internal/config"
 )
 
@@ -113,18 +114,19 @@ type EngineStatus struct {
 	Chip        string `json:"chip,omitempty"`
 	Firmware    string `json:"firmware,omitempty"`
 
-	Headphones      string `json:"headphones,omitempty"`
-	HeadphonesName  string `json:"headphonesName,omitempty"`
-	SSCUHQSupported *bool  `json:"sscUhqSupported,omitempty"`
-	Connected       bool   `json:"connected"`
-	Streaming       bool   `json:"streaming"`
-	Codec           string `json:"codec,omitempty"`
-	BitrateKbps     int    `json:"bitrateKbps,omitempty"`
-	SampleRate      int    `json:"sampleRate,omitempty"`
-	Volume          int    `json:"volume"` // 0..127, -1 unknown
-	AVRCP           bool   `json:"avrcp"`
-	CaptureDevice   string `json:"captureDevice,omitempty"`
-	CaptureFormat   string `json:"captureFormat,omitempty"`
+	Headphones      string             `json:"headphones,omitempty"`
+	HeadphonesName  string             `json:"headphonesName,omitempty"`
+	Battery         *battery.BudsLevel `json:"battery,omitempty"`
+	SSCUHQSupported *bool              `json:"sscUhqSupported,omitempty"`
+	Connected       bool               `json:"connected"`
+	Streaming       bool               `json:"streaming"`
+	Codec           string             `json:"codec,omitempty"`
+	BitrateKbps     int                `json:"bitrateKbps,omitempty"`
+	SampleRate      int                `json:"sampleRate,omitempty"`
+	Volume          int                `json:"volume"` // 0..127, -1 unknown
+	AVRCP           bool               `json:"avrcp"`
+	CaptureDevice   string             `json:"captureDevice,omitempty"`
+	CaptureFormat   string             `json:"captureFormat,omitempty"`
 	// What to undo if the engine dies: previous default output, speakers muted.
 	Muted bool `json:"muted"`
 

@@ -16,6 +16,7 @@
 #include "gap.h"
 #include "l2cap.h"
 #include "classic/sdp_server.h"
+#include "classic/rfcomm.h"
 #include "classic/a2dp_source.h"
 #include "classic/avdtp.h"
 #include "classic/avrcp.h"

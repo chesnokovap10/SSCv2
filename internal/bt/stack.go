@@ -29,6 +29,7 @@ const (
 	timerVolRetry = iota
 	timerMouseRetry
 	timerVolReady
+	timerBudsRead
 )
 
 var (
@@ -114,6 +115,7 @@ type stackT struct {
 
 	vol   volPump
 	mouse mouseBridge
+	buds  budsBattery
 }
 
 var stack = &stackT{
@@ -283,6 +285,7 @@ func (s *stackT) loop(started chan struct{}) {
 	C.gap_set_page_timeout(0x2000) // 5.12 s before the engine can retry paging
 
 	C.l2cap_init()
+	C.rfcomm_init()
 	C.sdp_init()
 
 	if s.opts.Mouse != nil {
@@ -655,6 +658,7 @@ func Disconnect() {
 	ch := make(chan error, 1)
 	var had bool
 	_ = s.callSync(func() {
+		s.clearBudsBattery()
 		if s.a2dpCid == 0 {
 			return
 		}
@@ -796,6 +800,8 @@ func (s *stackT) onTimer(id int) {
 		s.vol.pump(s)
 	case timerMouseRetry:
 		s.mouse.connect(s)
+	case timerBudsRead:
+		s.closeBudsProbe()
 	case timerVolReady:
 		if !s.vol.ready {
 			s.logf("volume: no level from Windows confirmed in 5 s - mirroring headphone changes anyway")

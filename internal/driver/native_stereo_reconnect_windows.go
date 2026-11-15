@@ -34,6 +34,17 @@ type stereoBluetoothDevice struct {
 	Name          [248]uint16
 }
 
+// WindowsHeadphonesConnected reports whether the paired device is connected
+// to a Windows radio.
+func WindowsHeadphonesConnected(address uint64) bool {
+	var connected bool
+	_ = withStereoService(address, func(_ windows.Handle, info *stereoBluetoothDevice) error {
+		connected = info.Connected != 0
+		return nil
+	})
+	return connected
+}
+
 // ReconnectNativeStereo cycles the A2DP service only on the supported Buds
 // whose Microsoft driver has already been restored.
 func ReconnectNativeStereo() error {

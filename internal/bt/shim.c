@@ -20,6 +20,8 @@
 #include "classic/hid_host.h"
 #include "classic/btstack_link_key_db.h"
 #include "classic/sdp_server.h"
+#include "classic/rfcomm.h"
+#include "classic/sdp_client_rfcomm.h"
 #include "classic/sdp_util.h"
 #include "ble/sm.h"
 #include "ble/att_db_util.h"
@@ -68,6 +70,19 @@ static void on_a2dp(uint8_t t, uint16_t ch, uint8_t *p, uint16_t n)  { goBtPacke
 static void on_avrcp(uint8_t t, uint16_t ch, uint8_t *p, uint16_t n) { goBtPacket(SSC_SRC_AVRCP, t, ch, p, n); }
 static void on_sm(uint8_t t, uint16_t ch, uint8_t *p, uint16_t n)    { goBtPacket(SSC_SRC_SM, t, ch, p, n); }
 static void on_hids(uint8_t t, uint16_t ch, uint8_t *p, uint16_t n)  { goBtPacket(SSC_SRC_HIDS, t, ch, p, n); }
+
+static void on_buds(uint8_t t, uint16_t ch, uint8_t *p, uint16_t n) { goBudsPacket(t, ch, p, n); }
+
+uint8_t ssc_buds_query(uint8_t *addr) {
+    /* Samsung SPPNew UUID, in SDP byte order. */
+    static const uint8_t service[] = {0x2e, 0x73, 0xa4, 0xad, 0x33, 0x2d, 0x41, 0xfc,
+                                      0x90, 0xe2, 0x16, 0xbe, 0xf0, 0x65, 0x23, 0xf2};
+    return sdp_client_query_rfcomm_channel_and_name_for_uuid128(on_buds, addr, service);
+}
+
+uint8_t ssc_buds_open(uint8_t *addr, uint8_t channel, uint16_t *cid) {
+    return rfcomm_create_channel(on_buds, addr, channel, cid);
+}
 
 void ssc_register_handlers(void) {
     g_hci_cb.callback = on_hci;

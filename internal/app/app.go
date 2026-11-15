@@ -54,6 +54,7 @@ type App struct {
 	carry             *ipc.AudioCarry
 	menuText          map[int]string
 	menuEnvironment   *menuEnvironment
+	windowsBattery    windowsBattery
 	menuReading       bool
 	menuDeviceIDs     map[menuDeviceKey]int
 	menuDeviceTargets []menuDevice
@@ -118,6 +119,13 @@ func (a *App) startup() {
 	a.initializePlayback()
 	a.refresh()
 
+	go func() {
+		for {
+			a.pollWindowsBattery()
+			a.t.RefreshMenu()
+			time.Sleep(10 * time.Second)
+		}
+	}()
 	for {
 		time.Sleep(10 * time.Second)
 		a.mu.Lock()

@@ -28,6 +28,8 @@ Use **Settings → Uninstall…** to return the adapter to Windows and remove th
 
 **Device info…** shows the adapter, codec, actual bitrate, audio source and connection status.
 
+The tray menu shows separate left and right battery percentages for connected Galaxy Buds that report them.
+
 ### Volume and mute
 
 - Use the **Headphone volume** slider, its mute button or the keyboard volume keys in codec mode. The scale is **0–127**, with a keyboard step of **4**. The slider stays visible while the stream starts and in **Off** mode.

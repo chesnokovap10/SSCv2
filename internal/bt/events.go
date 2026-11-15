@@ -162,6 +162,7 @@ func (s *stackT) onPacket(src int, ptype uint8, channel uint16, p []byte, cp *C.
 			return
 		}
 		s.logf("bt: headphones link down (0x%02X %s)", reason, hciErr(reason))
+		s.clearBudsBattery()
 		s.aclHandle.Store(0xFFFF)
 		s.vol.hardwareAfter.Store(0)
 		if s.connected.Load() || s.streaming.Load() {
@@ -322,6 +323,7 @@ func (s *stackT) onA2DP(cp *C.uint8_t, p []byte) {
 
 	case C.A2DP_SUBEVENT_SIGNALING_CONNECTION_RELEASED:
 		s.logf("bt: A2DP signalling released")
+		s.clearBudsBattery()
 		wasUp := s.connected.Load() || s.streaming.Load()
 		s.connected.Store(false)
 		s.streaming.Store(false)
