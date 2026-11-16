@@ -196,6 +196,7 @@ func (m *mouseBridge) connectHIDS(s *stackT) {
 	var cid C.uint16_t
 	if st := C.ssc_hids_connect(C.uint16_t(m.handle), &cid); st != 0 {
 		s.logf("mouse: hids_host_connect failed (0x%02X)", uint8(st))
+		C.gap_disconnect(C.hci_con_handle_t(m.handle)) // onDisconnect schedules a fresh attempt
 		return
 	}
 	m.hidsCid = uint16(cid)

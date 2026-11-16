@@ -401,7 +401,7 @@ func (s *stackT) onAVRCP(cp *C.uint8_t, p []byte) {
 			s.vol.remote.Store(uint32(v))
 		default:
 			s.vol.remote.Store(uint32(v))
-			s.logf("volume: changed on the headphones to %d/127 -> Windows", v)
+			s.logf("volume: independent headphone level changed to %d/127", v)
 			s.emit(Event{Kind: EvVolume, Addr: s.remote, Volume: v})
 		}
 		C.avrcp_controller_enable_notification(C.uint16_t(s.avrcpCid), C.AVRCP_NOTIFICATION_EVENT_VOLUME_CHANGED)
@@ -412,7 +412,7 @@ func (s *stackT) onAVRCP(cp *C.uint8_t, p []byte) {
 			return
 		}
 		op := uint8(C.avrcp_subevent_operation_get_operation_id(cp))
-		key := map[uint8]int{C.AVRCP_OPERATION_ID_PLAY: MediaPlayPause, C.AVRCP_OPERATION_ID_PAUSE: MediaPlayPause,
+		key := map[uint8]int{C.AVRCP_OPERATION_ID_PLAY: MediaPlay, C.AVRCP_OPERATION_ID_PAUSE: MediaPause,
 			C.AVRCP_OPERATION_ID_FORWARD: MediaNext, C.AVRCP_OPERATION_ID_BACKWARD: MediaPrev,
 			C.AVRCP_OPERATION_ID_STOP: MediaStop}[op]
 		if key == 0 {
@@ -432,10 +432,12 @@ func (s *stackT) onAVRCP(cp *C.uint8_t, p []byte) {
 		if C.avrcp_subevent_set_absolute_volume_response_get_command_type(cp) != C.AVRCP_CTYPE_RESPONSE_ACCEPTED || !s.vol.accept(v) {
 			s.vol.hardwareAfter.Store(0)
 			s.logf("volume: headphones did not accept %d/127 (reported %d/127)", s.vol.sent, v)
+			s.vol.retryUnconfirmed()
 			s.vol.pump(s)
 			return
 		}
 		s.vol.remote.Store(uint32(v))
+		s.vol.retries = 0
 		if s.vol.readyAt.IsZero() {
 			s.vol.ready = true
 			s.vol.readyAt = time.Now()

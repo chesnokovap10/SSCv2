@@ -51,8 +51,8 @@ func PauseOnLinkLoss(playing bool, logf func(string, ...any)) {
 		logf("link lost (nothing playing)")
 		return
 	}
-	logf("link lost while playing: sending media Play/Pause")
-	mediaPlayPause()
+	logf("link lost while playing: sending media Pause")
+	runMediaCommand(mediaPause)
 	time.Sleep(300 * time.Millisecond)
 }
 
@@ -65,7 +65,9 @@ func HandleMediaKey(key int) {
 		runMediaCommand(mediaNextTrack)
 	case bt.MediaPrev:
 		runMediaCommand(mediaPreviousTrack)
-	case bt.MediaPlayPause, bt.MediaPause:
+	case bt.MediaPause:
+		runMediaCommand(mediaPause)
+	case bt.MediaPlayPause:
 		mediaPlayPause()
 	case bt.MediaStop:
 		pressKey(vkMediaStop)

@@ -5,5 +5,6 @@ static const GUID SscPcmPropertySet =
     {0xcbf893b1, 0xa248, 0x4b4c, {0x84, 0x35, 0x90, 0x78, 0x79, 0x8c, 0x7e, 0x23}};
 
 void SscPcmInitialize();
+void SscPcmReset();
 void SscPcmWrite(const BYTE* data, ULONG size);
 NTSTATUS SscPcmRead(PPCPROPERTY_REQUEST request);

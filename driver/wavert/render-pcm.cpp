@@ -19,6 +19,14 @@ void SscPcmInitialize()
     KeInitializeSpinLock(&pcmLock);
 }
 
+void SscPcmReset()
+{
+    KIRQL previous;
+    KeAcquireSpinLock(&pcmLock, &previous);
+    readOffset = queued = 0;
+    KeReleaseSpinLock(&pcmLock, previous);
+}
+
 void SscPcmWrite(const BYTE* data, ULONG size)
 {
     if (size > capacity - frameSize) {
@@ -45,8 +53,9 @@ void SscPcmWrite(const BYTE* data, ULONG size)
 NTSTATUS SscPcmRead(PPCPROPERTY_REQUEST request)
 {
     PAGED_CODE();
-    if (request->Verb != KSPROPERTY_TYPE_GET || request->ValueSize < frameSize ||
-        request->Value == nullptr || request->Irp == nullptr) {
+    const bool reset = request->Verb == KSPROPERTY_TYPE_SET;
+    if ((!reset && (request->Verb != KSPROPERTY_TYPE_GET || request->ValueSize < frameSize ||
+        request->Value == nullptr)) || request->Irp == nullptr) {
         return STATUS_INVALID_PARAMETER;
     }
     PEPROCESS process = IoGetRequestorProcess(request->Irp);
@@ -58,6 +67,12 @@ NTSTATUS SscPcmRead(PPCPROPERTY_REQUEST request)
     PsDereferencePrimaryToken(token);
     if (!admin) {
         return STATUS_ACCESS_DENIED;
+    }
+
+    if (reset) {
+        SscPcmReset();
+        request->ValueSize = 0;
+        return STATUS_SUCCESS;
     }
 
     KIRQL previous;

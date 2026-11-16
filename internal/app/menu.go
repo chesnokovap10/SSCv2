@@ -152,6 +152,9 @@ func (a *App) menuWithEnvironment(env menuEnvironment) []tray.Item {
 		choices := bitrate.Choices(mode)
 		cur := policy.Selected(mode, a.s.Bitrate(mode))
 		label := T("Битрейт: ", "Bitrate: ") + bitrateText(cur)
+		if !policy.Offered(mode, cur) {
+			label += T(" (недоступен)", " (unavailable)")
+		}
 		autoRate := ""
 		var activeRate int
 		if p := a.native; p != nil && p.Mode == mode && p.ready {

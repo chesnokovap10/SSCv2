@@ -74,6 +74,9 @@ type Encoder struct {
 // (the media payload of one AVDTP packet when every frame must fit one
 // packet: Galaxy Buds offer 667 bytes, i.e. 250 kbps at 48 kHz); 0 = no cap.
 func New(sampleRate, channels, bitrate, frameBudget int) (*Encoder, error) {
+	if bitrate <= 0 || bitrate > 576000 {
+		return nil, fmt.Errorf("aac: invalid bitrate %d", bitrate)
+	}
 	if channels != 1 && channels != 2 {
 		return nil, fmt.Errorf(i18n.T("aac: %d каналов не поддерживается", "aac: %d channels not supported"), channels)
 	}
@@ -100,8 +103,14 @@ func New(sampleRate, channels, bitrate, frameBudget int) (*Encoder, error) {
 	if channels == 1 {
 		mode = C.MODE_1
 	}
+	var paramErr error
 	set := func(p C.AACENC_PARAM, v int) {
-		C.aac_set(h, C.int(p), C.uint(v))
+		if paramErr != nil {
+			return
+		}
+		if e := C.aac_set(h, C.int(p), C.uint(v)); e != 0 {
+			paramErr = fmt.Errorf("AAC parameter %#x=%d: %d", int(p), v, int(e))
+		}
 	}
 	set(C.AACENC_AOT, C.AOT_AAC_LC)
 	set(C.AACENC_SAMPLERATE, sampleRate)
@@ -120,6 +129,10 @@ func New(sampleRate, channels, bitrate, frameBudget int) (*Encoder, error) {
 	// easily carries the full 20 kHz (fdk's maximum for AAC-LC).
 	if enc.Bitrate >= 192000 {
 		set(C.AACENC_BANDWIDTH, 20000)
+	}
+	if paramErr != nil {
+		C.aacEncClose(&h)
+		return nil, paramErr
 	}
 	if e := C.aac_init(h); e != 0 {
 		C.aacEncClose(&h)

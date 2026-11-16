@@ -79,26 +79,40 @@ func (a *App) serveCtl() {
 	}
 	sa := &windows.SecurityAttributes{Length: uint32(unsafe.Sizeof(windows.SecurityAttributes{})), SecurityDescriptor: sd}
 	name, _ := windows.UTF16PtrFromString(ctlPipeName())
+	active := make(chan struct{}, 16)
 	for {
-		h, err := windows.CreateNamedPipe(name, windows.PIPE_ACCESS_DUPLEX,
+		h, err := windows.CreateNamedPipe(name, windows.PIPE_ACCESS_DUPLEX|windows.FILE_FLAG_OVERLAPPED,
 			windows.PIPE_TYPE_BYTE|windows.PIPE_READMODE_BYTE|windows.PIPE_WAIT|windows.PIPE_REJECT_REMOTE_CLIENTS,
 			windows.PIPE_UNLIMITED_INSTANCES, 64<<10, 64<<10, 0, sa)
 		if err != nil {
 			logf("ctl pipe: %v", err)
 			return
 		}
-		if err := windows.ConnectNamedPipe(h, nil); err != nil && err != windows.ERROR_PIPE_CONNECTED {
+		if err := helper.AcceptPipe(h); err != nil {
+			windows.CloseHandle(h)
+			continue
+		}
+		select {
+		case active <- struct{}{}:
+		default:
 			windows.CloseHandle(h)
 			continue
 		}
 		go func() {
+			defer func() { <-active }()
 			f := os.NewFile(uintptr(h), "ctl")
-			defer func() { windows.FlushFileBuffers(h); windows.DisconnectNamedPipe(h); f.Close() }()
-			line, err := bufio.NewReader(f).ReadString('\n')
+			defer f.Close()
+			if err := f.SetReadDeadline(time.Now().Add(5 * time.Second)); err != nil {
+				return
+			}
+			line, err := bufio.NewReaderSize(f, 4096).ReadSlice('\n')
 			if err != nil {
 				return
 			}
-			out := a.ctl(strings.Fields(line))
+			out := a.ctl(strings.Fields(string(line)))
+			if err := f.SetWriteDeadline(time.Now().Add(5 * time.Second)); err != nil {
+				return
+			}
 			f.Write([]byte(out + "\n"))
 		}()
 	}

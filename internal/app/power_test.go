@@ -9,6 +9,22 @@ import (
 	"sscv2/internal/tray"
 )
 
+func TestResumeInvalidatesNativeAndIgnoresDuplicate(t *testing.T) {
+	p := &nativeProcess{ready: true}
+	a := &App{mode: config.ModeAAC, native: p}
+	if a.invalidateNativeAfterResumeLocked() != p || p.ready {
+		t.Fatal("native readiness survived resume")
+	}
+	if a.invalidateNativeAfterResumeLocked() != nil {
+		t.Fatal("duplicate recovery")
+	}
+	a.resumeNative = nil
+	a.quitting = true
+	if a.invalidateNativeAfterResumeLocked() != nil {
+		t.Fatal("recovery while quitting")
+	}
+}
+
 func TestStreamingIconRequiresCurrentConnection(t *testing.T) {
 	p := &workerProcess{}
 	for _, tc := range []struct {

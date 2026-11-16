@@ -65,13 +65,10 @@ func (p Policy) Offered(mode config.Mode, kbps int) bool {
 	}
 }
 
-// Selected resolves a saved choice to Auto when the current transport or
-// headphones cannot use it.
+// Selected preserves an explicit choice. Callers must report incompatibility;
+// changing transport or hiding experimental rates must not select Auto.
 func (p Policy) Selected(mode config.Mode, saved int) int {
-	if p.Offered(mode, saved) {
-		return saved
-	}
-	return 0
+	return saved
 }
 
 // Experimental marks rates outside the model profile or the native defaults.

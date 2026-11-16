@@ -105,8 +105,8 @@ func TestMenuAACNoMaxMTU(t *testing.T) {
 			if b.ID == idBitrateBase+256 {
 				t.Error("256 offered without Max MTU")
 			}
-			if b.ID == idBitrateBase && !b.Checked {
-				t.Error("saved 256 without Max MTU should show as Auto")
+			if b.ID == idBitrateBase && b.Checked {
+				t.Error("saved 256 without Max MTU must not show as Auto")
 			}
 		}
 		return
@@ -134,8 +134,8 @@ func TestMenuWorkingBitrates(t *testing.T) {
 	if got := sscOffered(a); got[len(got)-1] != 229 {
 		t.Errorf("Buds2 Pro: %v, want up to 229", got)
 	}
-	if a.winUSBBitrate(config.ModeSSC) != 0 {
-		t.Error("saved 328 should fall back to Auto")
+	if a.winUSBBitrate(config.ModeSSC) != 328 || !a.noBitrate(config.ModeSSC) {
+		t.Error("saved 328 must remain selected and report incompatibility")
 	}
 	s.AllBitrates = true
 	if got := sscOffered(a); got[len(got)-1] != 328 {

@@ -1,6 +1,7 @@
 package app
 
 import (
+	"errors"
 	"time"
 
 	"sscv2/internal/audio"
@@ -24,6 +25,11 @@ type nativeProcess struct {
 
 func (a *App) startNativeWorker(mode config.Mode, path, endpoint, address, stereo string) error {
 	a.mu.Lock()
+	if a.noBitrate(mode) {
+		err := errors.New(a.unsupportedText(mode))
+		a.mu.Unlock()
+		return err
+	}
 	stream := a.nativeStreamLocked(mode)
 	a.mu.Unlock()
 	worker, err := startWorkerProcess("native-worker", "native-stderr.log", ipc.NativeConfig{
@@ -57,6 +63,11 @@ func (a *App) requestNativeCodec(p *nativeProcess, mode config.Mode) (bool, erro
 	}
 	started := make(chan struct{})
 	a.mu.Lock()
+	if a.noBitrate(mode) {
+		err := errors.New(a.unsupportedText(mode))
+		a.mu.Unlock()
+		return false, err
+	}
 	stream := a.nativeStreamLocked(mode)
 	if p.NativeStream == stream {
 		a.mu.Unlock()
@@ -89,7 +100,7 @@ func (a *App) watchNativeStartup(p *nativeProcess, started <-chan struct{}) {
 
 func (a *App) onNativeEvent(p *nativeProcess, event ipc.Event) {
 	a.mu.Lock()
-	if a.native != p {
+	if a.native != p || a.resumeNative == p {
 		a.mu.Unlock()
 		return
 	}

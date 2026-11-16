@@ -36,6 +36,7 @@ type App struct {
 	native        *nativeProcess
 	nativeWaiting *nativeProcess // last worker, while waiting for its headphones to return
 	resumeEngine  *workerProcess // old process being replaced after system sleep
+	resumeNative  *nativeProcess
 	st            ipc.EngineStatus
 	scan          []ipc.Found
 	scanning      bool

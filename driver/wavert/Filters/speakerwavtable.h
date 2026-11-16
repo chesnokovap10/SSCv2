@@ -212,7 +212,7 @@ PCPROPERTY_ITEM PropertiesSpeakerWaveFilter[] =
     {
         &SscPcmPropertySet,
         0,
-        KSPROPERTY_TYPE_GET,
+        KSPROPERTY_TYPE_GET | KSPROPERTY_TYPE_SET,
         SscPcmRead
     },
     {

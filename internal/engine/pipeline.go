@@ -32,6 +32,7 @@ type pipeline struct {
 	stereo          []float32
 	accum           []byte
 	active          atomic.Bool
+	errors          chan error   // first failure of the current encoder
 	volumeStartedAt atomic.Int64 // Unix milliseconds at A2DP stream startup
 	// volume holds the PCM level in bits 0..6 and mute in bit 7.
 	volume atomic.Uint32
@@ -55,6 +56,13 @@ func (p *pipeline) set(enc Encoder, mtu int, frag bool) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.enc = enc
+	if p.errors == nil {
+		p.errors = make(chan error, 1)
+	}
+	select {
+	case <-p.errors:
+	default:
+	}
 	p.frag = frag
 	// Payload budget: the media payload BTstack reports (L2CAP MTU minus
 	// the RTP header).
@@ -123,6 +131,13 @@ func (p *pipeline) onCapture(s []float32, frames, ch, rate int, discontinuity bo
 			p.pcm = append(p.pcm, clip(l), clip(r))
 		}
 	}
+	if ch != 2 || mix != nil {
+		for _, v := range p.pcm[len(p.pcm)-frames*2:] {
+			if a := float32(math.Abs(float64(v))); a > peak {
+				peak = a
+			}
+		}
+	}
 	if discontinuity {
 		fade := min(frames, rate*2/1000)
 		for frame := range fade {
@@ -138,7 +153,10 @@ func (p *pipeline) onCapture(s []float32, frames, ch, rate int, discontinuity bo
 	block := p.enc.FrameLen() * 2
 	off := 0
 	if p.perPacket {
-		p.encodePerPacket(block, &off)
+		if err := p.encodePerPacket(block, &off); err != nil {
+			p.fail(err)
+			return
+		}
 		n := copy(p.pcm, p.pcm[off:])
 		p.pcm = p.pcm[:n]
 		return
@@ -148,7 +166,11 @@ func (p *pipeline) onCapture(s []float32, frames, ch, rate int, discontinuity bo
 	nframes := 0
 	for off+block <= len(p.pcm) {
 		out, err := p.encode(p.pcm[off : off+block])
-		if err == nil && len(out) > 0 {
+		if err != nil {
+			p.fail(err)
+			return
+		}
+		if len(out) > 0 {
 			p.encBytes.Add(uint64(len(out)))
 			if int32(len(out)) > p.maxFrame.Load() {
 				p.maxFrame.Store(int32(len(out)))
@@ -279,11 +301,14 @@ func (p *pipeline) encode(pcm []float32) ([]byte, error) {
 }
 
 // encodePerPacket: one frame per packet, the RTP timestamp counts packets.
-func (p *pipeline) encodePerPacket(block int, off *int) {
+func (p *pipeline) encodePerPacket(block int, off *int) error {
 	for *off+block <= len(p.pcm) {
 		out, err := p.encode(p.pcm[*off : *off+block])
 		*off += block
-		if err != nil || len(out) == 0 {
+		if err != nil {
+			return err
+		}
+		if len(out) == 0 {
 			continue
 		}
 		p.encBytes.Add(uint64(len(out)))
@@ -295,6 +320,17 @@ func (p *pipeline) encodePerPacket(block int, off *int) {
 		}
 		p.ts++
 		bt.SendMedia(out, p.ts)
+	}
+	return nil
+}
+
+// fail runs under mu on the capture thread; the session owns teardown.
+func (p *pipeline) fail(err error) {
+	p.active.Store(false)
+	p.pcm = p.pcm[:0]
+	select {
+	case p.errors <- err:
+	default:
 	}
 }
 

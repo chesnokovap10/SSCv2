@@ -24,6 +24,7 @@ var (
 
 const (
 	mediaPlay          = 10 // IGlobalSystemMediaTransportControlsSession::TryPlayAsync
+	mediaPause         = 11 // IGlobalSystemMediaTransportControlsSession::TryPauseAsync
 	mediaNextTrack     = 16 // IGlobalSystemMediaTransportControlsSession::TrySkipNextAsync
 	mediaPreviousTrack = 17
 )

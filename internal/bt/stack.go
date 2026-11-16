@@ -158,16 +158,32 @@ func (s *stackT) drain() {
 
 // callSync runs f on the BTstack thread and waits for it.
 func (s *stackT) callSync(f func()) error {
+	return s.callSyncWithin(f, callTimeout)
+}
+
+func (s *stackT) callSyncWithin(f func(), timeout time.Duration) error {
 	if !s.loopRunning.Load() {
 		return ErrNotReady
 	}
 	done := make(chan struct{})
-	s.call(func() { f(); close(done) })
+	var state atomic.Int32 // 0 queued, 1 executing, 2 cancelled
+	s.call(func() {
+		if state.CompareAndSwap(0, 1) {
+			f()
+		}
+		close(done)
+	})
 	select {
 	case <-done:
 		return nil
-	case <-time.After(callTimeout):
-		return ErrTimeout
+	case <-time.After(timeout):
+		if state.CompareAndSwap(0, 2) {
+			return ErrTimeout
+		}
+		// An executing callback may still write caller-owned results. Join it
+		// rather than returning those results while they are being modified.
+		<-done
+		return nil
 	}
 }
 

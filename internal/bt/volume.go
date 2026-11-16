@@ -32,16 +32,20 @@ type volPump struct {
 	// ready: our level (from Windows) was confirmed by the headphones. Until
 	// then their own reports (e.g. the interim answer to the notification
 	// subscription, often 100 % after reconnect) are not mirrored to Windows.
-	ready   bool
-	readyAt time.Time
-	sent    int
-	sentAt  time.Time
+	ready      bool
+	readyAt    time.Time
+	sent       int
+	sentAt     time.Time
+	retryValue int
+	retries    int
 }
 
 func (v *volPump) reset() {
 	v.hardwareAfter.Store(0)
 	v.inFlight = false
 	v.sent = -1
+	v.retries = 0
+	v.retryValue = -1
 	v.ready = false
 	v.readyAt = time.Time{}
 }
@@ -78,6 +82,10 @@ func (v *volPump) pump(s *stackT) {
 	if s.avrcpCid == 0 {
 		return
 	}
+	want := int(v.desired.Load())
+	if want != v.retryValue {
+		v.retryValue, v.retries = want, 0
+	}
 	if v.inFlight {
 		if time.Since(v.sentAt) < time.Second {
 			return
@@ -85,8 +93,8 @@ func (v *volPump) pump(s *stackT) {
 		v.inFlight = false
 		v.hardwareAfter.Store(0)
 		s.logf("volume: headphones did not confirm %d/127", v.sent)
+		v.retryUnconfirmed()
 	}
-	want := int(v.desired.Load())
 	if want < 0 || want == v.sent {
 		return
 	}
@@ -102,6 +110,13 @@ func (v *volPump) pump(s *stackT) {
 		return
 	}
 	C.ssc_timer_set(timerVolRetry, 150) // AVRCP busy: retry shortly
+}
+
+func (v *volPump) retryUnconfirmed() {
+	if v.retries < 2 {
+		v.retries++
+		v.sent = -1
+	}
 }
 
 func init() {

@@ -474,7 +474,7 @@ func (a *App) nativeWorkerExited(p *nativeProcess, err error, last string) {
 	a.opMu.Lock()
 	defer a.opMu.Unlock()
 	a.mu.Lock()
-	current, quitting := a.native == p, a.quitting
+	current, quitting := a.native == p && a.resumeNative != p, a.quitting
 	a.mu.Unlock()
 	if !current {
 		return

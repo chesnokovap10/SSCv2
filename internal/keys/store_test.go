@@ -2,11 +2,30 @@ package keys
 
 import (
 	"fmt"
+	"path/filepath"
 	"sync"
 	"testing"
 
 	"sscv2/internal/bt"
 )
+
+func TestAdapterChangeDiscardsIncompatibleBonds(t *testing.T) {
+	s := &Store{path: filepath.Join(t.TempDir(), "keys.json")}
+	addr := bt.Addr{1, 2, 3, 4, 5, 6}
+	for _, adapter := range []string{"adapter-a", "adapter-a", "adapter-b"} {
+		in := File{Adapter: adapter}
+		if s.Snapshot().Adapter == "" {
+			in.Classic = []Classic{{Addr: addr.String(), Key: "00000000000000000000000000000001", Type: 7}}
+		}
+		if err := s.ImportWindows(in); err != nil {
+			t.Fatal(err)
+		}
+		_, _, found := s.Get(addr)
+		if found != (adapter == "adapter-a") {
+			t.Fatalf("adapter %s found=%v", adapter, found)
+		}
+	}
+}
 
 func TestStaleStorePreservesNewBonds(t *testing.T) {
 	t.Setenv("APPDATA", t.TempDir())

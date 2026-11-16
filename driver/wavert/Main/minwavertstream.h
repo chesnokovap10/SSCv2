@@ -90,6 +90,8 @@ protected:
     ULONGLONG                   m_ullPresentationPosition;
     ULONG                       m_ulLastOsWritePacket;
     LONGLONG                    m_llPacketCounter;
+	LONGLONG                    m_llNotifiedPacket;
+	ULONGLONG                   m_ullEosPosition;
     ULONGLONG                   m_ullDmaTimeStamp;
     LARGE_INTEGER               m_ullPerformanceCounterFrequency;
     ULONGLONG                   m_hnsElapsedTimeCarryForward;

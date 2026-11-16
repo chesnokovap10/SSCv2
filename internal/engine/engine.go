@@ -314,6 +314,12 @@ func (e *engine) run() error {
 		}
 		msg := i18n.T("ожидание наушников", "waiting for the headphones")
 		switch {
+		case errors.Is(err, errSessionChanged):
+			e.releaseSessionAudio()
+			activeUntil = time.Now().Add(activeWindow)
+			reconnectUntil = time.Time{}
+			backoff = 3 * time.Second
+			continue
 		case errors.Is(err, errStreamStart):
 			return err
 		case errors.Is(err, errLinkLost):
@@ -370,6 +376,8 @@ func (e *engine) run() error {
 // activeWindow: how long the headphones are called actively after the mode
 // was switched on (Windows also only reconnects audio devices for a while).
 const activeWindow = 60 * time.Second
+
+var errSessionChanged = errors.New("headphones or audio output changed")
 
 type incomingEv struct {
 	kind bt.EventKind
@@ -533,6 +541,8 @@ func (e *engine) session(addrStr string) (result error) {
 	e.installEncoder(enc, mtu, codec)
 	startingSelectedStream = false
 	defer e.pipe.set(nil, 0, false)
+	outputCheck := time.NewTicker(time.Second)
+	defer outputCheck.Stop()
 
 	for {
 		select {
@@ -541,10 +551,19 @@ func (e *engine) session(addrStr string) (result error) {
 		case <-e.disc:
 			return errLinkLost
 		case err := <-e.cap.Errors():
+			if output, lookupErr := audio.DefaultRender(); lookupErr == nil && output.ID != e.cap.Device.ID {
+				return errSessionChanged
+			}
 			return err
+		case err := <-e.pipe.errors:
+			return fmt.Errorf("%w: encode: %v", errStreamStart, err)
+		case <-outputCheck.C:
+			if output, err := audio.DefaultRender(); err == nil && output.ID != e.cap.Device.ID {
+				return errSessionChanged
+			}
 		case a := <-e.retarget:
 			e.target = a
-			return nil
+			return errSessionChanged
 		case change := <-e.changeCodec:
 			if change.SSCUHQ && !uhqSupported && !change.TryUHQ {
 				return fmt.Errorf("%w: %v", errStreamStart, bt.ErrNoCodec)

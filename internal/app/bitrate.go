@@ -203,11 +203,15 @@ func (a *App) nativeStreamLocked(mode config.Mode) ipc.NativeStream {
 // noBitrate: nothing can be offered for the codec on these headphones (not
 // supported by their profile, Settings > All bitrates off). a.mu held.
 func (a *App) noBitrate(m config.Mode) bool {
-	return m.Streaming() && !a.offered(m, 0)
+	return m.Streaming() && !a.offered(m, a.s.Bitrate(m))
 }
 
 // unsupportedText: the status / menu note for such a codec. a.mu held.
 func (a *App) unsupportedText(m config.Mode) string {
+	if kbps := a.s.Bitrate(m); kbps != 0 {
+		return fmt.Sprintf(T("Выбранный битрейт %d кбит/с недоступен для %s с текущими настройками; выберите другой битрейт или Auto.",
+			"Selected bitrate %d kbps is unavailable for %s with the current settings; choose another bitrate or Auto."), kbps, modeName(m))
+	}
 	_, model := a.workingMax(m)
 	return unsupportedBitrateText(m, model)
 }

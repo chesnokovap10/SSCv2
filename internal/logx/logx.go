@@ -22,8 +22,8 @@ var (
 	out      io.Writer = os.Stderr
 	tag      string
 	dir      string
-	dbgFile  *os.File
-	capture  *[]string
+	dbgFile  io.WriteCloser
+	captures = make(map[*[]string]struct{})
 	debugOn  atomic.Bool
 	startPID = os.Getpid()
 )
@@ -34,19 +34,19 @@ const (
 	DebugLogName    = "debug.log"
 )
 
-// Open directs the log to dir\name (rotated once at 4 MB). tag prefixes
+// Open directs the log to dir\name (rotated at 4 MB). tag prefixes
 // every line ("tray", "engine").
 func Open(d, name, t string) {
 	mu.Lock()
 	defer mu.Unlock()
 	tag, dir = t, d
 	path := filepath.Join(d, name)
-	if fi, err := os.Stat(path); err == nil && fi.Size() > rotateSize {
-		_ = os.Rename(path, path+".old")
-	}
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
+	f, err := openJournal(path, rotateSize)
 	if err != nil {
 		return
+	}
+	if old, ok := out.(io.Closer); ok && out != os.Stderr {
+		old.Close()
 	}
 	out = f
 	if os.Getenv("SSCV2_DEBUG") == "1" {
@@ -67,12 +67,8 @@ func setDebugLocked(on bool) {
 	}
 	if on && dir != "" {
 		path := filepath.Join(dir, DebugLogName)
-		if fi, err := os.Stat(path); err == nil && fi.Size() > debugRotateSize {
-			_ = os.Rename(path, path+".old") // another process may hold it: then keep appending
-		}
-		// O_APPEND: every line is one write at the end of the file, so the
-		// tray and the engine can share it.
-		if f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600); err == nil {
+		// The journal lock coordinates writes and rotation across processes.
+		if f, err := openJournal(path, debugRotateSize); err == nil {
 			dbgFile = f
 		}
 	}
@@ -101,7 +97,7 @@ func write(kind, msg string) {
 	if dbgFile != nil {
 		_, _ = io.WriteString(dbgFile, line)
 	}
-	if capture != nil {
+	for capture := range captures {
 		*capture = append(*capture, strings.TrimRight(line, "\n"))
 	}
 }
@@ -123,12 +119,12 @@ func Dbgf(cat, format string, args ...any) {
 func Capture() func() []string {
 	mu.Lock()
 	var lines []string
-	capture = &lines
+	captures[&lines] = struct{}{}
 	mu.Unlock()
 	return func() []string {
 		mu.Lock()
 		defer mu.Unlock()
-		capture = nil
+		delete(captures, &lines)
 		return lines
 	}
 }
@@ -145,7 +141,7 @@ func Writer() io.Writer {
 func Close() {
 	mu.Lock()
 	defer mu.Unlock()
-	if f, ok := out.(*os.File); ok && f != os.Stderr {
+	if f, ok := out.(io.Closer); ok && out != os.Stderr {
 		f.Close()
 	}
 	out = os.Stderr

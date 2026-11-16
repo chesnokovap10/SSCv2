@@ -492,7 +492,8 @@ func Setup(vid, pid uint16, fwPath string, logf func(string, ...any)) (ChipInfo,
 		if st == stOnDone {
 			logf("MTK: Bluetooth function enabled")
 		} else {
-			logf("MTK: Bluetooth function enable requested")
+			err = fmt.Errorf("MTK: Bluetooth function not enabled (WMT status %d)", st)
+			continue // use the existing bounded reset/retry, never report false success
 		}
 		break
 	}

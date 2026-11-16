@@ -63,6 +63,11 @@ func Serve(ownerSID string) error {
 }
 
 func acceptPipe(h windows.Handle) error {
+	return AcceptPipe(h)
+}
+
+// AcceptPipe accepts a local connection on an overlapped named-pipe handle.
+func AcceptPipe(h windows.Handle) error {
 	event, err := windows.CreateEvent(nil, 1, 0, nil)
 	if err != nil {
 		return err

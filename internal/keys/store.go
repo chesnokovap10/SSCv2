@@ -152,6 +152,9 @@ func (s *Store) merge(in File, refreshLE bool) error {
 			f.LE = nil
 		}
 		if in.Adapter != "" {
+			if f.Adapter != "" && !strings.EqualFold(f.Adapter, in.Adapter) {
+				f.Classic, f.LE = nil, nil
+			}
 			f.Adapter = in.Adapter
 		}
 		for _, c := range in.Classic {

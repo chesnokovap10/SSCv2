@@ -96,11 +96,6 @@ func runWorker(cfg ipc.NativeConfig, reader *ipc.Reader, events *ipc.Writer, han
 		break
 	}
 	fmt.Fprintf(out, "A2DP endpoint released in %v\n", time.Since(started).Round(time.Millisecond))
-	pcm, err := helper.OpenBudsPCM()
-	if err != nil {
-		return err
-	}
-	defer pcm.Close()
 	commands := make(chan ipc.NativeStream)
 	stop := make(chan struct{})
 	defer close(stop)
@@ -145,10 +140,40 @@ func runWorker(cfg ipc.NativeConfig, reader *ipc.Reader, events *ipc.Writer, han
 		ctx, cancel := context.WithCancel(context.Background())
 		done := make(chan error, 1)
 		go func(stream ipc.NativeStream) {
+			// Open lazily after Bluetooth negotiation, and use a new connection
+			// for each codec. The helper expires idle PCM connections.
+			var pcm io.ReadCloser
+			defer func() {
+				if pcm != nil {
+					pcm.Close()
+				}
+			}()
+			readPCM := func(buffer []byte) (int, error) {
+				if pcm == nil {
+					opened, err := helper.OpenBudsPCM()
+					if err != nil {
+						return 0, err
+					}
+					pcm = opened
+				}
+				n, err := pcm.Read(buffer)
+				if err == nil || ctx.Err() != nil {
+					return n, err
+				}
+				pcm.Close()
+				pcm = nil
+				// A peer may suspend media longer than the helper idle timeout.
+				opened, err := helper.OpenBudsPCM()
+				if err != nil {
+					return 0, err
+				}
+				pcm = opened
+				return pcm.Read(buffer)
+			}
 			ready := func(kbps int) error {
 				return events.Write(ipc.Event{Ev: ipc.EventNativeReady, Native: &stream, BitrateKbps: kbps})
 			}
-			render := renderPCM{out: out, read: pcm.Read, activity: activity, gain: func() float32 {
+			render := renderPCM{out: out, read: readPCM, activity: activity, gain: func() float32 {
 				return volume.gain(readGain)
 			}}
 			done <- render.stream(ctx, cfg.Path, stream, ready, linkLost, capabilities)

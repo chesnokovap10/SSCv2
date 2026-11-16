@@ -75,11 +75,11 @@ func TestWorkingMax(t *testing.T) {
 	}
 }
 
-func TestSavedInvalidSSCBitrateFallsBackToAuto(t *testing.T) {
+func TestSavedBitrateDoesNotBecomeAuto(t *testing.T) {
 	for _, native := range []bool{false, true} {
 		p := Policy{Native: native}
-		if got := p.Selected(config.ModeSSC, 123); got != 0 {
-			t.Fatalf("native=%v: selected %d kbps, want Auto", native, got)
+		if got := p.Selected(config.ModeSSC, 123); got != 123 {
+			t.Fatalf("native=%v: selected %d kbps, want saved choice", native, got)
 		}
 	}
 }

@@ -308,7 +308,11 @@ func (p *avdtpSession) stream(out io.Writer, seid byte, codec []byte, openMedia 
 	if _, err := p.command(startStream, seid<<2); err != nil {
 		return fmt.Errorf("start %s stream: %w", mode, err)
 	}
-	if err := send(media); err != nil {
+	controlled := newSignaledMedia(p.ctx, media)
+	stopSignals := p.watchStreamingCommands(controlled)
+	err = send(controlled)
+	stopSignals() // only command() may read signaling after this join
+	if err != nil {
 		if errors.Is(err, context.Canceled) {
 			return nil // The deferred Abort releases the streaming endpoint.
 		}

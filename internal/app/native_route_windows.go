@@ -176,10 +176,7 @@ func (a *App) resumeNativeStereo() error {
 			if !wasDefault[role] {
 				continue
 			}
-			target := buds
-			if target == "" {
-				target = previousRenderOutput(endpoints, output, id, budsName)
-			}
+			target := previousRenderOutput(endpoints, output, id, budsName)
 			if target != "" {
 				if err := audio.SetDefaultRenderRole(target, role); err != nil {
 					restoreErr = errors.Join(restoreErr, err)
