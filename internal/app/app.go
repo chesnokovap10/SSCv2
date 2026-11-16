@@ -56,6 +56,8 @@ type App struct {
 	menuText          map[int]string
 	menuEnvironment   *menuEnvironment
 	windowsBattery    windowsBattery
+	budsIOMu          sync.Mutex
+	pendingEqualizer  *equalizerRequest
 	menuReading       bool
 	menuDeviceIDs     map[menuDeviceKey]int
 	menuDeviceTargets []menuDevice

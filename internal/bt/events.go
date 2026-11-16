@@ -420,6 +420,9 @@ func (s *stackT) onAVRCP(cp *C.uint8_t, p []byte) {
 			return
 		}
 		s.logf("bt: headphones button 0x%02X -> media key %d", op, key)
+		if key == MediaPause {
+			s.buds.lastPause = time.Now()
+		}
 		s.emit(Event{Kind: EvMediaKey, Addr: s.remote, Media: key})
 
 	case C.AVRCP_SUBEVENT_SET_ABSOLUTE_VOLUME_RESPONSE:

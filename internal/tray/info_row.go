@@ -16,6 +16,7 @@ var (
 
 type menuInfoRow struct {
 	text          string
+	rightText     string
 	minWidth      int32
 	scrollPeriod  int32
 	informational bool
@@ -66,6 +67,16 @@ func (t *Tray) drawInfoRow(it *drawMenuItem, row *menuInfoRow) {
 		return
 	}
 	var extent struct{ width, height int32 }
+	rightRect := r
+	var rightLabel []uint16
+	if row.rightText != "" {
+		rightLabel, _ = windows.UTF16FromString(row.rightText)
+		// Fit two full percentages, even when the current values are shorter.
+		full := windows.StringToUTF16("100%|100%")
+		getTextExtent.Call(it.dc, uintptr(unsafe.Pointer(&full[0])), uintptr(len(full)-1), uintptr(unsafe.Pointer(&extent)))
+		rightRect.left = rightRect.right - extent.width
+		r.right = rightRect.left - t.menuPixels(8)
+	}
 	getTextExtent.Call(it.dc, uintptr(unsafe.Pointer(&label[0])), uintptr(len(label)-1), uintptr(unsafe.Pointer(&extent)))
 	row.scrollPeriod = 0
 	if extent.width > r.right-r.left {
@@ -74,6 +85,9 @@ func (t *Tray) drawInfoRow(it *drawMenuItem, row *menuInfoRow) {
 	color, _, _ := getSysColor.Call(foreground)
 	oldColor, _, _ := setTextColor.Call(it.dc, color)
 	oldMode, _, _ := setBkMode.Call(it.dc, 1)
+	if len(rightLabel) > 1 {
+		drawText.Call(it.dc, uintptr(unsafe.Pointer(&rightLabel[0])), uintptr(len(rightLabel)-1), uintptr(unsafe.Pointer(&rightRect)), textFlags|0x6) // DT_RIGHT | DT_VCENTER
+	}
 	if row.checked {
 		mark := it.rect
 		mark.right = r.left

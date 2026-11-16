@@ -156,6 +156,10 @@ func (e *engine) commands(r *ipc.Reader) {
 			}
 		case "volume":
 			e.setVolume(c.Volume, c.On)
+		case ipc.CommandEqualizer:
+			if c.Equalizer != nil {
+				bt.SetBudsEqualizer(c.Addr, *c.Equalizer)
+			}
 		case ipc.CommandCodec:
 			if c.Codec != nil && (c.Codec.Codec == "aac" || c.Codec.Codec == "ssc") {
 				// Keep the latest request if the previous switch is still in progress.
@@ -426,6 +430,7 @@ func (e *engine) session(addrStr string) (result error) {
 		s.Phase, s.Message = "connecting", i18n.T("подключение к ", "connecting to ")+name
 		s.Headphones, s.HeadphonesName = addr.String(), name
 		s.Battery = nil
+		s.Equalizer = nil
 	})
 	for len(e.disc) > 0 {
 		<-e.disc
@@ -690,7 +695,7 @@ func (e *engine) startAudio() error {
 	return nil
 }
 
-var evNames = map[bt.EventKind]string{bt.EvDisconnected: "disconnected", bt.EvVolume: "volume", bt.EvLinkKey: "link key",
+var evNames = map[bt.EventKind]string{bt.EvDisconnected: "disconnected", bt.EvVolume: "volume", bt.EvLinkKey: "link key", bt.EvBudsRemoved: "Buds removed", bt.EvBudsEqualizer: "Buds equalizer",
 	bt.EvMouse: "mouse", bt.EvAVRCPConnected: "AVRCP connected", bt.EvVolumeApplied: "volume applied",
 	bt.EvACLUp: "ACL up", bt.EvA2DPReady: "A2DP ready", bt.EvMediaKey: "media key", bt.EvStreamReleased: "media channel released"}
 
@@ -716,6 +721,20 @@ func (e *engine) btEvents() {
 			e.update(func(s *ipc.EngineStatus) { s.MouseState = ev.Mouse })
 		case bt.EvMediaKey:
 			HandleMediaKey(ev.Media)
+		case bt.EvBudsEqualizer:
+			e.update(func(s *ipc.EngineStatus) {
+				if s.Headphones == ev.Addr.String() {
+					s.Equalizer = bt.BudsEqualizer(s.Headphones)
+				}
+			})
+		case bt.EvBudsRemoved:
+			e.mu.Lock()
+			current := e.st.Streaming && e.st.Headphones == ev.Addr.String()
+			e.mu.Unlock()
+			if current && bt.Streaming() && e.pipe.active.Load() {
+				logf("Buds removed: sending media Pause")
+				HandleMediaKey(bt.MediaPause)
+			}
 		}
 	}
 }
@@ -747,7 +766,7 @@ func (e *engine) ticker() {
 			s.AVRCP = bt.AVRCPConnected()
 			s.Streaming = bt.Streaming()
 			s.Connected = bt.Connected()
-			s.Battery = bt.PollBudsBattery(s.Headphones, s.HeadphonesName)
+			s.Battery, s.Equalizer = bt.PollBudsStatus(s.Headphones, s.HeadphonesName)
 			if s.Mouse != "" {
 				s.MouseState, s.MouseReports = mstate, mrep
 			}

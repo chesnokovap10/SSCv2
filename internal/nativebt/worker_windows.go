@@ -6,11 +6,14 @@ import (
 	"fmt"
 	"io"
 	"slices"
+	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
 	"sscv2/internal/audio"
+	"sscv2/internal/battery"
 	"sscv2/internal/bt"
 	"sscv2/internal/driver"
 	"sscv2/internal/helper"
@@ -66,6 +69,10 @@ func runWorker(cfg ipc.NativeConfig, reader *ipc.Reader, events *ipc.Writer, han
 	defer stopControl()
 	activity := &audio.Activity{}
 	var lastPause atomic.Int64
+	var playingStream atomic.Bool
+	var budsOnce sync.Once
+	equalizers := make(chan uint8, 1)
+	address, _ := strconv.ParseUint(strings.ReplaceAll(cfg.Device, ":", ""), 16, 48)
 	go watchAVRCP(controlCtx, cfg.Path, out, func(key int) {
 		if key == bt.MediaPause {
 			lastPause.Store(time.Now().UnixMilli())
@@ -112,6 +119,16 @@ func runWorker(cfg ipc.NativeConfig, reader *ipc.Reader, events *ipc.Writer, han
 			}
 			if command.Cmd == ipc.CommandStop {
 				return
+			}
+			if command.Cmd == ipc.CommandEqualizer {
+				if cfg.Buds && command.Equalizer != nil && *command.Equalizer < battery.BudsEqualizerCount {
+					select {
+					case <-equalizers:
+					default:
+					}
+					equalizers <- *command.Equalizer
+				}
+				continue
 			}
 			if command.Cmd != ipc.CommandCodec || command.Native == nil || !command.Native.Valid() {
 				readErr = fmt.Errorf("invalid native worker command %q", command.Cmd)
@@ -171,12 +188,33 @@ func runWorker(cfg ipc.NativeConfig, reader *ipc.Reader, events *ipc.Writer, han
 				return pcm.Read(buffer)
 			}
 			ready := func(kbps int) error {
+				playingStream.Store(true)
+				if cfg.Buds && address != 0 {
+					budsOnce.Do(func() {
+						go watchBudsStatus(controlCtx, address, equalizers, func(status battery.BudsStatus) {
+							ev := ipc.Event{Ev: ipc.EventNativeBattery, Equalizer: status.Equalizer}
+							if status.Level.Known() {
+								ev.Battery = &status.Level
+							}
+							_ = events.Write(ev)
+						}, func() {
+							now := time.Now().UnixMilli()
+							last := lastPause.Load()
+							if playingStream.Load() && controlCtx.Err() == nil && now-last >= 2000 && lastPause.CompareAndSwap(last, now) {
+								fmt.Fprintln(out, "Buds removed: sending media Pause")
+								handleMediaKey(bt.MediaPause)
+							}
+						})
+					})
+				}
 				return events.Write(ipc.Event{Ev: ipc.EventNativeReady, Native: &stream, BitrateKbps: kbps})
 			}
 			render := renderPCM{out: out, read: readPCM, activity: activity, gain: func() float32 {
 				return volume.gain(readGain)
 			}}
-			done <- render.stream(ctx, cfg.Path, stream, ready, linkLost, capabilities)
+			err := render.stream(ctx, cfg.Path, stream, ready, linkLost, capabilities)
+			playingStream.Store(false)
+			done <- err
 		}(stream)
 		for {
 			select {

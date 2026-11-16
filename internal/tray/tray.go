@@ -21,6 +21,7 @@ type Item struct {
 	MinWidth    int32  `json:"-"`
 	Slider      bool
 	Text        string
+	RightText   string `json:",omitempty"`
 	ID          int
 	Checked     bool
 	Radio       bool

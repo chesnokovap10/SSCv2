@@ -209,6 +209,7 @@ func (a *App) onEngineEvent(p *workerProcess, ev ipc.Event) {
 		}
 		prev := a.st
 		a.st = *ev.Status
+		a.reconcileEqualizerLocked()
 		if !ev.Status.Connected {
 			a.pendingUHQ = false
 		}

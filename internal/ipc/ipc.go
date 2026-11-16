@@ -45,6 +45,7 @@ type NativeConfig struct {
 	Path           string       `json:"path"`
 	RenderEndpoint string       `json:"renderEndpoint"`
 	Device         string       `json:"device"`
+	Buds           bool         `json:"buds,omitempty"`
 	StereoEndpoint string       `json:"stereoEndpoint,omitempty"`
 	Stream         NativeStream `json:"stream"`
 }
@@ -78,20 +79,22 @@ type CodecChange struct {
 type CommandKind string
 
 const (
-	CommandStop  CommandKind = "stop"
-	CommandCodec CommandKind = "codec"
+	CommandStop      CommandKind = "stop"
+	CommandCodec     CommandKind = "codec"
+	CommandEqualizer CommandKind = "equalizer"
 )
 
 // Command from tray to a playback worker.
 type Command struct {
-	Volume uint8         `json:"volume,omitempty"`
-	Cmd    CommandKind   `json:"cmd"`
-	Addr   string        `json:"addr,omitempty"`
-	On     bool          `json:"on,omitempty"`
-	Keep   bool          `json:"keep,omitempty"` // stop: leave the audio routing for the next engine
-	Lang   string        `json:"lang,omitempty"`
-	Codec  *CodecChange  `json:"codec,omitempty"`
-	Native *NativeStream `json:"native,omitempty"`
+	Equalizer *uint8        `json:"equalizer,omitempty"`
+	Volume    uint8         `json:"volume,omitempty"`
+	Cmd       CommandKind   `json:"cmd"`
+	Addr      string        `json:"addr,omitempty"`
+	On        bool          `json:"on,omitempty"`
+	Keep      bool          `json:"keep,omitempty"` // stop: leave the audio routing for the next engine
+	Lang      string        `json:"lang,omitempty"`
+	Codec     *CodecChange  `json:"codec,omitempty"`
+	Native    *NativeStream `json:"native,omitempty"`
 }
 
 // Found device from a scan.
@@ -117,6 +120,7 @@ type EngineStatus struct {
 	Headphones      string             `json:"headphones,omitempty"`
 	HeadphonesName  string             `json:"headphonesName,omitempty"`
 	Battery         *battery.BudsLevel `json:"battery,omitempty"`
+	Equalizer       *uint8             `json:"equalizer,omitempty"`
 	SSCUHQSupported *bool              `json:"sscUhqSupported,omitempty"`
 	Connected       bool               `json:"connected"`
 	Streaming       bool               `json:"streaming"`
@@ -149,6 +153,7 @@ const (
 	EventNativeLinkLost EventKind = "nativeLinkLost"
 	EventNativeCaps     EventKind = "nativeCaps"
 	EventNativeVolume   EventKind = "nativeVolume"
+	EventNativeBattery  EventKind = "nativeBattery"
 )
 
 // Event from a playback worker to the tray.
@@ -159,19 +164,21 @@ type NativeVolume struct {
 }
 
 type Event struct {
-	NativeVolume *NativeVolume `json:"nativeVolume,omitempty"`
-	BitrateKbps  int           `json:"bitrateKbps,omitempty"`
-	Codec        *CodecChange  `json:"codec,omitempty"`
-	Volume       *uint8        `json:"volume,omitempty"`
-	Ev           EventKind     `json:"ev"`
-	Status       *EngineStatus `json:"status,omitempty"`
-	Devices      []Found       `json:"devices,omitempty"`
-	Addr         string        `json:"addr,omitempty"`
-	Key          string        `json:"key,omitempty"`
-	KeyType      int           `json:"keyType,omitempty"`
-	Name         string        `json:"name,omitempty"`
-	Msg          string        `json:"msg,omitempty"`
-	Native       *NativeStream `json:"native,omitempty"`
+	Equalizer    *uint8             `json:"equalizer,omitempty"`
+	Battery      *battery.BudsLevel `json:"battery,omitempty"`
+	NativeVolume *NativeVolume      `json:"nativeVolume,omitempty"`
+	BitrateKbps  int                `json:"bitrateKbps,omitempty"`
+	Codec        *CodecChange       `json:"codec,omitempty"`
+	Volume       *uint8             `json:"volume,omitempty"`
+	Ev           EventKind          `json:"ev"`
+	Status       *EngineStatus      `json:"status,omitempty"`
+	Devices      []Found            `json:"devices,omitempty"`
+	Addr         string             `json:"addr,omitempty"`
+	Key          string             `json:"key,omitempty"`
+	KeyType      int                `json:"keyType,omitempty"`
+	Name         string             `json:"name,omitempty"`
+	Msg          string             `json:"msg,omitempty"`
+	Native       *NativeStream      `json:"native,omitempty"`
 }
 
 // ---- tray -> helper ------------------------------------------------------------
@@ -244,6 +251,6 @@ func (r *Reader) Read(v any) error {
 	return json.Unmarshal(r.s.Bytes(), v)
 }
 
-// Version of the program: "0.4.2 #<commit hash, 8 chars>", set by build.cmd
+// Version of the program: "0.4.3 #<commit hash, 8 chars>", set by build.cmd
 // through -ldflags "-X 'sscv2/internal/ipc.Version=...'".
-var Version = "0.4.2 #dev"
+var Version = "0.4.3 #dev"

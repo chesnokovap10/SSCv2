@@ -54,7 +54,7 @@ func (t *Tray) writeMenuItem(m *liveMenu, position int, it *Item, sub *liveMenu,
 	if it.informational() || it.LiveLabel || it.Radio {
 		if replace {
 			row := t.infoRows[it.infoID]
-			row.text, row.scrollPeriod = it.Text, 0
+			row.text, row.rightText, row.scrollPeriod = it.Text, it.RightText, 0
 			if t.infoHover.id == it.infoID {
 				t.infoHover.offset, t.infoHover.start = 0, time.Now()
 			}
@@ -63,7 +63,7 @@ func (t *Tray) writeMenuItem(m *liveMenu, position int, it *Item, sub *liveMenu,
 		}
 		it.infoID = t.nextInfoID
 		t.nextInfoID++
-		t.infoRows[it.infoID] = &menuInfoRow{text: it.Text, minWidth: it.MinWidth, informational: it.informational(), radio: it.Radio, checked: it.Checked}
+		t.infoRows[it.infoID] = &menuInfoRow{text: it.Text, rightText: it.RightText, minWidth: it.MinWidth, informational: it.informational(), radio: it.Radio, checked: it.Checked}
 		flags |= mfOwnerDraw
 		if it.informational() || it.Disabled {
 			flags |= mfGrayed
@@ -193,10 +193,10 @@ func (t *Tray) updateMenu(m *liveMenu, next []Item) {
 				t.volumeRow.label = item.Text
 				t.volumeRow.redraw()
 				m.items[i].Text = item.Text
-			} else if old.Text != item.Text && (old.infoID != 0 || sub == nil || !t.menuIsActive(sub.handle)) {
+			} else if (old.Text != item.Text || old.RightText != item.RightText) && (old.infoID != 0 || sub == nil || !t.menuIsActive(sub.handle)) {
 				item.infoID = old.infoID
 				t.writeMenuItem(m, i, &item, sub, true)
-				m.items[i].Text = item.Text
+				m.items[i].Text, m.items[i].RightText = item.Text, item.RightText
 			}
 			if sub != nil {
 				if t.menuIsActive(sub.handle) && old.SubRevision != item.SubRevision {
@@ -216,10 +216,10 @@ func (t *Tray) updateMenu(m *liveMenu, next []Item) {
 			if i < len(next) && sameMenuSlot(old, next[i]) {
 				item := next[i]
 				t.updateMenuState(m, i, item)
-				if old := &m.items[i]; old.infoID != 0 && old.Text != item.Text {
+				if old := &m.items[i]; old.infoID != 0 && (old.Text != item.Text || old.RightText != item.RightText) {
 					item.infoID = old.infoID
 					t.writeMenuItem(m, i, &item, m.children[i], true)
-					old.Text = item.Text
+					old.Text, old.RightText = item.Text, item.RightText
 				}
 			} else {
 				old.Disabled = true
@@ -247,7 +247,7 @@ func (t *Tray) updateMenu(m *liveMenu, next []Item) {
 				t.updateMenu(sub, item.Sub)
 			}
 			t.updateMenuState(m, i, item)
-			if old.Text != item.Text && !item.Slider {
+			if !item.Slider && (old.Text != item.Text || old.RightText != item.RightText) {
 				t.writeMenuItem(m, i, &item, sub, true)
 			}
 			m.items[i] = item

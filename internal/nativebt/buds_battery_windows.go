@@ -5,6 +5,17 @@ package nativebt
 #include <winsock2.h>
 #include <ws2bth.h>
 
+static int buds_receive(SOCKET s, char *data, int size, long timeout_ms) {
+	fd_set ready;
+	FD_ZERO(&ready);
+	FD_SET(s, &ready);
+	struct timeval timeout = {timeout_ms / 1000, (timeout_ms % 1000) * 1000};
+	int result = select(0, &ready, NULL, NULL, &timeout);
+	if (result == 0) return -2;
+	if (result < 0) return -1;
+	return recv(s, data, size, 0);
+}
+
 static SOCKET buds_connect(BTH_ADDR address, const GUID *service) {
 	SOCKET s = socket(AF_BTH, SOCK_STREAM, BTHPROTO_RFCOMM);
 	if (s == INVALID_SOCKET) return s;
@@ -42,6 +53,7 @@ fail:
 import "C"
 
 import (
+	"context"
 	"time"
 	"unsafe"
 
@@ -50,42 +62,134 @@ import (
 	"sscv2/internal/battery"
 )
 
-// ReadBudsBattery takes one sample over Windows RFCOMM. Callers check that
+// ReadBudsStatus takes one sample over Windows RFCOMM. Callers check that
 // the headphones are already connected before opening the socket.
-func ReadBudsBattery(address uint64) (battery.BudsLevel, bool) {
+func ReadBudsStatus(address uint64, preset *uint8) (battery.BudsStatus, bool) {
+	status := battery.BudsStatus{Level: battery.BudsLevel{Left: -1, Right: -1}}
+	var commands chan uint8
+	if preset != nil {
+		commands = make(chan uint8, 1)
+		commands <- *preset
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 6*time.Second)
+	defer cancel()
+	confirmed := false
+	readBudsStatus(ctx, address, commands, nil, nil, func(report battery.BudsStatus) bool {
+		if report.Level.Known() {
+			status.Level = report.Level
+		}
+		if report.Equalizer != nil {
+			status.Equalizer = report.Equalizer
+		}
+		confirmed = report.Equalizer != nil && (preset == nil || *report.Equalizer == *preset)
+		return confirmed
+	})
+	return status, confirmed
+}
+
+func sendBudsFrame(socket C.SOCKET, data []byte) bool {
+	for len(data) > 0 {
+		n := int(C.send(socket, (*C.char)(unsafe.Pointer(&data[0])), C.int(len(data)), 0))
+		if n <= 0 {
+			return false
+		}
+		data = data[n:]
+	}
+	return true
+}
+
+func readBudsStatus(ctx context.Context, address uint64, commands <-chan uint8, removal *battery.BudsRemoval, removed func(), report func(battery.BudsStatus) bool) {
 	var wsa windows.WSAData
 	if err := windows.WSAStartup(0x0202, &wsa); err != nil {
-		return battery.BudsLevel{}, false
+		return
 	}
 	defer windows.WSACleanup()
 	guid, err := windows.GUIDFromString("{" + battery.BudsService + "}")
 	if err != nil {
-		return battery.BudsLevel{}, false
+		return
 	}
 	socket := C.buds_connect(C.BTH_ADDR(address), (*C.GUID)(unsafe.Pointer(&guid)))
 	if socket == C.INVALID_SOCKET {
-		return battery.BudsLevel{}, false
+		return
 	}
 	defer C.closesocket(socket)
 	query := battery.ManagerInfo()
-	for data := query[:]; len(data) > 0; {
-		n := int(C.send(socket, (*C.char)(unsafe.Pointer(&data[0])), C.int(len(data)), 0))
-		if n <= 0 {
-			return battery.BudsLevel{}, false
-		}
-		data = data[n:]
+	if !sendBudsFrame(socket, query[:]) {
+		return
 	}
 	var decoder battery.BudsDecoder
+	var equalizer battery.BudsEqualizerState
 	var buf [512]byte
-	var level battery.BudsLevel
-	var received bool
-	deadline := time.Now().Add(3 * time.Second)
-	for !received && time.Now().Before(deadline) {
-		n := int(C.recv(socket, (*C.char)(unsafe.Pointer(&buf[0])), C.int(len(buf)), 0))
-		if n <= 0 {
-			break
+	for ctx.Err() == nil {
+		wait := time.Second
+		if commands != nil {
+			wait = 250 * time.Millisecond
+			select {
+			case preset := <-commands:
+				frame := battery.BudsEqualizerRequest(preset)
+				if !sendBudsFrame(socket, frame[:]) {
+					return
+				}
+			default:
+			}
 		}
-		decoder.Feed(buf[:n], func(report battery.BudsLevel) { level, received = report, true })
+		if removal != nil && !removal.Deadline().IsZero() {
+			wait = min(wait, time.Until(removal.Deadline()))
+		}
+		n := int(C.buds_receive(socket, (*C.char)(unsafe.Pointer(&buf[0])), C.int(len(buf)), C.long(max(1, wait.Milliseconds()+1))))
+		if n <= 0 {
+			if n == -2 {
+				if ctx.Err() == nil && removal != nil && removal.Confirm(time.Now()) {
+					removed()
+				}
+				continue
+			}
+			return
+		}
+		stop := false
+		decoder.FeedStatus(buf[:n], func(status battery.BudsStatus) {
+			if !stop && ctx.Err() == nil {
+				status.Equalizer = equalizer.Observe(status, time.Now())
+				if removal != nil && !status.EqualizerAck {
+					removal.Observe(status.Placement, time.Now())
+				}
+				stop = report(status)
+			}
+		})
+		if stop {
+			return
+		}
+		if ctx.Err() == nil && removal != nil && removal.Confirm(time.Now()) {
+			removed()
+		}
 	}
-	return level, received
+}
+
+func watchBudsStatus(ctx context.Context, address uint64, commands <-chan uint8, report func(battery.BudsStatus), removed func()) {
+	for ctx.Err() == nil {
+		removal := &battery.BudsRemoval{}
+		var last battery.BudsStatus
+		var reportedAt time.Time
+		readBudsStatus(ctx, address, commands, removal, removed, func(status battery.BudsStatus) bool {
+			eqChanged := status.Equalizer != nil && (last.Equalizer == nil || *status.Equalizer != *last.Equalizer)
+			if status.Level.Known() && (status.Level != last.Level || time.Since(reportedAt) >= battery.PollInterval) || eqChanged {
+				report(status)
+				last.Level, reportedAt = status.Level, time.Now()
+				if status.Equalizer != nil {
+					last.Equalizer = status.Equalizer
+				}
+			}
+			return false
+		})
+		if ctx.Err() == nil {
+			report(battery.BudsStatus{Level: battery.BudsLevel{Left: -1, Right: -1}})
+		}
+		timer := time.NewTimer(5 * time.Second)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return
+		case <-timer.C:
+		}
+	}
 }

@@ -15,17 +15,15 @@ func TestBudsBatteryMenu(t *testing.T) {
 		eng: &workerProcess{},
 		st:  ipc.EngineStatus{Connected: true, Headphones: addr, Battery: &battery.BudsLevel{Left: 0, Right: 87}},
 	}
-	want := T(" · Л 0% / П 87%", " · L 0% / R 87%")
-	if suffix := a.batteryMenuSuffixLocked(); suffix != want {
-		t.Fatalf("suffix = %q, want %q", suffix, want)
+	if text := a.batteryMenuTextLocked(); text != "0%|87%" {
+		t.Fatalf("battery text = %q", text)
 	}
 	a.st.Battery.Right = -1
-	want = T(" · Л 0% / П —", " · L 0% / R —")
-	if suffix := a.batteryMenuSuffixLocked(); suffix != want {
-		t.Fatalf("suffix = %q, want %q", suffix, want)
+	if text := a.batteryMenuTextLocked(); text != "0%|—" {
+		t.Fatalf("battery text with one missing level = %q", text)
 	}
 	a.st.Connected = false
-	if suffix := a.batteryMenuSuffixLocked(); suffix != "" {
-		t.Fatalf("suffix after disconnect = %q", suffix)
+	if text := a.batteryMenuTextLocked(); text != "" {
+		t.Fatalf("battery text after disconnect = %q", text)
 	}
 }

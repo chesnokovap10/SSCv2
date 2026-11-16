@@ -30,6 +30,10 @@ Use **Settings → Uninstall…** to return the adapter to Windows and remove th
 
 The tray menu shows separate left and right battery percentages for connected Galaxy Buds that report them.
 
+In WinUSB and Windows test mode, SSCv2 pauses playback when the last worn Galaxy Buds earbud is removed, if the earbuds report their wearing state.
+
+With Galaxy Buds2 Pro connected, **Equalizer** in the tray selects one of the six presets built into the earbuds.
+
 ### Volume and mute
 
 - Use the **Headphone volume** slider, its mute button or the keyboard volume keys in codec mode. The scale is **0–127**, with a keyboard step of **4**. The slider stays visible while the stream starts and in **Off** mode.

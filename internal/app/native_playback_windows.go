@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"sscv2/internal/audio"
+	"sscv2/internal/battery"
 	"sscv2/internal/config"
 	"sscv2/internal/ipc"
 )
@@ -21,6 +22,9 @@ type nativeProcess struct {
 	linkLost      bool
 	uhqSupported  *bool
 	lastMessage   string
+	budsBattery   *battery.BudsLevel
+	budsBatteryAt time.Time
+	budsEqualizer *uint8
 }
 
 func (a *App) startNativeWorker(mode config.Mode, path, endpoint, address, stereo string) error {
@@ -31,9 +35,10 @@ func (a *App) startNativeWorker(mode config.Mode, path, endpoint, address, stere
 		return err
 	}
 	stream := a.nativeStreamLocked(mode)
+	buds := a.s.Headphones != nil && battery.IsBuds(a.s.Headphones.Name)
 	a.mu.Unlock()
 	worker, err := startWorkerProcess("native-worker", "native-stderr.log", ipc.NativeConfig{
-		Path: path, RenderEndpoint: endpoint, Device: address, StereoEndpoint: stereo, Stream: stream,
+		Path: path, RenderEndpoint: endpoint, Device: address, StereoEndpoint: stereo, Stream: stream, Buds: buds,
 	})
 	if err != nil {
 		return err
@@ -133,6 +138,16 @@ func (a *App) onNativeEvent(p *nativeProcess, event ipc.Event) {
 			p.volume = *event.NativeVolume
 		}
 		a.mu.Unlock()
+	case ipc.EventNativeBattery:
+		if event.Battery != nil || event.Equalizer == nil {
+			p.budsBattery, p.budsBatteryAt = event.Battery, time.Now()
+		}
+		if event.Equalizer != nil || event.Battery == nil {
+			p.budsEqualizer = event.Equalizer
+		}
+		a.reconcileEqualizerLocked()
+		a.mu.Unlock()
+		a.refresh()
 	case ipc.EventNativeLinkLost:
 		p.linkLost = true
 		a.mu.Unlock()

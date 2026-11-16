@@ -47,9 +47,11 @@ const (
 	idAutoStart
 	idTestSigning
 	idBitrateMenu
+	idEqualizerMenu
 
-	idBitrateBase = 500 // + kbps (0 = auto)
-	idDeviceBase  = 2000
+	idEqualizerBase = 300
+	idBitrateBase   = 500 // + kbps (0 = auto)
+	idDeviceBase    = 2000
 )
 
 type menuEnvironment struct {
@@ -133,7 +135,7 @@ func (a *App) menuWithEnvironment(env menuEnvironment) []tray.Item {
 	engineUp := a.eng != nil
 
 	items := []tray.Item{
-		{Text: "SSCv2 " + ipc.Version + " — " + s + a.batteryMenuSuffixLocked(), ID: idRepository, LiveLabel: true},
+		{Text: "SSCv2 " + ipc.Version + " — " + s, RightText: a.batteryMenuTextLocked(), ID: idRepository, LiveLabel: true, MinWidth: 300},
 		{Separator: true},
 		{Text: T("Громкость наушников", "Headphone volume"), ID: idVolume, Slider: true},
 	}
@@ -193,6 +195,9 @@ func (a *App) menuWithEnvironment(env menuEnvironment) []tray.Item {
 		items = append(items, tray.Item{ID: idBitrateMenu, Text: label, Sub: sub, SubRevision: string(mode), LiveLabel: true})
 	} else {
 		items = append(items, tray.Item{ID: idBitrateMenu, Text: T("Битрейт: —", "Bitrate: -"), Sub: []tray.Item{}, Disabled: true, LiveLabel: true})
+	}
+	if h := a.s.Headphones; h != nil && isEqualizerBuds(h.Name) {
+		items = append(items, a.equalizerMenuLocked(busy))
 	}
 	items = append(items, tray.Item{Separator: true})
 
@@ -324,6 +329,8 @@ func (a *App) command(id int) {
 		go a.switchMode(config.ModeSSC)
 	case id == idModeUHQ:
 		go a.switchMode(config.ModeSSCUHQ)
+	case id >= idEqualizerBase && id < idEqualizerBase+equalizerCount:
+		a.setEqualizer(uint8(id - idEqualizerBase))
 	case id >= idBitrateBase && id < idDeviceBase:
 		go a.setBitrate(id - idBitrateBase)
 	case id == idImportWin:

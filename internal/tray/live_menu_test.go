@@ -16,6 +16,22 @@ func TestOwnerDrawMeasuresSlider(t *testing.T) {
 	}
 }
 
+func TestRefreshUpdatesHeaderBatteryWithoutChangingTitle(t *testing.T) {
+	header := Item{ID: 1, Text: "SSCv2 — connected headphones", LiveLabel: true}
+	tr := &Tray{infoRows: make(map[uint32]*menuInfoRow), nextInfoID: 0x7000}
+	root := tr.buildMenu([]Item{header})
+	defer pDestroyMenu.Call(root.handle)
+	tr.openMenu = root
+	rowID := root.items[0].infoID
+	for _, right := range []string{"100%|100%", "87%|92%", ""} {
+		header.RightText = right
+		tr.updateMenu(root, []Item{header})
+		if root.items[0].infoID != rowID || tr.infoRows[rowID].rightText != right {
+			t.Fatalf("updating battery to %q did not repaint the existing header", right)
+		}
+	}
+}
+
 func TestRefreshWhileOldBitratePopupIsOpen(t *testing.T) {
 	bitrates := Item{ID: 1, Text: "Bitrate", LiveLabel: true, SubRevision: "ssc_uhq",
 		Sub: []Item{{ID: 2, Text: "Auto", Radio: true}}}

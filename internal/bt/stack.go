@@ -30,6 +30,7 @@ const (
 	timerMouseRetry
 	timerVolReady
 	timerBudsRead
+	timerBudsRemoval
 )
 
 var (
@@ -818,6 +819,8 @@ func (s *stackT) onTimer(id int) {
 		s.mouse.connect(s)
 	case timerBudsRead:
 		s.closeBudsProbe()
+	case timerBudsRemoval:
+		s.confirmBudsRemoval()
 	case timerVolReady:
 		if !s.vol.ready {
 			s.logf("volume: no level from Windows confirmed in 5 s - mirroring headphone changes anyway")
