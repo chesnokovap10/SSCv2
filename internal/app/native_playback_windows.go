@@ -5,7 +5,7 @@ import (
 	"time"
 
 	"sscv2/internal/audio"
-	"sscv2/internal/battery"
+	"sscv2/internal/buds"
 	"sscv2/internal/config"
 	"sscv2/internal/ipc"
 )
@@ -22,7 +22,7 @@ type nativeProcess struct {
 	linkLost      bool
 	uhqSupported  *bool
 	lastMessage   string
-	budsBattery   *battery.BudsLevel
+	budsBattery   *buds.Level
 	budsBatteryAt time.Time
 	budsEqualizer *uint8
 }
@@ -35,10 +35,13 @@ func (a *App) startNativeWorker(mode config.Mode, path, endpoint, address, stere
 		return err
 	}
 	stream := a.nativeStreamLocked(mode)
-	buds := a.s.Headphones != nil && battery.IsBuds(a.s.Headphones.Name)
+	protocol := buds.SPPNew
+	if h := a.s.Headphones; h != nil {
+		protocol = buds.ProtocolForName(h.Name)
+	}
 	a.mu.Unlock()
 	worker, err := startWorkerProcess("native-worker", "native-stderr.log", ipc.NativeConfig{
-		Path: path, RenderEndpoint: endpoint, Device: address, StereoEndpoint: stereo, Stream: stream, Buds: buds,
+		Path: path, RenderEndpoint: endpoint, Device: address, StereoEndpoint: stereo, Stream: stream, BudsProtocol: protocol,
 	})
 	if err != nil {
 		return err

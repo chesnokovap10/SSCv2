@@ -59,13 +59,13 @@ import (
 
 	"golang.org/x/sys/windows"
 
-	"sscv2/internal/battery"
+	"sscv2/internal/buds"
 )
 
 // ReadBudsStatus takes one sample over Windows RFCOMM. Callers check that
 // the headphones are already connected before opening the socket.
-func ReadBudsStatus(address uint64, preset *uint8) (battery.BudsStatus, bool) {
-	status := battery.BudsStatus{Level: battery.BudsLevel{Left: -1, Right: -1}}
+func ReadBudsStatus(address uint64, protocol buds.Protocol, preset *uint8) (buds.Status, bool) {
+	status := buds.Status{Level: buds.Level{Left: -1, Right: -1}}
 	var commands chan uint8
 	if preset != nil {
 		commands = make(chan uint8, 1)
@@ -74,7 +74,7 @@ func ReadBudsStatus(address uint64, preset *uint8) (battery.BudsStatus, bool) {
 	ctx, cancel := context.WithTimeout(context.Background(), 6*time.Second)
 	defer cancel()
 	confirmed := false
-	readBudsStatus(ctx, address, commands, nil, nil, func(report battery.BudsStatus) bool {
+	readBudsStatus(ctx, address, protocol, commands, nil, nil, func(report buds.Status) bool {
 		if report.Level.Known() {
 			status.Level = report.Level
 		}
@@ -98,13 +98,13 @@ func sendBudsFrame(socket C.SOCKET, data []byte) bool {
 	return true
 }
 
-func readBudsStatus(ctx context.Context, address uint64, commands <-chan uint8, removal *battery.BudsRemoval, removed func(), report func(battery.BudsStatus) bool) {
+func readBudsStatus(ctx context.Context, address uint64, protocol buds.Protocol, commands <-chan uint8, removal *buds.Removal, removed func(), report func(buds.Status) bool) {
 	var wsa windows.WSAData
 	if err := windows.WSAStartup(0x0202, &wsa); err != nil {
 		return
 	}
 	defer windows.WSACleanup()
-	guid, err := windows.GUIDFromString("{" + battery.BudsService + "}")
+	guid, err := windows.GUIDFromString("{" + protocol.Service() + "}")
 	if err != nil {
 		return
 	}
@@ -113,21 +113,23 @@ func readBudsStatus(ctx context.Context, address uint64, commands <-chan uint8, 
 		return
 	}
 	defer C.closesocket(socket)
-	query := battery.ManagerInfo()
-	if !sendBudsFrame(socket, query[:]) {
+	if !sendBudsFrame(socket, protocol.ManagerInfo()) {
 		return
 	}
-	var decoder battery.BudsDecoder
-	var equalizer battery.BudsEqualizerState
+	decoder := buds.Decoder{Protocol: protocol}
+	var equalizer buds.EqualizerState
 	var buf [512]byte
+	firstReport := time.Now().Add(3 * time.Second)
 	for ctx.Err() == nil {
+		if !firstReport.IsZero() && time.Now().After(firstReport) {
+			return
+		}
 		wait := time.Second
-		if commands != nil {
+		if commands != nil && equalizer.Current() != nil {
 			wait = 250 * time.Millisecond
 			select {
 			case preset := <-commands:
-				frame := battery.BudsEqualizerRequest(preset)
-				if !sendBudsFrame(socket, frame[:]) {
+				if !sendBudsFrame(socket, protocol.EqualizerRequest(preset)) {
 					return
 				}
 			default:
@@ -147,8 +149,11 @@ func readBudsStatus(ctx context.Context, address uint64, commands <-chan uint8, 
 			return
 		}
 		stop := false
-		decoder.FeedStatus(buf[:n], func(status battery.BudsStatus) {
+		decoder.FeedStatus(buf[:n], func(status buds.Status) {
 			if !stop && ctx.Err() == nil {
+				if !status.EqualizerAck {
+					firstReport = time.Time{}
+				}
 				status.Equalizer = equalizer.Observe(status, time.Now())
 				if removal != nil && !status.EqualizerAck {
 					removal.Observe(status.Placement, time.Now())
@@ -165,14 +170,16 @@ func readBudsStatus(ctx context.Context, address uint64, commands <-chan uint8, 
 	}
 }
 
-func watchBudsStatus(ctx context.Context, address uint64, commands <-chan uint8, report func(battery.BudsStatus), removed func()) {
+func watchBudsStatus(ctx context.Context, address uint64, protocol buds.Protocol, commands <-chan uint8, report func(buds.Status), removed func()) {
 	for ctx.Err() == nil {
-		removal := &battery.BudsRemoval{}
-		var last battery.BudsStatus
+		removal := &buds.Removal{}
+		var last buds.Status
 		var reportedAt time.Time
-		readBudsStatus(ctx, address, commands, removal, removed, func(status battery.BudsStatus) bool {
+		received := false
+		readBudsStatus(ctx, address, protocol, commands, removal, removed, func(status buds.Status) bool {
+			received = true
 			eqChanged := status.Equalizer != nil && (last.Equalizer == nil || *status.Equalizer != *last.Equalizer)
-			if status.Level.Known() && (status.Level != last.Level || time.Since(reportedAt) >= battery.PollInterval) || eqChanged {
+			if status.Level.Known() && (status.Level != last.Level || time.Since(reportedAt) >= buds.PollInterval) || eqChanged {
 				report(status)
 				last.Level, reportedAt = status.Level, time.Now()
 				if status.Equalizer != nil {
@@ -182,9 +189,13 @@ func watchBudsStatus(ctx context.Context, address uint64, commands <-chan uint8,
 			return false
 		})
 		if ctx.Err() == nil {
-			report(battery.BudsStatus{Level: battery.BudsLevel{Left: -1, Right: -1}})
+			report(buds.Status{Level: buds.Level{Left: -1, Right: -1}})
 		}
-		timer := time.NewTimer(5 * time.Second)
+		delay := buds.PollInterval
+		if received {
+			delay = 5 * time.Second
+		}
+		timer := time.NewTimer(delay)
 		select {
 		case <-ctx.Done():
 			timer.Stop()

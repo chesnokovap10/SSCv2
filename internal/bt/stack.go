@@ -116,7 +116,7 @@ type stackT struct {
 
 	vol   volPump
 	mouse mouseBridge
-	buds  budsBattery
+	buds  budsConnection
 }
 
 var stack = &stackT{
@@ -675,7 +675,7 @@ func Disconnect() {
 	ch := make(chan error, 1)
 	var had bool
 	_ = s.callSync(func() {
-		s.clearBudsBattery()
+		s.clearBudsStatus()
 		if s.a2dpCid == 0 {
 			return
 		}
@@ -818,7 +818,7 @@ func (s *stackT) onTimer(id int) {
 	case timerMouseRetry:
 		s.mouse.connect(s)
 	case timerBudsRead:
-		s.closeBudsProbe()
+		s.closeBudsStatus()
 	case timerBudsRemoval:
 		s.confirmBudsRemoval()
 	case timerVolReady:

@@ -196,8 +196,8 @@ func (a *App) menuWithEnvironment(env menuEnvironment) []tray.Item {
 	} else {
 		items = append(items, tray.Item{ID: idBitrateMenu, Text: T("Битрейт: —", "Bitrate: -"), Sub: []tray.Item{}, Disabled: true, LiveLabel: true})
 	}
-	if h := a.s.Headphones; h != nil && isEqualizerBuds(h.Name) {
-		items = append(items, a.equalizerMenuLocked(busy))
+	if equalizer := a.equalizerMenuLocked(busy); equalizer != nil {
+		items = append(items, *equalizer)
 	}
 	items = append(items, tray.Item{Separator: true})
 

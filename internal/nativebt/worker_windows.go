@@ -13,8 +13,8 @@ import (
 	"time"
 
 	"sscv2/internal/audio"
-	"sscv2/internal/battery"
 	"sscv2/internal/bt"
+	"sscv2/internal/buds"
 	"sscv2/internal/driver"
 	"sscv2/internal/helper"
 	"sscv2/internal/ipc"
@@ -121,7 +121,7 @@ func runWorker(cfg ipc.NativeConfig, reader *ipc.Reader, events *ipc.Writer, han
 				return
 			}
 			if command.Cmd == ipc.CommandEqualizer {
-				if cfg.Buds && command.Equalizer != nil && *command.Equalizer < battery.BudsEqualizerCount {
+				if address != 0 && command.Equalizer != nil && *command.Equalizer < buds.EqualizerCount {
 					select {
 					case <-equalizers:
 					default:
@@ -189,9 +189,9 @@ func runWorker(cfg ipc.NativeConfig, reader *ipc.Reader, events *ipc.Writer, han
 			}
 			ready := func(kbps int) error {
 				playingStream.Store(true)
-				if cfg.Buds && address != 0 {
+				if address != 0 {
 					budsOnce.Do(func() {
-						go watchBudsStatus(controlCtx, address, equalizers, func(status battery.BudsStatus) {
+						go watchBudsStatus(controlCtx, address, cfg.BudsProtocol, equalizers, func(status buds.Status) {
 							ev := ipc.Event{Ev: ipc.EventNativeBattery, Equalizer: status.Equalizer}
 							if status.Level.Known() {
 								ev.Battery = &status.Level

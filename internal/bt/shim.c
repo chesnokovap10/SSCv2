@@ -73,10 +73,7 @@ static void on_hids(uint8_t t, uint16_t ch, uint8_t *p, uint16_t n)  { goBtPacke
 
 static void on_buds(uint8_t t, uint16_t ch, uint8_t *p, uint16_t n) { goBudsPacket(t, ch, p, n); }
 
-uint8_t ssc_buds_query(uint8_t *addr) {
-    /* Samsung SPPNew UUID, in SDP byte order. */
-    static const uint8_t service[] = {0x2e, 0x73, 0xa4, 0xad, 0x33, 0x2d, 0x41, 0xfc,
-                                      0x90, 0xe2, 0x16, 0xbe, 0xf0, 0x65, 0x23, 0xf2};
+uint8_t ssc_buds_query(uint8_t *addr, const uint8_t *service) {
     return sdp_client_query_rfcomm_channel_and_name_for_uuid128(on_buds, addr, service);
 }
 

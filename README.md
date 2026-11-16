@@ -32,7 +32,7 @@ The tray menu shows separate left and right battery percentages for connected Ga
 
 In WinUSB and Windows test mode, SSCv2 pauses playback when the last worn Galaxy Buds earbud is removed, if the earbuds report their wearing state.
 
-With Galaxy Buds2 Pro connected, **Equalizer** in the tray selects one of the six presets built into the earbuds.
+When the connected earbuds report a compatible Galaxy Buds equalizer mode, **Equalizer** in the tray selects one of their six built-in presets.
 
 ### Volume and mute
 

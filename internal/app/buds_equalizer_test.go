@@ -12,10 +12,15 @@ func TestEqualizerShowsLatestChoiceAndRollsBackOnFailure(t *testing.T) {
 	const addr = "00:11:22:33:44:55"
 	normal := uint8(0)
 	a := App{
-		s:   &config.Settings{Headphones: &config.Device{Addr: addr, Name: "Buds2 Pro"}},
+		s:   &config.Settings{Headphones: &config.Device{Addr: addr, Name: "Переименованные наушники"}},
 		eng: &workerProcess{}, t: &tray.Tray{},
 		st: ipc.EngineStatus{Headphones: addr, Connected: true, Equalizer: &normal},
 	}
+	a.st.Equalizer = nil
+	if a.equalizerMenuLocked(false) != nil {
+		t.Fatal("EQ menu appeared before the device reported a preset")
+	}
+	a.st.Equalizer = &normal
 	check := func(want int) {
 		t.Helper()
 		for i, row := range a.equalizerMenuLocked(false).Sub {

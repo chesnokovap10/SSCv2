@@ -55,7 +55,7 @@ type App struct {
 	carry             *ipc.AudioCarry
 	menuText          map[int]string
 	menuEnvironment   *menuEnvironment
-	windowsBattery    windowsBattery
+	windowsBuds       windowsBudsStatus
 	budsIOMu          sync.Mutex
 	pendingEqualizer  *equalizerRequest
 	menuReading       bool

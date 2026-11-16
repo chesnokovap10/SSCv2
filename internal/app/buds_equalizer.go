@@ -5,29 +5,26 @@ import (
 	"strings"
 	"time"
 
-	"sscv2/internal/battery"
+	"sscv2/internal/buds"
 	"sscv2/internal/driver"
 	"sscv2/internal/ipc"
 	"sscv2/internal/nativebt"
 	"sscv2/internal/tray"
 )
 
-const equalizerCount = battery.BudsEqualizerCount
+const equalizerCount = buds.EqualizerCount
 
 type equalizerRequest struct {
 	preset, baseline uint8
 	address          string
+	protocol         buds.Protocol
 	engine           *workerProcess
 	native           *nativeProcess
 }
 
-func isEqualizerBuds(name string) bool {
-	return strings.Contains(strings.ToLower(name), "buds2 pro")
-}
-
 func (a *App) equalizerLocked() *uint8 {
 	h := a.s.Headphones
-	if h == nil || !isEqualizerBuds(h.Name) {
+	if h == nil {
 		return nil
 	}
 	switch {
@@ -39,35 +36,34 @@ func (a *App) equalizerLocked() *uint8 {
 		if a.native.ready {
 			return a.native.budsEqualizer
 		}
-	case a.adapter.Mode == driver.BthUSB && strings.EqualFold(a.windowsBattery.addr, h.Addr) &&
-		time.Since(a.windowsBattery.read) < battery.MaxAge:
-		return a.windowsBattery.equalizer
+	case a.adapter.Mode == driver.BthUSB && strings.EqualFold(a.windowsBuds.addr, h.Addr) &&
+		time.Since(a.windowsBuds.read) < buds.MaxAge:
+		return a.windowsBuds.equalizer
 	}
 	return nil
 }
 
-func (a *App) equalizerMenuLocked(busy bool) tray.Item {
+func (a *App) equalizerMenuLocked(busy bool) *tray.Item {
 	labels := [equalizerCount]string{
 		T("Обычный", "Normal"), T("Усиление басов", "Bass boost"), T("Мягкий", "Soft"),
 		T("Динамичный", "Dynamic"), T("Чёткий", "Clear"), T("Усиление высоких", "Treble boost"),
 	}
 	current := a.equalizerLocked()
-	if current != nil && *current >= equalizerCount {
-		current = nil
-	}
 	if request := a.pendingEqualizer; a.equalizerRequestCurrentLocked(request) && a.equalizerLinkAvailableLocked() {
 		current = &request.preset
 	}
-	item := tray.Item{ID: idEqualizerMenu, Text: T("Эквалайзер: ", "Equalizer: "), LiveLabel: true, Disabled: current == nil || busy}
-	if current == nil {
-		item.Text += "—"
-	} else {
-		item.Text += labels[*current]
+	if current == nil || (*current >= equalizerCount && *current != buds.EqualizerCustom) {
+		return nil
 	}
+	label := T("Пользовательский", "Custom")
+	if *current < equalizerCount {
+		label = labels[*current]
+	}
+	item := &tray.Item{ID: idEqualizerMenu, Text: T("Эквалайзер: ", "Equalizer: ") + label, LiveLabel: true, Disabled: busy}
 	for i, label := range labels {
 		item.Sub = append(item.Sub, tray.Item{
 			ID: idEqualizerBase + i, Text: label, Radio: true,
-			Checked: current != nil && int(*current) == i, Disabled: item.Disabled,
+			Checked: int(*current) == i, Disabled: item.Disabled,
 		})
 	}
 	return item
@@ -103,7 +99,8 @@ func (a *App) stageEqualizerLocked(preset uint8) *equalizerRequest {
 	}
 	request := &equalizerRequest{
 		preset: preset, baseline: *current, address: a.s.Headphones.Addr,
-		engine: a.eng, native: a.native,
+		protocol: buds.ProtocolForName(a.s.Headphones.Name),
+		engine:   a.eng, native: a.native,
 	}
 	a.pendingEqualizer = request
 	return request
@@ -180,10 +177,10 @@ func (a *App) sendEqualizer(request *equalizerRequest) {
 	}
 	a.budsIOMu.Lock()
 	defer a.budsIOMu.Unlock()
-	status, confirmed := nativebt.ReadBudsStatus(addr, &preset)
+	status, confirmed := nativebt.ReadBudsStatus(addr, request.protocol, &preset)
 	a.mu.Lock()
-	if status.Equalizer != nil && strings.EqualFold(a.windowsBattery.addr, address) {
-		a.windowsBattery.equalizer, a.windowsBattery.read = status.Equalizer, time.Now()
+	if status.Equalizer != nil && strings.EqualFold(a.windowsBuds.addr, address) {
+		a.windowsBuds.equalizer, a.windowsBuds.read = status.Equalizer, time.Now()
 	}
 	a.mu.Unlock()
 	if !confirmed {

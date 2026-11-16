@@ -30,7 +30,7 @@ void ssc_kick(void);
 void ssc_timer_set(int id, uint32_t ms);
 void ssc_timer_stop(int id);
 void ssc_use_go_link_key_db(void);
-uint8_t ssc_buds_query(uint8_t *addr);
+uint8_t ssc_buds_query(uint8_t *addr, const uint8_t *service);
 uint8_t ssc_buds_open(uint8_t *addr, uint8_t channel, uint16_t *cid);
 
 /* Stream endpoints: returns local SEIDs (0 = not registered). */

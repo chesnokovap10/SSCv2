@@ -6,15 +6,16 @@ package bt
 import "C"
 
 import (
+	"encoding/hex"
 	"strings"
 	"sync/atomic"
 	"time"
 	"unsafe"
 
-	"sscv2/internal/battery"
+	"sscv2/internal/buds"
 )
 
-type budsBattery struct {
+type budsConnection struct {
 	// Only the BTstack thread touches the probe state.
 	peer      Addr
 	next      time.Time
@@ -23,38 +24,38 @@ type budsBattery struct {
 	cid       C.uint16_t
 	open      bool
 	cancelled bool
-	decoder   battery.BudsDecoder
-	removal   battery.BudsRemoval
+	decoder   buds.Decoder
+	removal   buds.Removal
 	lastPause time.Time
 	pendingEQ *uint8
-	equalizer battery.BudsEqualizerState
+	equalizer buds.EqualizerState
 
 	sample atomic.Pointer[budsSample]
 }
 
 type budsSample struct {
 	peer      string
-	level     battery.BudsLevel
+	level     buds.Level
 	at        time.Time
 	equalizer *uint8
 }
 
 // PollBudsStatus returns the latest report and ensures the status channel
 // is open on the existing headphone connection.
-func PollBudsStatus(address, name string) (*battery.BudsLevel, *uint8) {
+func PollBudsStatus(address, name string) (*buds.Level, *uint8) {
 	s := stack
-	if !s.loopRunning.Load() || !s.connected.Load() || !battery.IsBuds(name) {
+	if !s.loopRunning.Load() || !s.connected.Load() {
 		return nil, nil
 	}
 	if s.streaming.Load() {
 		s.call(func() {
 			if s.streaming.Load() && s.hasRemote && strings.EqualFold(address, s.remote.String()) {
-				s.openBudsStatus()
+				s.openBudsStatus(buds.ProtocolForName(name))
 			}
 		})
 	}
 	if sample := s.buds.sample.Load(); sample != nil && strings.EqualFold(sample.peer, address) {
-		if time.Since(sample.at) < battery.MaxAge && sample.level.Known() {
+		if time.Since(sample.at) < buds.MaxAge && sample.level.Known() {
 			return &sample.level, sample.equalizer
 		}
 		return nil, sample.equalizer
@@ -63,20 +64,20 @@ func PollBudsStatus(address, name string) (*battery.BudsLevel, *uint8) {
 }
 
 func SetBudsEqualizer(address string, preset uint8) {
-	if preset >= battery.BudsEqualizerCount {
+	if preset >= buds.EqualizerCount {
 		return
 	}
 	s := stack
 	s.call(func() {
 		b := &s.buds
-		if b.open && strings.EqualFold(b.peer.String(), address) {
+		if b.open && strings.EqualFold(b.peer.String(), address) && b.equalizer.Current() != nil {
 			b.pendingEQ = &preset
 			C.rfcomm_request_can_send_now_event(b.cid)
 		}
 	})
 }
 
-func (s *stackT) openBudsStatus() {
+func (s *stackT) openBudsStatus(protocol buds.Protocol) {
 	b := &s.buds
 	now := time.Now()
 	if b.querying || b.cid != 0 || s.inquiring || (b.peer == s.remote && now.Before(b.next)) {
@@ -85,8 +86,10 @@ func (s *stackT) openBudsStatus() {
 	b.peer, b.next = s.remote, now.Add(5*time.Second)
 	b.querying, b.cancelled = true, false
 	b.channel = 0
+	b.decoder.Protocol = protocol
 	peer := b.peer
-	if C.ssc_buds_query((*C.uint8_t)(unsafe.Pointer(&peer[0]))) != 0 {
+	service, _ := hex.DecodeString(strings.ReplaceAll(protocol.Service(), "-", ""))
+	if C.ssc_buds_query((*C.uint8_t)(unsafe.Pointer(&peer[0])), (*C.uint8_t)(unsafe.Pointer(&service[0]))) != 0 {
 		b.querying = false
 		b.next = now.Add(5 * time.Second) // SDP is shared with the audio profiles.
 		return
@@ -94,14 +97,14 @@ func (s *stackT) openBudsStatus() {
 	C.ssc_timer_set(timerBudsRead, 8000)
 }
 
-func (s *stackT) closeBudsProbe() {
+func (s *stackT) closeBudsStatus() {
 	b := &s.buds
 	b.cancelled = true
-	b.decoder = battery.BudsDecoder{}
-	b.removal = battery.BudsRemoval{}
+	b.decoder = buds.Decoder{}
+	b.removal = buds.Removal{}
 	b.lastPause = time.Time{}
 	b.pendingEQ = nil
-	b.equalizer = battery.BudsEqualizerState{}
+	b.equalizer = buds.EqualizerState{}
 	b.sample.Store(nil)
 	C.ssc_timer_stop(timerBudsRead)
 	C.ssc_timer_stop(timerBudsRemoval)
@@ -111,8 +114,8 @@ func (s *stackT) closeBudsProbe() {
 	}
 }
 
-func (s *stackT) clearBudsBattery() {
-	s.closeBudsProbe()
+func (s *stackT) clearBudsStatus() {
+	s.closeBudsStatus()
 	s.buds.sample.Store(nil)
 	s.buds.next = time.Time{}
 }
@@ -120,7 +123,7 @@ func (s *stackT) clearBudsBattery() {
 func (s *stackT) onBudsPacket(kind uint8, channel uint16, packet []byte, p *C.uint8_t) {
 	b := &s.buds
 	if kind == C.RFCOMM_DATA_PACKET && b.open && b.cid == C.uint16_t(channel) {
-		b.decoder.FeedStatus(packet, func(status battery.BudsStatus) {
+		b.decoder.FeedStatus(packet, func(status buds.Status) {
 			now := time.Now()
 			sample := budsSample{peer: b.peer.String()}
 			if previous := b.sample.Load(); previous != nil {
@@ -147,7 +150,7 @@ func (s *stackT) onBudsPacket(kind uint8, channel uint16, packet []byte, p *C.ui
 				if next.IsZero() {
 					C.ssc_timer_stop(timerBudsRemoval)
 				} else {
-					C.ssc_timer_set(timerBudsRemoval, C.uint32_t(battery.BudsRemovalDelay.Milliseconds()))
+					C.ssc_timer_set(timerBudsRemoval, C.uint32_t(buds.RemovalDelay.Milliseconds()))
 				}
 			}
 		})
@@ -162,13 +165,16 @@ func (s *stackT) onBudsPacket(kind uint8, channel uint16, packet []byte, p *C.ui
 	case C.SDP_EVENT_QUERY_COMPLETE:
 		b.querying = false
 		if b.cancelled || b.channel == 0 || C.sdp_event_query_complete_get_status(p) != 0 {
-			s.closeBudsProbe()
+			if !b.cancelled && b.channel == 0 && C.sdp_event_query_complete_get_status(p) == 0 {
+				b.next = time.Now().Add(buds.PollInterval)
+			}
+			s.closeBudsStatus()
 			return
 		}
 		peer := b.peer
 		var cid C.uint16_t
 		if C.ssc_buds_open((*C.uint8_t)(unsafe.Pointer(&peer[0])), C.uint8_t(b.channel), &cid) != 0 {
-			s.closeBudsProbe()
+			s.closeBudsStatus()
 			return
 		}
 		b.cid = cid
@@ -178,12 +184,12 @@ func (s *stackT) onBudsPacket(kind uint8, channel uint16, packet []byte, p *C.ui
 		}
 		if C.rfcomm_event_channel_opened_get_status(p) != 0 {
 			b.cid = 0
-			s.closeBudsProbe()
+			s.closeBudsStatus()
 			return
 		}
 		b.open = true
 		if b.cancelled {
-			s.closeBudsProbe()
+			s.closeBudsStatus()
 			return
 		}
 		C.ssc_timer_set(timerBudsRead, 3000)
@@ -192,19 +198,19 @@ func (s *stackT) onBudsPacket(kind uint8, channel uint16, packet []byte, p *C.ui
 		if b.open && C.rfcomm_event_can_send_now_get_rfcomm_cid(p) == b.cid {
 			if preset := b.pendingEQ; preset != nil {
 				b.pendingEQ = nil
-				frame := battery.BudsEqualizerRequest(*preset)
+				frame := b.decoder.Protocol.EqualizerRequest(*preset)
 				if code := C.rfcomm_send(b.cid, (*C.uint8_t)(unsafe.Pointer(&frame[0])), C.uint16_t(len(frame))); code != 0 {
 					s.logf("Buds equalizer send failed: %#x", code)
 				}
 			} else {
-				query := battery.ManagerInfo()
+				query := b.decoder.Protocol.ManagerInfo()
 				C.rfcomm_send(b.cid, (*C.uint8_t)(unsafe.Pointer(&query[0])), C.uint16_t(len(query)))
 			}
 		}
 	case C.RFCOMM_EVENT_CHANNEL_CLOSED:
 		if C.rfcomm_event_channel_closed_get_rfcomm_cid(p) == b.cid {
 			b.cid, b.open = 0, false
-			s.closeBudsProbe()
+			s.closeBudsStatus()
 		}
 	}
 }
