@@ -6,7 +6,7 @@ import (
 	"sscv2/internal/bitrate"
 	"sscv2/internal/config"
 	"sscv2/internal/ipc"
-	"sscv2/internal/keys"
+	"sscv2/internal/profiles"
 )
 
 // codecChange requires a.mu.
@@ -18,11 +18,10 @@ func (a *App) codecChange(m config.Mode) ipc.CodecChange {
 	}
 	if m == config.ModeAAC {
 		codec.AACBitrate = a.winUSBBitrate(m)
+		codec.AACMaxKbps, _ = a.workingMaxFor(m, false)
 	} else {
 		codec.SSCBitrate = a.winUSBBitrate(m)
-	}
-	if m == config.ModeSSC {
-		codec.SSCMaxKbps, _ = a.workingMax(m)
+		codec.SSCMaxKbps, _ = a.workingMaxFor(m, false)
 	}
 	return codec
 }
@@ -121,22 +120,17 @@ func autoHint(m config.Mode, policy bitrate.Policy, model string, showLimit bool
 // workingMax: the highest bitrate checked to work for a codec on the chosen
 // headphones and their model (0, "" = not known). a.mu held.
 func (a *App) workingMax(m config.Mode) (int, string) {
-	name, id := "", bitrate.DevID{}
+	return a.workingMaxFor(m, a.prefersNativeBitrates())
+}
+
+func (a *App) workingMaxFor(m config.Mode, native bool) (int, string) {
+	name, id := "", profiles.DevID{}
 	if h := a.s.Headphones; h != nil {
-		name = h.Name
-		if name == "" {
-			if store, err := keys.Open(); err == nil {
-				if c, ok := store.FindClassic(h.Addr); ok {
-					name = c.Name
-				}
-			}
-		}
+		name = profileDeviceName(h)
 		// Device ID as Windows recorded it when the headphones were paired
-		if src, vid, pid, _, ok := keys.DeviceID(h.Addr); ok {
-			id = bitrate.DevID{Source: src, Vendor: vid, Product: pid}
-		}
+		id = profileDeviceID(h.Addr)
 	}
-	return bitrate.WorkingMax(m, id, name)
+	return a.deviceProfiles.WorkingMax(m, id, name, native)
 }
 
 // prefersNativeBitrates uses the running worker when available. a.mu held.
@@ -145,7 +139,7 @@ func (a *App) prefersNativeBitrates() bool {
 }
 
 func (a *App) bitratePolicy(m config.Mode, native bool) (bitrate.Policy, string) {
-	return a.bitratePolicyWith(m, native, a.workingMax)
+	return a.bitratePolicyWith(m, native, func(codec config.Mode) (int, string) { return a.workingMaxFor(codec, native) })
 }
 
 func (a *App) bitratePolicyWith(m config.Mode, native bool, workingMax func(config.Mode) (int, string)) (bitrate.Policy, string) {

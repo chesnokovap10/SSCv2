@@ -55,7 +55,7 @@ func TestNativeUHQConfiguration(t *testing.T) {
 			err := inspect(context.Background(), link, io.Discard, func() (io.WriteCloser, error) {
 				t.Fatal("rejected configuration opened a media channel")
 				return nil, nil
-			}, nil, stream, func(supported bool) { reported = supported })
+			}, nil, stream, func(caps ipc.CodecCapabilities) { reported = caps.SSCUHQ })
 			if err == nil || reported != (tc.rate&2 != 0) {
 				t.Fatalf("discovery reported %t, negotiation error: %v", reported, err)
 			}

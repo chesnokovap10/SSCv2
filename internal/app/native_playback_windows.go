@@ -2,29 +2,33 @@ package app
 
 import (
 	"errors"
+	"strings"
 	"time"
 
 	"sscv2/internal/audio"
 	"sscv2/internal/buds"
 	"sscv2/internal/config"
 	"sscv2/internal/ipc"
+	"sscv2/internal/profiles"
 )
 
 type nativeProcess struct {
 	*workerProcess
 	ipc.NativeStream
-	started       chan struct{}
-	ready         bool
-	activeKbps    int
-	volume        ipc.NativeVolume
-	volumePending *ipc.NativeVolume
-	volumeWriting bool
-	linkLost      bool
-	uhqSupported  *bool
-	lastMessage   string
-	budsBattery   *buds.Level
-	budsBatteryAt time.Time
-	budsEqualizer *uint8
+	started          chan struct{}
+	ready            bool
+	activeKbps       int
+	volume           ipc.NativeVolume
+	volumePending    *ipc.NativeVolume
+	volumeWriting    bool
+	linkLost         bool
+	uhqSupported     *bool
+	lastMessage      string
+	budsBattery      *buds.Level
+	budsBatteryAt    time.Time
+	budsEqualizer    *uint8
+	budsNoiseControl *buds.NoiseControl
+	deviceAddress    string
 }
 
 func (a *App) startNativeWorker(mode config.Mode, path, endpoint, address, stereo string) error {
@@ -36,18 +40,20 @@ func (a *App) startNativeWorker(mode config.Mode, path, endpoint, address, stere
 	}
 	stream := a.nativeStreamLocked(mode)
 	protocol := buds.SPPNew
+	commands := a.profileCommands(a.s.Headphones)
 	if h := a.s.Headphones; h != nil {
 		protocol = buds.ProtocolForName(h.Name)
 	}
 	a.mu.Unlock()
 	worker, err := startWorkerProcess("native-worker", "native-stderr.log", ipc.NativeConfig{
-		Path: path, RenderEndpoint: endpoint, Device: address, StereoEndpoint: stereo, Stream: stream, BudsProtocol: protocol,
+		Path: path, RenderEndpoint: endpoint, Device: address, StereoEndpoint: stereo, Stream: stream,
+		BudsProtocol: protocol, BudsCommands: commands,
 	})
 	if err != nil {
 		return err
 	}
 
-	p := &nativeProcess{workerProcess: worker, NativeStream: stream, started: make(chan struct{})}
+	p := &nativeProcess{workerProcess: worker, NativeStream: stream, started: make(chan struct{}), deviceAddress: address}
 	a.mu.Lock()
 	a.native = p
 	a.st.StreamStartFailed = false
@@ -113,12 +119,19 @@ func (a *App) onNativeEvent(p *nativeProcess, event ipc.Event) {
 		return
 	}
 	stream := p.NativeStream
+	headphones := a.s.Headphones
+	if headphones != nil && !strings.EqualFold(headphones.Addr, p.deviceAddress) {
+		headphones = nil
+	}
 	switch event.Ev {
 	case ipc.EventNativeCaps:
 		if event.Status != nil {
 			p.uhqSupported = event.Status.SSCUHQSupported
 		}
 		a.mu.Unlock()
+		if event.Status != nil {
+			a.recordBitrateProfile(headphones, true, event.Status.Capabilities, config.ModeOff, profiles.StreamInfo{})
+		}
 		a.refresh()
 	case ipc.EventNativeReady:
 		if p.ready || event.Native == nil || *event.Native != stream {
@@ -133,6 +146,7 @@ func (a *App) onNativeEvent(p *nativeProcess, event ipc.Event) {
 		kbps := p.activeKbps
 		close(p.started)
 		a.mu.Unlock()
+		a.recordBitrateProfile(headphones, true, nil, stream.Mode, profiles.StreamInfo{Kbps: kbps})
 		logf("native %s: ready", stream.Mode)
 		logf("native %s: streaming at %d kbps", stream.Mode, kbps)
 		a.refresh()
@@ -142,18 +156,26 @@ func (a *App) onNativeEvent(p *nativeProcess, event ipc.Event) {
 		}
 		a.mu.Unlock()
 	case ipc.EventNativeBattery:
-		if event.Battery != nil || event.Equalizer == nil {
+		disconnected := event.Battery == nil && event.Equalizer == nil && event.NoiseControl == nil
+		if event.Battery != nil || disconnected {
 			p.budsBattery, p.budsBatteryAt = event.Battery, time.Now()
 		}
-		if event.Equalizer != nil || event.Battery == nil {
+		if event.Equalizer != nil || disconnected {
 			p.budsEqualizer = event.Equalizer
 		}
+		if event.NoiseControl != nil || disconnected {
+			p.budsNoiseControl = event.NoiseControl
+		}
 		a.reconcileEqualizerLocked()
+		a.reconcileNoiseControlLocked()
 		a.mu.Unlock()
 		a.refresh()
 	case ipc.EventNativeLinkLost:
 		p.linkLost = true
+		a.reconcileEqualizerLocked()
+		a.reconcileNoiseControlLocked()
 		a.mu.Unlock()
+		a.t.RefreshMenu()
 	case ipc.EventNativeLog, ipc.EventNativeError:
 		p.lastMessage = event.Msg
 		a.mu.Unlock()

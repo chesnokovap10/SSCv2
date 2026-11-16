@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"sscv2/internal/bitrate"
+	"sscv2/internal/buds"
 	"sscv2/internal/config"
 	"sscv2/internal/driver"
 	"sscv2/internal/helper"
@@ -15,6 +16,7 @@ import (
 	"sscv2/internal/ipc"
 	"sscv2/internal/keys"
 	"sscv2/internal/logx"
+	"sscv2/internal/profiles"
 	"sscv2/internal/tray"
 )
 
@@ -48,10 +50,13 @@ const (
 	idTestSigning
 	idBitrateMenu
 	idEqualizerMenu
+	idNoiseControlMenu
+	idOpenSettingsFolder
 
-	idEqualizerBase = 300
-	idBitrateBase   = 500 // + kbps (0 = auto)
-	idDeviceBase    = 2000
+	idEqualizerBase    = 300
+	idNoiseControlBase = 310
+	idBitrateBase      = 500 // + kbps (0 = auto)
+	idDeviceBase       = 2000
 )
 
 type menuEnvironment struct {
@@ -61,7 +66,7 @@ type menuEnvironment struct {
 	autoStart, testSigning    bool
 	autoStartKnown, testKnown bool
 	headphones                *config.Device
-	deviceID                  bitrate.DevID
+	deviceID                  profiles.DevID
 }
 
 func readMenuEnvironment(headphones *config.Device) menuEnvironment {
@@ -82,9 +87,7 @@ func readMenuEnvironment(headphones *config.Device) menuEnvironment {
 				device.Name = bond.Name
 			}
 		}
-		if src, vid, pid, _, ok := keys.DeviceID(device.Addr); ok {
-			env.deviceID = bitrate.DevID{Source: src, Vendor: vid, Product: pid}
-		}
+		env.deviceID = profileDeviceID(device.Addr)
 	}
 	return env
 }
@@ -120,14 +123,17 @@ func (a *App) liveMenu() []tray.Item {
 func (a *App) menuWithEnvironment(env menuEnvironment) []tray.Item {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	name, id := "", bitrate.DevID{}
+	name, id := "", profiles.DevID{}
 	if h := a.s.Headphones; h != nil {
 		name = h.Name
 		if cached := env.headphones; cached != nil && cached.Addr == h.Addr {
 			name, id = nz(name, cached.Name), env.deviceID
 		}
 	}
-	workingMax := func(mode config.Mode) (int, string) { return bitrate.WorkingMax(mode, id, name) }
+	native := a.prefersNativeBitrates()
+	workingMax := func(mode config.Mode) (int, string) {
+		return a.deviceProfiles.WorkingMax(mode, id, name, native)
+	}
 	_, s := a.stateWithBitratesLocked(workingMax)
 	snap := env.bonds
 	busy := a.busy != "" || a.pendingUHQ
@@ -147,7 +153,7 @@ func (a *App) menuWithEnvironment(env menuEnvironment) []tray.Item {
 		{Text: T("SSC UHQ (96 кГц)", "SSC UHQ (96 kHz)"), ID: idModeUHQ, Radio: true, Checked: mode == config.ModeSSCUHQ, Disabled: busy || a.uhqUnavailableWith(workingMax)},
 	}
 	items = append(items, tray.Item{Text: T("Кодек: ", "Codec: ") + modeName(mode), Sub: codecs, LiveLabel: true})
-	policy, model := a.bitratePolicyWith(mode, a.prefersNativeBitrates(), workingMax)
+	policy, model := a.bitratePolicyWith(mode, native, workingMax)
 	if mode.Streaming() && !policy.Offered(mode, 0) {
 		items = append(items, tray.Item{ID: idBitrateMenu, Text: T("Битрейт: — (", "Bitrate: - (") + unsupportedBitrateText(mode, model) + ")", Sub: []tray.Item{}, Disabled: true, LiveLabel: true})
 	} else if mode.Streaming() {
@@ -196,9 +202,7 @@ func (a *App) menuWithEnvironment(env menuEnvironment) []tray.Item {
 	} else {
 		items = append(items, tray.Item{ID: idBitrateMenu, Text: T("Битрейт: —", "Bitrate: -"), Sub: []tray.Item{}, Disabled: true, LiveLabel: true})
 	}
-	if equalizer := a.equalizerMenuLocked(busy); equalizer != nil {
-		items = append(items, *equalizer)
-	}
+	items = append(items, *a.equalizerMenuLocked(busy), *a.noiseControlMenuLocked(busy))
 	items = append(items, tray.Item{Separator: true})
 
 	// pairing submenu
@@ -286,7 +290,10 @@ func (a *App) menuWithEnvironment(env menuEnvironment) []tray.Item {
 		{LiveLabel: true, MinWidth: 370, Text: T("Текущая тестовая подпись Windows: ", "Current Windows test signing: ") + testSigningState, Disabled: true},
 		{Separator: true},
 		{LiveLabel: true, MinWidth: 370, Text: T("Отладка и API интерфейса", "Debug and UI API"), ID: idDebug, Checked: a.s.Debug},
-		{LiveLabel: true, MinWidth: 370, Text: T("Открыть папку журналов", "Open the log folder"), ID: idOpenLogs},
+		{LiveLabel: true, MinWidth: 370, Text: T("Открыть папку…", "Open folder…"), Sub: []tray.Item{
+			{Text: T("Папка журналов", "Log folder"), ID: idOpenLogs, LiveLabel: true},
+			{Text: T("Папка настроек", "Settings folder"), ID: idOpenSettingsFolder, LiveLabel: true},
+		}},
 		{Separator: true},
 		{LiveLabel: true, MinWidth: 370, Text: T("Служба: ", "Service: ") + svcState},
 		{LiveLabel: true, MinWidth: 370, Text: T("Запустить службу", "Start the service"), ID: idSvcInstall, Disabled: busy || env.readAt.IsZero() || env.running},
@@ -331,6 +338,8 @@ func (a *App) command(id int) {
 		go a.switchMode(config.ModeSSCUHQ)
 	case id >= idEqualizerBase && id < idEqualizerBase+equalizerCount:
 		a.setEqualizer(uint8(id - idEqualizerBase))
+	case id >= idNoiseControlBase && id <= idNoiseControlBase+int(buds.NoiseAdaptive):
+		a.setNoiseControl(uint8(id - idNoiseControlBase))
 	case id >= idBitrateBase && id < idDeviceBase:
 		go a.setBitrate(id - idBitrateBase)
 	case id == idImportWin:
@@ -371,6 +380,8 @@ func (a *App) command(id int) {
 		go a.removeService()
 	case id == idOpenLogs:
 		openTarget(config.LogDir())
+	case id == idOpenSettingsFolder:
+		openTarget(config.UserDir())
 	case id == idTestSigning:
 		go a.toggleTestSigning()
 	case id == idAutoStart:

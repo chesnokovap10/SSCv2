@@ -144,14 +144,14 @@ func (a *App) startWinUSBEngineLocked() error {
 	}
 	a.carry = nil
 	cfg.AACBitrate = a.winUSBBitrate(config.ModeAAC)
-	if a.mode == config.ModeSSC {
-		cfg.SSCMaxKbps, _ = a.workingMax(config.ModeSSC)
-	}
+	cfg.AACMaxKbps, _ = a.workingMaxFor(config.ModeAAC, false)
 	if a.mode != config.ModeAAC {
+		cfg.SSCMaxKbps, _ = a.workingMaxFor(a.mode, false)
 		cfg.SSCBitrate = a.winUSBBitrate(a.mode)
 	}
 	if a.s.Headphones != nil {
 		cfg.Headphones = a.s.Headphones.Addr
+		cfg.BudsCommands = a.profileCommands(a.s.Headphones)
 	}
 	if a.s.Mouse != nil {
 		cfg.Mouse = a.s.Mouse.Addr
@@ -210,11 +210,14 @@ func (a *App) onEngineEvent(p *workerProcess, ev ipc.Event) {
 		prev := a.st
 		a.st = *ev.Status
 		a.reconcileEqualizerLocked()
+		a.reconcileNoiseControlLocked()
 		if !ev.Status.Connected {
 			a.pendingUHQ = false
 		}
 		a.t.SetVolumeKeys(ev.Status.CaptureDevice != "")
+		headphones := a.s.Headphones
 		a.mu.Unlock()
+		a.recordWinUSBProfile(headphones, prev, *ev.Status)
 		if ev.Status.Phase == "streaming" && prev.Phase != "streaming" {
 			a.t.Balloon("SSCv2", fmt.Sprintf(T("%s: %s, %d кбит/с", "%s: %s, %d kbps"), nz(ev.Status.HeadphonesName, ev.Status.Headphones),
 				ev.Status.Codec, ev.Status.BitrateKbps), 0)

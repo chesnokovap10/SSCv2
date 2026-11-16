@@ -129,9 +129,11 @@ func TestBudsRemovalRequiresKnownTransitionAndDebounces(t *testing.T) {
 	}
 }
 
+// Captured Buds2 SPPNew status from omarchy-headphones/PROTOCOL.md.
+const capturedBuds2Status = "fd2a00610b031212010111000000bf22010040014001030003660002001000000000110200010000400000993ddd"
+
 func TestBudsDecoderExtendedStatus(t *testing.T) {
-	// Captured Buds2 SPPNew status from omarchy-headphones/PROTOCOL.md.
-	frame, err := hex.DecodeString("fd2a00610b031212010111000000bf22010040014001030003660002001000000000110200010000400000993ddd")
+	frame, err := hex.DecodeString(capturedBuds2Status)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -144,6 +146,89 @@ func TestBudsDecoderExtendedStatus(t *testing.T) {
 		if len(got) != 1 || got[0] != (Level{Left: 18, Right: 18}) {
 			t.Fatalf("split %d: reports = %v, want [{18 18}]", split, got)
 		}
+	}
+}
+
+func TestNoiseControlFromExtendedStatusAndUpdates(t *testing.T) {
+	frame, err := hex.DecodeString(capturedBuds2Status)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var decoder Decoder
+	var reports []Status
+	collect := func(status Status) { reports = append(reports, status) }
+	decoder.FeedStatus(SPPNew.request(0x77, NoiseANC), collect)
+	decoder.FeedStatus(frame, collect)
+	decoder.FeedStatus(SPPNew.request(0x42, 0x78, NoiseOff), collect)
+	decoder.FeedStatus(SPPNew.request(0x77, NoiseAmbient, 0x11), collect)
+	decoder.FeedStatus(SPPNew.request(0x77, NoiseAdaptive), collect)
+	if len(reports) != 3 {
+		t.Fatalf("got %d reports, want extended status, acknowledgement and touch update", len(reports))
+	}
+	for i, want := range []uint8{NoiseANC, NoiseOff, NoiseAmbient} {
+		control := reports[i].NoiseControl
+		if control == nil || *control != (NoiseControl{Mode: want, Modes: 3}) || reports[i].ControlOnly != (i > 0) {
+			t.Fatalf("report %d: %+v, control %+v", i, reports[i], control)
+		}
+	}
+	control := reports[0].NoiseControl
+	if got := control.Request(SPPNew, NoiseANC); len(got) != 8 || !bytes.Equal(got[:5], []byte{0xfd, 0x04, 0x10, 0x78, 1}) {
+		t.Fatalf("unexpected ANC request %x", got)
+	}
+	if frame := control.Request(SPPNew, NoiseAdaptive); frame != nil {
+		t.Fatalf("unsupported adaptive control request %x", frame)
+	}
+}
+
+func TestUnknownBudsUseStandardNoiseControlCommand(t *testing.T) {
+	var d Decoder
+	payload := make([]byte, 18)
+	payload[12] = NoiseUnknown
+	payload[14], payload[15] = 0x63, 0x01 // Buds4, absent from the model table.
+	var control *NoiseControl
+	d.FeedStatus(SPPNew.request(0x61, payload...), func(s Status) { control = s.NoiseControl })
+	if !control.UsesFallback() || control.Mode != NoiseUnknown || control.Modes != 4 || !control.Allows(NoiseAdaptive) {
+		t.Fatalf("unexpected generic controls: %+v", control)
+	}
+	if got, want := control.Request(SPPNew, NoiseAdaptive), SPPNew.request(0x78, 3); !bytes.Equal(got, want) {
+		t.Fatalf("generic Adaptive command = %x, want %x", got, want)
+	}
+	d.FeedStatus(SPPNew.request(0x42, 0x78, NoiseAdaptive), func(s Status) { control = s.NoiseControl })
+	if control.Mode != NoiseAdaptive {
+		t.Fatalf("generic Adaptive confirmation was ignored: %+v", control)
+	}
+
+	payload[14], payload[15] = 0x16, 0x01 // Buds Live uses a different command.
+	d.FeedStatus(SPPNew.request(0x61, payload...), func(s Status) { control = s.NoiseControl })
+	if control != nil {
+		t.Fatalf("Buds Live incorrectly offered generic noise control: %+v", control)
+	}
+}
+
+func TestProfileControlCommands(t *testing.T) {
+	commands := ControlCommands{Equalizer: 0x91, Noise: 0x98, NoiseUpdate: 0x97, NoiseModes: 2}
+	d := Decoder{Protocol: SPPNew, Commands: commands}
+	payload := make([]byte, 18)
+	payload[14], payload[15] = 0x16, 1 // Buds Live has no standard unified noise control.
+	var status Status
+	feed := func(frame []byte) { d.FeedStatus(frame, func(s Status) { status = s }) }
+	feed(SPPNew.request(0x61, payload...))
+	if !status.NoiseControl.Allows(NoiseANC) || status.NoiseControl.Allows(NoiseAmbient) {
+		t.Fatalf("profile mode count ignored: %+v", status.NoiseControl)
+	}
+	if got := status.NoiseControl.RequestWithCommands(SPPNew, commands, NoiseANC); !bytes.Equal(got, SPPNew.request(0x98, 1)) {
+		t.Fatalf("profile noise command: %x", got)
+	}
+	if got := commands.EqualizerRequest(SPPNew, 1); !bytes.Equal(got, SPPNew.request(0x91, 1)) {
+		t.Fatalf("profile EQ command: %x", got)
+	}
+	feed(SPPNew.request(0x42, 0x91, 1))
+	if status.Equalizer == nil || *status.Equalizer != 1 || !status.EqualizerAck {
+		t.Fatalf("profile EQ acknowledgement ignored: %+v", status)
+	}
+	feed(SPPNew.request(0x97, 1))
+	if status.NoiseControl == nil || status.NoiseControl.Mode != NoiseANC {
+		t.Fatalf("profile noise update ignored: %+v", status)
 	}
 }
 

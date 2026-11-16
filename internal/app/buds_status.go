@@ -12,11 +12,13 @@ import (
 )
 
 type windowsBudsStatus struct {
-	addr      string
-	level     *buds.Level
-	equalizer *uint8
-	tried     time.Time
-	read      time.Time
+	addr         string
+	level        *buds.Level
+	equalizer    *uint8
+	noiseControl *buds.NoiseControl
+	noiseRead    time.Time
+	tried        time.Time
+	read         time.Time
 }
 
 func (a *App) pollWindowsBattery() {
@@ -46,12 +48,15 @@ func (a *App) pollWindowsBattery() {
 		next.addr = h.Addr
 		if time.Since(next.tried) >= buds.PollInterval {
 			next.tried = time.Now()
-			status, _ := nativebt.ReadBudsStatus(addr, buds.ProtocolForName(h.Name), nil)
+			status, _ := nativebt.ReadBudsStatus(addr, buds.ProtocolForName(h.Name), a.profileCommands(h), nil, nil)
 			if status.Level.Known() {
 				next.level, next.read = &status.Level, time.Now()
 			}
 			if status.Equalizer != nil {
 				next.equalizer, next.read = status.Equalizer, time.Now()
+			}
+			if status.NoiseControl != nil {
+				next.noiseControl, next.noiseRead = status.NoiseControl, time.Now()
 			}
 		}
 	}
@@ -61,6 +66,7 @@ func (a *App) pollWindowsBattery() {
 	if a.eng == nil && a.native == nil && a.s.Headphones == h && a.adapter.Mode == driver.BthUSB {
 		a.windowsBuds = next
 		a.reconcileEqualizerLocked()
+		a.reconcileNoiseControlLocked()
 	}
 }
 

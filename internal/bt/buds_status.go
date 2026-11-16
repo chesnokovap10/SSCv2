@@ -17,50 +17,64 @@ import (
 
 type budsConnection struct {
 	// Only the BTstack thread touches the probe state.
-	peer      Addr
-	next      time.Time
-	querying  bool
-	channel   uint8
-	cid       C.uint16_t
-	open      bool
-	cancelled bool
-	decoder   buds.Decoder
-	removal   buds.Removal
-	lastPause time.Time
-	pendingEQ *uint8
-	equalizer buds.EqualizerState
+	peer         Addr
+	next         time.Time
+	querying     bool
+	channel      uint8
+	cid          C.uint16_t
+	open         bool
+	cancelled    bool
+	decoder      buds.Decoder
+	removal      buds.Removal
+	lastPause    time.Time
+	pendingEQ    *uint8
+	pendingNoise *uint8
+	equalizer    buds.EqualizerState
 
 	sample atomic.Pointer[budsSample]
 }
 
 type budsSample struct {
-	peer      string
-	level     buds.Level
-	at        time.Time
-	equalizer *uint8
+	peer         string
+	level        buds.Level
+	at           time.Time
+	equalizer    *uint8
+	noiseControl *buds.NoiseControl
 }
 
 // PollBudsStatus returns the latest report and ensures the status channel
 // is open on the existing headphone connection.
-func PollBudsStatus(address, name string) (*buds.Level, *uint8) {
+func PollBudsStatus(address, name string, commands buds.ControlCommands) (*buds.Level, *uint8, *buds.NoiseControl) {
 	s := stack
 	if !s.loopRunning.Load() || !s.connected.Load() {
-		return nil, nil
+		return nil, nil, nil
 	}
 	if s.streaming.Load() {
 		s.call(func() {
 			if s.streaming.Load() && s.hasRemote && strings.EqualFold(address, s.remote.String()) {
-				s.openBudsStatus(buds.ProtocolForName(name))
+				s.openBudsStatus(buds.ProtocolForName(name), commands)
 			}
 		})
 	}
 	if sample := s.buds.sample.Load(); sample != nil && strings.EqualFold(sample.peer, address) {
 		if time.Since(sample.at) < buds.MaxAge && sample.level.Known() {
-			return &sample.level, sample.equalizer
+			return &sample.level, sample.equalizer, sample.noiseControl
 		}
-		return nil, sample.equalizer
+		return nil, sample.equalizer, sample.noiseControl
 	}
-	return nil, nil
+	return nil, nil, nil
+}
+
+func SetBudsNoiseControl(address string, mode uint8) {
+	s := stack
+	s.call(func() {
+		b := &s.buds
+		if sample := b.sample.Load(); b.open && sample != nil &&
+			strings.EqualFold(sample.peer, address) && sample.noiseControl.Allows(mode) {
+			b.pendingNoise = &mode
+			C.rfcomm_request_can_send_now_event(b.cid)
+		}
+	})
 }
 
 func SetBudsEqualizer(address string, preset uint8) {
@@ -70,14 +84,16 @@ func SetBudsEqualizer(address string, preset uint8) {
 	s := stack
 	s.call(func() {
 		b := &s.buds
-		if b.open && strings.EqualFold(b.peer.String(), address) && b.equalizer.Current() != nil {
+		sample := b.sample.Load()
+		if b.open && sample != nil && strings.EqualFold(sample.peer, address) &&
+			(b.equalizer.Current() != nil || sample.noiseControl.UsesFallback()) {
 			b.pendingEQ = &preset
 			C.rfcomm_request_can_send_now_event(b.cid)
 		}
 	})
 }
 
-func (s *stackT) openBudsStatus(protocol buds.Protocol) {
+func (s *stackT) openBudsStatus(protocol buds.Protocol, commands buds.ControlCommands) {
 	b := &s.buds
 	now := time.Now()
 	if b.querying || b.cid != 0 || s.inquiring || (b.peer == s.remote && now.Before(b.next)) {
@@ -86,7 +102,7 @@ func (s *stackT) openBudsStatus(protocol buds.Protocol) {
 	b.peer, b.next = s.remote, now.Add(5*time.Second)
 	b.querying, b.cancelled = true, false
 	b.channel = 0
-	b.decoder.Protocol = protocol
+	b.decoder = buds.Decoder{Protocol: protocol, Commands: commands}
 	peer := b.peer
 	service, _ := hex.DecodeString(strings.ReplaceAll(protocol.Service(), "-", ""))
 	if C.ssc_buds_query((*C.uint8_t)(unsafe.Pointer(&peer[0])), (*C.uint8_t)(unsafe.Pointer(&service[0]))) != 0 {
@@ -104,6 +120,7 @@ func (s *stackT) closeBudsStatus() {
 	b.removal = buds.Removal{}
 	b.lastPause = time.Time{}
 	b.pendingEQ = nil
+	b.pendingNoise = nil
 	b.equalizer = buds.EqualizerState{}
 	b.sample.Store(nil)
 	C.ssc_timer_stop(timerBudsRead)
@@ -136,11 +153,14 @@ func (s *stackT) onBudsPacket(kind uint8, channel uint16, packet []byte, p *C.ui
 			if eq != nil {
 				sample.equalizer = eq
 			}
-			b.sample.Store(&sample)
-			if eq != nil {
-				s.emit(Event{Kind: EvBudsEqualizer, Addr: b.peer})
+			if status.NoiseControl != nil {
+				sample.noiseControl = status.NoiseControl
 			}
-			if status.EqualizerAck {
+			b.sample.Store(&sample)
+			if eq != nil || status.NoiseControl != nil {
+				s.emit(Event{Kind: EvBudsControls, Addr: b.peer})
+			}
+			if status.ControlOnly {
 				return
 			}
 			C.ssc_timer_stop(timerBudsRead)
@@ -196,15 +216,26 @@ func (s *stackT) onBudsPacket(kind uint8, channel uint16, packet []byte, p *C.ui
 		C.rfcomm_request_can_send_now_event(b.cid)
 	case C.RFCOMM_EVENT_CAN_SEND_NOW:
 		if b.open && C.rfcomm_event_can_send_now_get_rfcomm_cid(p) == b.cid {
-			if preset := b.pendingEQ; preset != nil {
+			var frame []byte
+			switch {
+			case b.pendingEQ != nil:
+				frame = b.decoder.Commands.EqualizerRequest(b.decoder.Protocol, *b.pendingEQ)
 				b.pendingEQ = nil
-				frame := b.decoder.Protocol.EqualizerRequest(*preset)
-				if code := C.rfcomm_send(b.cid, (*C.uint8_t)(unsafe.Pointer(&frame[0])), C.uint16_t(len(frame))); code != 0 {
-					s.logf("Buds equalizer send failed: %#x", code)
+			case b.pendingNoise != nil:
+				if sample := b.sample.Load(); sample != nil {
+					frame = sample.noiseControl.RequestWithCommands(b.decoder.Protocol, b.decoder.Commands, *b.pendingNoise)
 				}
-			} else {
-				query := b.decoder.Protocol.ManagerInfo()
-				C.rfcomm_send(b.cid, (*C.uint8_t)(unsafe.Pointer(&query[0])), C.uint16_t(len(query)))
+				b.pendingNoise = nil
+			default:
+				frame = b.decoder.Protocol.ManagerInfo()
+			}
+			if len(frame) > 0 {
+				if code := C.rfcomm_send(b.cid, (*C.uint8_t)(unsafe.Pointer(&frame[0])), C.uint16_t(len(frame))); code != 0 {
+					s.logf("Buds RFCOMM send failed: %#x", code)
+				}
+			}
+			if b.pendingEQ != nil || b.pendingNoise != nil {
+				C.rfcomm_request_can_send_now_event(b.cid)
 			}
 		}
 	case C.RFCOMM_EVENT_CHANNEL_CLOSED:
@@ -215,12 +246,12 @@ func (s *stackT) onBudsPacket(kind uint8, channel uint16, packet []byte, p *C.ui
 	}
 }
 
-// BudsEqualizer returns the latest accepted device value for address.
-func BudsEqualizer(address string) *uint8 {
+// BudsControls returns the latest accepted settings for address.
+func BudsControls(address string) (*uint8, *buds.NoiseControl) {
 	if sample := stack.buds.sample.Load(); sample != nil && strings.EqualFold(sample.peer, address) {
-		return sample.equalizer
+		return sample.equalizer, sample.noiseControl
 	}
-	return nil
+	return nil, nil
 }
 
 func (s *stackT) confirmBudsRemoval() {

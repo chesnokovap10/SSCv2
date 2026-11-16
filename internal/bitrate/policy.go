@@ -9,6 +9,7 @@ import (
 )
 
 const (
+	Unsupported       = -1 // The model profile marks the codec unavailable.
 	MaxAACKbps        = 256
 	MaxNativeAACKbps  = 224
 	WinUSBExtendedMTU = 1017
@@ -85,6 +86,9 @@ func (p Policy) Experimental(mode config.Mode, kbps int) bool {
 
 func (p Policy) NativeAuto(mode config.Mode) int {
 	if mode == config.ModeAAC {
+		if p.WorkingMax > 0 {
+			return min(MaxNativeAACKbps, p.WorkingMax)
+		}
 		return MaxNativeAACKbps
 	}
 	if best := BestSSC(sscSampleRate(mode), standardPayload, p.WorkingMax); best != 0 {
@@ -149,4 +153,17 @@ func payload(extended bool) int {
 
 func aacCeiling(packetPayload int) int {
 	return packetPayload * 8 * 48000 / (1024 * 1000)
+}
+
+func PacketCeiling(mode config.Mode, sampleRate, payloadBytes int) int {
+	if payloadBytes <= 0 {
+		return 0
+	}
+	if mode == config.ModeAAC {
+		return min(MaxAACKbps, payloadBytes*8*sampleRate/(1024*1000))
+	}
+	if mode.UsesSSC() {
+		return BestSSC(sscSampleRate(mode), payloadBytes, 0)
+	}
+	return 0
 }

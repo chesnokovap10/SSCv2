@@ -17,24 +17,26 @@ import (
 
 // EngineConfig is the first line the tray writes to the engine.
 type EngineConfig struct {
-	Codec           string `json:"codec"` // "aac" | "ssc"
-	Headphones      string `json:"headphones,omitempty"`
-	Mouse           string `json:"mouse,omitempty"`
-	VID             uint16 `json:"vid"`
-	PID             uint16 `json:"pid"`
-	Volume          uint8  `json:"volume"`
-	HeadphonesMuted bool   `json:"headphonesMuted,omitempty"`
-	Verbose         bool   `json:"verbose,omitempty"`
-	Debug           bool   `json:"debug,omitempty"`
-	Lang            string `json:"lang,omitempty"`       // "ru" | "en"
-	MaxMTU          bool   `json:"maxMTU,omitempty"`     // 1017-byte media packets (Samsung Galaxy Buds2 Pro)
-	AACMode         string `json:"aacMode,omitempty"`    // "fit" | "frag"
-	AACBitrate      int    `json:"aacBitrate,omitempty"` // kbps, 0 = as high as a packet allows
-	SSCBitrate      int    `json:"sscBitrate,omitempty"` // kbps, 0 = like the phone / UHQ: highest that fits
-	TryUHQ          bool   `json:"tryUhq,omitempty"`
-	SSCUHQ          bool   `json:"sscUhq,omitempty"`     // SSC UHQ (96 kHz)
-	SSCMaxKbps      int    `json:"sscMaxKbps,omitempty"` // highest working SSC kbps on these headphones (Auto), 0 = not known
-	SSCCap          int    `json:"sscCap,omitempty"`     // SSC config byte, 0 = like the phone
+	BudsCommands    buds.ControlCommands `json:"budsCommands,omitzero"`
+	Codec           string               `json:"codec"` // "aac" | "ssc"
+	Headphones      string               `json:"headphones,omitempty"`
+	Mouse           string               `json:"mouse,omitempty"`
+	VID             uint16               `json:"vid"`
+	PID             uint16               `json:"pid"`
+	Volume          uint8                `json:"volume"`
+	HeadphonesMuted bool                 `json:"headphonesMuted,omitempty"`
+	Verbose         bool                 `json:"verbose,omitempty"`
+	Debug           bool                 `json:"debug,omitempty"`
+	Lang            string               `json:"lang,omitempty"`       // "ru" | "en"
+	MaxMTU          bool                 `json:"maxMTU,omitempty"`     // 1017-byte media packets (Samsung Galaxy Buds2 Pro)
+	AACMode         string               `json:"aacMode,omitempty"`    // "fit" | "frag"
+	AACBitrate      int                  `json:"aacBitrate,omitempty"` // kbps, 0 = as high as a packet allows
+	AACMaxKbps      int                  `json:"aacMaxKbps,omitempty"` // verified Auto ceiling
+	SSCBitrate      int                  `json:"sscBitrate,omitempty"` // kbps, 0 = like the phone / UHQ: highest that fits
+	TryUHQ          bool                 `json:"tryUhq,omitempty"`
+	SSCUHQ          bool                 `json:"sscUhq,omitempty"`     // SSC UHQ (96 kHz)
+	SSCMaxKbps      int                  `json:"sscMaxKbps,omitempty"` // highest working SSC kbps on these headphones (Auto), 0 = not known
+	SSCCap          int                  `json:"sscCap,omitempty"`     // SSC config byte, 0 = like the phone
 	// Carry: the audio routing a previous engine left in place (it was
 	// stopped for a restart with Keep): this engine owns and undoes it.
 	Carry *AudioCarry `json:"carry,omitempty"`
@@ -42,12 +44,13 @@ type EngineConfig struct {
 
 // NativeConfig is the first line the tray writes to the native worker.
 type NativeConfig struct {
-	Path           string        `json:"path"`
-	RenderEndpoint string        `json:"renderEndpoint"`
-	Device         string        `json:"device"`
-	BudsProtocol   buds.Protocol `json:"budsProtocol,omitempty"`
-	StereoEndpoint string        `json:"stereoEndpoint,omitempty"`
-	Stream         NativeStream  `json:"stream"`
+	BudsCommands   buds.ControlCommands `json:"budsCommands,omitzero"`
+	Path           string               `json:"path"`
+	RenderEndpoint string               `json:"renderEndpoint"`
+	Device         string               `json:"device"`
+	BudsProtocol   buds.Protocol        `json:"budsProtocol,omitempty"`
+	StereoEndpoint string               `json:"stereoEndpoint,omitempty"`
+	Stream         NativeStream         `json:"stream"`
 }
 
 type NativeStream struct {
@@ -69,6 +72,7 @@ type AudioCarry struct {
 // CodecChange selects the stream format on an active connection.
 type CodecChange struct {
 	AACBitrate int    `json:"aacBitrate,omitempty"`
+	AACMaxKbps int    `json:"aacMaxKbps,omitempty"`
 	TryUHQ     bool   `json:"tryUhq,omitempty"`
 	Codec      string `json:"codec"`
 	SSCUHQ     bool   `json:"sscUhq,omitempty"`
@@ -76,17 +80,29 @@ type CodecChange struct {
 	SSCMaxKbps int    `json:"sscMaxKbps,omitempty"`
 }
 
+// CodecCapabilities records the sink's AVDTP reply, independently of whether
+// a stream has been configured or listened to.
+type CodecCapabilities struct {
+	AAC       bool   `json:"aac"`
+	SSC       bool   `json:"ssc"`
+	SSCUHQ    bool   `json:"sscUhq"`
+	AACMaxBps uint32 `json:"aacMaxBps,omitempty"`
+	Partial   bool   `json:"partial,omitempty"`
+}
+
 type CommandKind string
 
 const (
-	CommandStop      CommandKind = "stop"
-	CommandCodec     CommandKind = "codec"
-	CommandEqualizer CommandKind = "equalizer"
+	CommandStop         CommandKind = "stop"
+	CommandCodec        CommandKind = "codec"
+	CommandEqualizer    CommandKind = "equalizer"
+	CommandNoiseControl CommandKind = "noise_control"
 )
 
 // Command from tray to a playback worker.
 type Command struct {
 	Equalizer *uint8        `json:"equalizer,omitempty"`
+	NoiseMode *uint8        `json:"noise_mode,omitempty"`
 	Volume    uint8         `json:"volume,omitempty"`
 	Cmd       CommandKind   `json:"cmd"`
 	Addr      string        `json:"addr,omitempty"`
@@ -117,20 +133,23 @@ type EngineStatus struct {
 	Chip        string `json:"chip,omitempty"`
 	Firmware    string `json:"firmware,omitempty"`
 
-	Headphones      string      `json:"headphones,omitempty"`
-	HeadphonesName  string      `json:"headphonesName,omitempty"`
-	Battery         *buds.Level `json:"battery,omitempty"`
-	Equalizer       *uint8      `json:"equalizer,omitempty"`
-	SSCUHQSupported *bool       `json:"sscUhqSupported,omitempty"`
-	Connected       bool        `json:"connected"`
-	Streaming       bool        `json:"streaming"`
-	Codec           string      `json:"codec,omitempty"`
-	BitrateKbps     int         `json:"bitrateKbps,omitempty"`
-	SampleRate      int         `json:"sampleRate,omitempty"`
-	Volume          int         `json:"volume"` // 0..127, -1 unknown
-	AVRCP           bool        `json:"avrcp"`
-	CaptureDevice   string      `json:"captureDevice,omitempty"`
-	CaptureFormat   string      `json:"captureFormat,omitempty"`
+	Headphones        string             `json:"headphones,omitempty"`
+	HeadphonesName    string             `json:"headphonesName,omitempty"`
+	Battery           *buds.Level        `json:"battery,omitempty"`
+	Equalizer         *uint8             `json:"equalizer,omitempty"`
+	NoiseControl      *buds.NoiseControl `json:"noise_control,omitempty"`
+	SSCUHQSupported   *bool              `json:"sscUhqSupported,omitempty"`
+	Capabilities      *CodecCapabilities `json:"capabilities,omitempty"`
+	MediaPayloadBytes int                `json:"mediaPayloadBytes,omitempty"`
+	Connected         bool               `json:"connected"`
+	Streaming         bool               `json:"streaming"`
+	Codec             string             `json:"codec,omitempty"`
+	BitrateKbps       int                `json:"bitrateKbps,omitempty"`
+	SampleRate        int                `json:"sampleRate,omitempty"`
+	Volume            int                `json:"volume"` // 0..127, -1 unknown
+	AVRCP             bool               `json:"avrcp"`
+	CaptureDevice     string             `json:"captureDevice,omitempty"`
+	CaptureFormat     string             `json:"captureFormat,omitempty"`
 	// What to undo if the engine dies: previous default output, speakers muted.
 	Muted bool `json:"muted"`
 
@@ -164,21 +183,22 @@ type NativeVolume struct {
 }
 
 type Event struct {
-	Equalizer    *uint8        `json:"equalizer,omitempty"`
-	Battery      *buds.Level   `json:"battery,omitempty"`
-	NativeVolume *NativeVolume `json:"nativeVolume,omitempty"`
-	BitrateKbps  int           `json:"bitrateKbps,omitempty"`
-	Codec        *CodecChange  `json:"codec,omitempty"`
-	Volume       *uint8        `json:"volume,omitempty"`
-	Ev           EventKind     `json:"ev"`
-	Status       *EngineStatus `json:"status,omitempty"`
-	Devices      []Found       `json:"devices,omitempty"`
-	Addr         string        `json:"addr,omitempty"`
-	Key          string        `json:"key,omitempty"`
-	KeyType      int           `json:"keyType,omitempty"`
-	Name         string        `json:"name,omitempty"`
-	Msg          string        `json:"msg,omitempty"`
-	Native       *NativeStream `json:"native,omitempty"`
+	Equalizer    *uint8             `json:"equalizer,omitempty"`
+	NoiseControl *buds.NoiseControl `json:"noise_control,omitempty"`
+	Battery      *buds.Level        `json:"battery,omitempty"`
+	NativeVolume *NativeVolume      `json:"nativeVolume,omitempty"`
+	BitrateKbps  int                `json:"bitrateKbps,omitempty"`
+	Codec        *CodecChange       `json:"codec,omitempty"`
+	Volume       *uint8             `json:"volume,omitempty"`
+	Ev           EventKind          `json:"ev"`
+	Status       *EngineStatus      `json:"status,omitempty"`
+	Devices      []Found            `json:"devices,omitempty"`
+	Addr         string             `json:"addr,omitempty"`
+	Key          string             `json:"key,omitempty"`
+	KeyType      int                `json:"keyType,omitempty"`
+	Name         string             `json:"name,omitempty"`
+	Msg          string             `json:"msg,omitempty"`
+	Native       *NativeStream      `json:"native,omitempty"`
 }
 
 // ---- tray -> helper ------------------------------------------------------------

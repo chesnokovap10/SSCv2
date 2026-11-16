@@ -46,7 +46,7 @@ func (a *aacEnc) Bandwidth() int   { return a.e.Bandwidth() }
 var aacMode = "fit"
 
 // aacForced: AAC bitrate from the settings (bps, 0 = as high as a packet allows).
-var aacForced int
+var aacForced, aacWorking int
 
 func aacTarget(sinkLimit uint32) (int, error) {
 	target := bitrate.MaxAACKbps * 1000
@@ -58,6 +58,8 @@ func aacTarget(sinkLimit uint32) (int, error) {
 			return 0, fmt.Errorf("AAC: %d kbps exceeds the supported %d bps", aacForced/1000, target)
 		}
 		target = aacForced
+	} else if aacWorking > 0 {
+		target = min(target, aacWorking*1000)
 	}
 	return target, nil
 }
@@ -160,9 +162,8 @@ func sscBitrate(sampleRate, mtu int, cfg uint8) (int, error) {
 		}
 		return bps, nil
 	}
-	top := 0
+	top := max(0, sscWorking)
 	if sampleRate != 96000 {
-		top = sscWorking
 		if cfg != 0 && cfg&0x08 == 0 && (top == 0 || top > sscBitrateLimited) {
 			top = sscBitrateLimited
 		}

@@ -21,6 +21,7 @@ import (
 	"sscv2/internal/audio"
 	"sscv2/internal/bitrate"
 	"sscv2/internal/bt"
+	"sscv2/internal/buds"
 	"sscv2/internal/config"
 	"sscv2/internal/driver"
 	"sscv2/internal/i18n"
@@ -97,6 +98,7 @@ func Run(in io.Reader, stdout *os.File) int {
 	sscForced = e.cfg.SSCBitrate
 	sscUHQMode = e.cfg.SSCUHQ
 	sscWorking = e.cfg.SSCMaxKbps
+	aacWorking = e.cfg.AACMaxKbps
 	logf("engine start %s: codec=%s uhq=%v bitrate aac=%d ssc=%d maxmtu=%v headphones=%q mouse=%q adapter=%04X:%04X debug=%v lang=%s",
 		ipc.Version, e.cfg.Codec, e.cfg.SSCUHQ, e.cfg.AACBitrate, e.cfg.SSCBitrate, e.cfg.MaxMTU, e.cfg.Headphones, e.cfg.Mouse,
 		e.cfg.VID, e.cfg.PID, e.cfg.Debug, i18n.Lang())
@@ -159,6 +161,10 @@ func (e *engine) commands(r *ipc.Reader) {
 		case ipc.CommandEqualizer:
 			if c.Equalizer != nil {
 				bt.SetBudsEqualizer(c.Addr, *c.Equalizer)
+			}
+		case ipc.CommandNoiseControl:
+			if c.NoiseMode != nil {
+				bt.SetBudsNoiseControl(c.Addr, *c.NoiseMode)
 			}
 		case ipc.CommandCodec:
 			if c.Codec != nil && (c.Codec.Codec == "aac" || c.Codec.Codec == "ssc") {
@@ -431,6 +437,8 @@ func (e *engine) session(addrStr string) (result error) {
 		s.Headphones, s.HeadphonesName = addr.String(), name
 		s.Battery = nil
 		s.Equalizer = nil
+		s.NoiseControl = nil
+		s.Capabilities, s.MediaPayloadBytes = nil, 0
 	})
 	for len(e.disc) > 0 {
 		<-e.disc
@@ -453,6 +461,12 @@ func (e *engine) session(addrStr string) (result error) {
 	uhqSupported := caps.SSCUHQ || remoteCfg && bt.SSCConfig()&0x02 != 0
 	e.update(func(s *ipc.EngineStatus) {
 		s.Connected, s.SSCUHQSupported = true, &uhqSupported
+		if !remoteCfg {
+			s.Capabilities = &ipc.CodecCapabilities{
+				AAC: caps.AAC, SSC: caps.SSC && caps.SSCCap&0x04 != 0, SSCUHQ: caps.SSCUHQ,
+				AACMaxBps: caps.AACBitrate,
+			}
+		}
 	})
 	sscUHQMode, sscForced = e.cfg.SSCUHQ, e.cfg.SSCBitrate
 	tryUHQ := e.cfg.TryUHQ && caps.SSC && !remoteCfg && !uhqSupported
@@ -574,11 +588,12 @@ func (e *engine) session(addrStr string) (result error) {
 				return fmt.Errorf("%w: %v", errStreamStart, bt.ErrNoCodec)
 			}
 			sameMode := e.cfg.Codec == change.Codec && e.cfg.SSCUHQ == change.SSCUHQ
-			if sameMode && e.cfg.AACBitrate == change.AACBitrate && e.cfg.SSCBitrate == change.SSCBitrate &&
+			if sameMode && e.cfg.AACBitrate == change.AACBitrate && e.cfg.AACMaxKbps == change.AACMaxKbps && e.cfg.SSCBitrate == change.SSCBitrate &&
 				e.cfg.SSCMaxKbps == change.SSCMaxKbps && (!change.SSCUHQ || sscUHQ()) {
 				continue
 			}
 			aacForced = change.AACBitrate * 1000
+			aacWorking = change.AACMaxKbps
 			sscUHQMode = change.SSCUHQ
 			sscForced, sscWorking = change.SSCBitrate, change.SSCMaxKbps
 			target := bt.CodecAAC
@@ -588,6 +603,7 @@ func (e *engine) session(addrStr string) (result error) {
 			next, nextMTU, err := e.switchCodec(ctx, caps, target, &enc)
 			e.cfg.Codec, e.cfg.SSCUHQ, e.cfg.TryUHQ = change.Codec, change.SSCUHQ, change.TryUHQ
 			e.cfg.AACBitrate, e.cfg.SSCBitrate, e.cfg.SSCMaxKbps = change.AACBitrate, change.SSCBitrate, change.SSCMaxKbps
+			e.cfg.AACMaxKbps = change.AACMaxKbps
 			if err != nil {
 				logf("codec switch to %s: %v", target, err)
 				if change.SSCUHQ || change.SSCBitrate > 0 || change.AACBitrate > 0 {
@@ -619,6 +635,7 @@ func (e *engine) installEncoder(enc Encoder, mtu int, codec bt.Codec) {
 		s.Streaming = true
 		s.Codec = label
 		s.BitrateKbps = enc.BitrateKbps()
+		s.MediaPayloadBytes = mtu
 		s.SampleRate = rate
 	})
 }
@@ -695,7 +712,7 @@ func (e *engine) startAudio() error {
 	return nil
 }
 
-var evNames = map[bt.EventKind]string{bt.EvDisconnected: "disconnected", bt.EvVolume: "volume", bt.EvLinkKey: "link key", bt.EvBudsRemoved: "Buds removed", bt.EvBudsEqualizer: "Buds equalizer",
+var evNames = map[bt.EventKind]string{bt.EvDisconnected: "disconnected", bt.EvVolume: "volume", bt.EvLinkKey: "link key", bt.EvBudsRemoved: "Buds removed", bt.EvBudsControls: "Buds controls",
 	bt.EvMouse: "mouse", bt.EvAVRCPConnected: "AVRCP connected", bt.EvVolumeApplied: "volume applied",
 	bt.EvACLUp: "ACL up", bt.EvA2DPReady: "A2DP ready", bt.EvMediaKey: "media key", bt.EvStreamReleased: "media channel released"}
 
@@ -721,10 +738,10 @@ func (e *engine) btEvents() {
 			e.update(func(s *ipc.EngineStatus) { s.MouseState = ev.Mouse })
 		case bt.EvMediaKey:
 			HandleMediaKey(ev.Media)
-		case bt.EvBudsEqualizer:
+		case bt.EvBudsControls:
 			e.update(func(s *ipc.EngineStatus) {
 				if s.Headphones == ev.Addr.String() {
-					s.Equalizer = bt.BudsEqualizer(s.Headphones)
+					s.Equalizer, s.NoiseControl = bt.BudsControls(s.Headphones)
 				}
 			})
 		case bt.EvBudsRemoved:
@@ -766,7 +783,11 @@ func (e *engine) ticker() {
 			s.AVRCP = bt.AVRCPConnected()
 			s.Streaming = bt.Streaming()
 			s.Connected = bt.Connected()
-			s.Battery, s.Equalizer = bt.PollBudsStatus(s.Headphones, s.HeadphonesName)
+			var commands buds.ControlCommands
+			if strings.EqualFold(s.Headphones, e.cfg.Headphones) {
+				commands = e.cfg.BudsCommands
+			}
+			s.Battery, s.Equalizer, s.NoiseControl = bt.PollBudsStatus(s.Headphones, s.HeadphonesName, commands)
 			if s.Mouse != "" {
 				s.MouseState, s.MouseReports = mstate, mrep
 			}

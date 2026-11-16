@@ -148,7 +148,7 @@ func avdtpResponse(kind byte, payload []byte) ([]byte, error) {
 	return nil, &rejection{kind, payload}
 }
 
-func inspect(ctx context.Context, link io.ReadWriter, out io.Writer, openMedia func() (io.WriteCloser, error), send func(io.Writer, int) error, stream ipc.NativeStream, capabilities func(bool)) error {
+func inspect(ctx context.Context, link io.ReadWriter, out io.Writer, openMedia func() (io.WriteCloser, error), send func(io.Writer, int) error, stream ipc.NativeStream, capabilities func(ipc.CodecCapabilities)) error {
 	p := avdtpSession{link: link, ctx: ctx}
 	endpoints, err := p.command(discover)
 	if err != nil {
@@ -162,7 +162,7 @@ func inspect(ctx context.Context, link io.ReadWriter, out io.Writer, openMedia f
 	selectedRate := stream.BitrateKbps
 	var experimentalSEID byte
 	var experimentalCodec []byte
-	var uhqSupported bool
+	var advertised ipc.CodecCapabilities
 	var rejected error
 	for i := 0; i < len(endpoints); i += 2 {
 		seid := endpoints[i] >> 2
@@ -196,7 +196,17 @@ func inspect(ctx context.Context, link io.ReadWriter, out io.Writer, openMedia f
 					return fmt.Errorf("SEID %d: truncated media codec", seid)
 				}
 				fmt.Fprintf(out, "  media type %#x, codec %#02x, data % x\n", value[0]>>4, value[1], value[2:])
-				uhqSupported = uhqSupported || sscSupportsRate(value, 0x02)
+				advertised.SSC = advertised.SSC || sscSupportsRate(value, 0x04)
+				advertised.SSCUHQ = advertised.SSCUHQ || sscSupportsRate(value, 0x02)
+				if supportsAAC(value, 0) {
+					limit := uint32(aacMaxBitrate(value))
+					if limit == 0 {
+						advertised.AACMaxBps = 0
+					} else if !advertised.AAC || advertised.AACMaxBps != 0 {
+						advertised.AACMaxBps = max(advertised.AACMaxBps, limit)
+					}
+					advertised.AAC = true
+				}
 				if endpoints[i]&2 == 0 && openMedia != nil && (selectedSEID == 0 || stream.AutoAAC && selectedRate < stream.BitrateKbps) {
 					rate := stream.BitrateKbps
 					if stream.Mode == config.ModeAAC && stream.AutoAAC {
@@ -218,7 +228,8 @@ func inspect(ctx context.Context, link io.ReadWriter, out io.Writer, openMedia f
 		}
 	}
 	if capabilities != nil {
-		capabilities(uhqSupported)
+		advertised.Partial = rejected != nil
+		capabilities(advertised)
 	}
 	if openMedia == nil {
 		return nil
@@ -327,7 +338,7 @@ func (p *avdtpSession) stream(out io.Writer, seid byte, codec []byte, openMedia 
 
 // runAVDTP opens the signaling channel and discovers the remote endpoints.
 // If send is provided, it negotiates a media stream and hands it to the sender.
-func runAVDTP(ctx context.Context, path string, out io.Writer, retry bool, stream ipc.NativeStream, send func(io.Writer, int) error, capabilities func(bool)) error {
+func runAVDTP(ctx context.Context, path string, out io.Writer, retry bool, stream ipc.NativeStream, send func(io.Writer, int) error, capabilities func(ipc.CodecCapabilities)) error {
 	started := time.Now()
 	link, err := openChannel(ctx, path, retry)
 	if err != nil {

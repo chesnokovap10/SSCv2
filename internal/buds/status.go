@@ -28,6 +28,8 @@ type Status struct {
 	Placement    byte   // left in the high nibble; zero means unknown
 	Equalizer    *uint8 // confirmed factory preset in an extended status report
 	EqualizerAck bool
+	NoiseControl *NoiseControl
+	ControlOnly  bool // no battery or placement in this message
 }
 
 const EqualizerCount = 6
@@ -58,13 +60,16 @@ func (e *EqualizerState) Observe(status Status, now time.Time) *uint8 {
 // Decoder accepts the RFCOMM byte stream in arbitrary chunks. See
 // https://github.com/timschneeb/GalaxyBudsClient/blob/master/GalaxyBudsRFCommProtocol.md
 type Decoder struct {
-	Protocol Protocol
-	pending  []byte
+	Protocol      Protocol
+	Commands      ControlCommands
+	pending       []byte
+	noiseModes    uint8
+	noiseFallback bool
 }
 
 func (d *Decoder) Feed(data []byte, report func(Level)) {
 	d.FeedStatus(data, func(status Status) {
-		if !status.EqualizerAck {
+		if !status.ControlOnly {
 			report(status.Level)
 		}
 	})
@@ -110,11 +115,15 @@ func (d *Decoder) FeedStatus(data []byte, report func(Status)) {
 
 func (d *Decoder) budsReport(body []byte, report func(Status)) {
 	var offset int
+	commands := d.Commands.WithDefaults()
 	switch body[0] {
 	case 0x42: // Universal acknowledgement
-		if d.Protocol != LegacySPP && len(body) == 3 && body[1] == 0x86 && body[2] < EqualizerCount {
+		if d.Protocol != LegacySPP && len(body) == 3 && body[1] == commands.Equalizer && body[2] < EqualizerCount {
 			eq := body[2]
-			report(Status{Level: Level{Left: -1, Right: -1}, Equalizer: &eq, EqualizerAck: true})
+			report(Status{Level: Level{Left: -1, Right: -1}, Equalizer: &eq, EqualizerAck: true, ControlOnly: true})
+		}
+		if len(body) >= 3 && body[1] == commands.Noise {
+			d.reportNoiseUpdate(body[2], report)
 		}
 		return
 	case 0x60: // Status Updated
@@ -122,6 +131,9 @@ func (d *Decoder) budsReport(body []byte, report func(Status)) {
 	case 0x61: // Extended Status Updated
 		offset = 3
 	default:
+		if body[0] == commands.NoiseUpdate && len(body) >= 2 {
+			d.reportNoiseUpdate(body[1], report)
+		}
 		return
 	}
 	if len(body) < offset+2 {
@@ -142,6 +154,7 @@ func (d *Decoder) budsReport(body []byte, report func(Status)) {
 	}
 	if body[0] == 0x61 {
 		status.Equalizer = d.Protocol.reportedEqualizer(body)
+		status.NoiseControl = d.decodeNoiseControl(body)
 	}
 	report(status)
 }

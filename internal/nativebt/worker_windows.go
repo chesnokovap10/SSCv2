@@ -72,6 +72,7 @@ func runWorker(cfg ipc.NativeConfig, reader *ipc.Reader, events *ipc.Writer, han
 	var playingStream atomic.Bool
 	var budsOnce sync.Once
 	equalizers := make(chan uint8, 1)
+	noiseModes := make(chan uint8, 1)
 	address, _ := strconv.ParseUint(strings.ReplaceAll(cfg.Device, ":", ""), 16, 48)
 	go watchAVRCP(controlCtx, cfg.Path, out, func(key int) {
 		if key == bt.MediaPause {
@@ -130,6 +131,16 @@ func runWorker(cfg ipc.NativeConfig, reader *ipc.Reader, events *ipc.Writer, han
 				}
 				continue
 			}
+			if command.Cmd == ipc.CommandNoiseControl {
+				if address != 0 && command.NoiseMode != nil && *command.NoiseMode <= buds.NoiseAdaptive {
+					select {
+					case <-noiseModes:
+					default:
+					}
+					noiseModes <- *command.NoiseMode
+				}
+				continue
+			}
 			if command.Cmd != ipc.CommandCodec || command.Native == nil || !command.Native.Valid() {
 				readErr = fmt.Errorf("invalid native worker command %q", command.Cmd)
 				return
@@ -149,8 +160,8 @@ func runWorker(cfg ipc.NativeConfig, reader *ipc.Reader, events *ipc.Writer, han
 		}
 		pauseOnLinkLoss(playing, func(format string, args ...any) { fmt.Fprintf(out, format, args...) })
 	}
-	capabilities := func(uhq bool) {
-		_ = events.Write(ipc.Event{Ev: ipc.EventNativeCaps, Status: &ipc.EngineStatus{SSCUHQSupported: &uhq}})
+	capabilities := func(caps ipc.CodecCapabilities) {
+		_ = events.Write(ipc.Event{Ev: ipc.EventNativeCaps, Status: &ipc.EngineStatus{SSCUHQSupported: &caps.SSCUHQ, Capabilities: &caps}})
 	}
 
 	for {
@@ -191,8 +202,8 @@ func runWorker(cfg ipc.NativeConfig, reader *ipc.Reader, events *ipc.Writer, han
 				playingStream.Store(true)
 				if address != 0 {
 					budsOnce.Do(func() {
-						go watchBudsStatus(controlCtx, address, cfg.BudsProtocol, equalizers, func(status buds.Status) {
-							ev := ipc.Event{Ev: ipc.EventNativeBattery, Equalizer: status.Equalizer}
+						go watchBudsStatus(controlCtx, address, cfg.BudsProtocol, cfg.BudsCommands, equalizers, noiseModes, func(status buds.Status) {
+							ev := ipc.Event{Ev: ipc.EventNativeBattery, Equalizer: status.Equalizer, NoiseControl: status.NoiseControl}
 							if status.Level.Known() {
 								ev.Battery = &status.Level
 							}

@@ -58,6 +58,14 @@ If AAC, SSC or SSC UHQ fails to start with a manual bitrate, SSCv2 keeps that mo
 - **Settings → Show all bitrates** exposes experimental rates and allows an SSC UHQ attempt on a headset that advertises SSC alone. The headset and transport still determine whether the stream starts.
 - **Settings → Max MTU for Samsung Galaxy Buds2 Pro** allows packets up to 1017 bytes in WinUSB mode. In Windows test mode, **Show all bitrates** exposes the larger-packet candidates, which may fail when the driver sends the first packet.
 
+### Headphone profiles
+
+SSCv2 seeds `%APPDATA%\SSCv2\profiles.json` with the factory commands for known Galaxy Buds models and the verified SSC limit for Buds2 Pro. It migrates the previous profiles file on first launch. AVDTP capabilities and stream parameters are recorded under `transports.winusb` or `transports.windows`. Profiles use the Bluetooth Device ID (`source`, `vendor`, `product`) and the model name when multiple models report the same ID.
+
+- Edit `verifiedMaxKbps` to set checked limits for `aac`, `ssc`, or `ssc_uhq`. Use `-1` for an unavailable codec. Transport-specific limits take precedence.
+- Set decimal message IDs in `commands.equalizer`, `commands.noise`, and `commands.noiseUpdate`. Optionally set `commands.noiseModes` from 1 to 4. These overrides use compatible Galaxy Buds packet formats. Restart SSCv2 to apply them to an active stream.
+- You can edit the file while SSCv2 runs. If the file is unreadable, SSCv2 uses the last valid profiles and retries pending saves when access returns.
+
 ### Mouse and Bluetooth
 
 In WinUSB mode, SSCv2 can bridge one paired BLE HID or classic Bluetooth HID mouse, including movement, scrolling and buttons 1–5. Import its pairing from Windows and select it in the tray. A classic mouse may need movement to initiate the connection.
@@ -66,7 +74,7 @@ The helper service handles privileged driver operations and access to Windows pa
 
 ## Diagnostics and build
 
-Use **Settings → Open the log folder** for `%LOCALAPPDATA%\SSCv2\logs`. Enable **Debug and UI API** for detailed logging and menu commands. Settings and pairing keys are stored in `%APPDATA%\SSCv2`. The helper service log is in `%ProgramData%\SSCv2`.
+Under **Settings → Open folder…**, choose **Log folder** for `%LOCALAPPDATA%\SSCv2\logs` or **Settings folder** for `%APPDATA%\SSCv2`, which contains settings, profiles, and pairing keys. Enable **Debug and UI API** for detailed logging and menu commands. The helper service log is in `%ProgramData%\SSCv2`.
 
 ```bat
 ssc.exe status

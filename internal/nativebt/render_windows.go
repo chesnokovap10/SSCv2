@@ -34,7 +34,7 @@ const (
 	renderFadeFrames   = 96 // 2 ms at 48 kHz
 )
 
-func (r *renderPCM) stream(ctx context.Context, path string, stream ipc.NativeStream, ready func(int) error, linkLost, capabilities func(bool)) error {
+func (r *renderPCM) stream(ctx context.Context, path string, stream ipc.NativeStream, ready func(int) error, linkLost func(bool), capabilities func(ipc.CodecCapabilities)) error {
 	if err := requireTestSigning(); err != nil {
 		return err
 	}

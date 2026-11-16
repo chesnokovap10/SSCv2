@@ -64,14 +64,41 @@ func (p Protocol) request(id byte, payload ...byte) []byte {
 
 func (p Protocol) ManagerInfo() []byte { return p.request(0x88, 1, 1, 0x22) }
 
+// ControlCommands overrides message IDs for devices that use the Galaxy Buds
+// framing and the same preset/mode payloads. Zero uses the standard command.
+type ControlCommands struct {
+	Equalizer   uint8 `json:"equalizer,omitempty"`
+	Noise       uint8 `json:"noise,omitempty"`
+	NoiseUpdate uint8 `json:"noiseUpdate,omitempty"`
+	NoiseModes  uint8 `json:"noiseModes,omitempty"`
+}
+
+func (c ControlCommands) WithDefaults() ControlCommands {
+	if c.Equalizer == 0 {
+		c.Equalizer = 0x86
+	}
+	if c.Noise == 0 {
+		c.Noise = noiseControlCommand
+	}
+	if c.NoiseUpdate == 0 {
+		c.NoiseUpdate = noiseControlUpdate
+	}
+	return c
+}
+
 func (p Protocol) EqualizerRequest(preset uint8) []byte {
+	return (ControlCommands{}).EqualizerRequest(p, preset)
+}
+
+func (c ControlCommands) EqualizerRequest(p Protocol, preset uint8) []byte {
+	command := c.WithDefaults().Equalizer
 	if p != LegacySPP {
-		return p.request(0x86, preset)
+		return p.request(command, preset)
 	}
 	if preset == 0 {
-		return p.request(0x86, 0, 5)
+		return p.request(command, 0, 5)
 	}
-	return p.request(0x86, 1, preset+4)
+	return p.request(command, 1, preset+4)
 }
 
 func (p Protocol) reportedEqualizer(body []byte) *uint8 {

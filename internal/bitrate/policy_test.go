@@ -56,25 +56,6 @@ func TestAutoAndExperimentalRates(t *testing.T) {
 	}
 }
 
-func TestWorkingMax(t *testing.T) {
-	b2p := DevID{1, 0x0075, 0xA013}
-	if k, m := WorkingMax(config.ModeSSC, b2p, "renamed"); k != 229 || m != "Samsung Galaxy Buds2 Pro" {
-		t.Errorf("Buds2 Pro by id: %d %q", k, m)
-	}
-	if k, _ := WorkingMax(config.ModeSSC, DevID{}, "Buds2 Pro JK08"); k != 229 {
-		t.Errorf("Buds2 Pro by name (no id): %d", k)
-	}
-	if k, _ := WorkingMax(config.ModeSSC, DevID{1, 0x0075, 0xA0FF}, "Buds2 Pro JK08"); k != 0 {
-		t.Errorf("another Samsung product id named like Buds2 Pro: %d", k)
-	}
-	if k, _ := WorkingMax(config.ModeSSCUHQ, b2p, ""); k != Unsupported {
-		t.Errorf("UHQ on Buds2 Pro: %d, want Unsupported", k)
-	}
-	if k, _ := WorkingMax(config.ModeAAC, b2p, ""); k != 0 {
-		t.Errorf("AAC not profiled: %d", k)
-	}
-}
-
 func TestSavedBitrateDoesNotBecomeAuto(t *testing.T) {
 	for _, native := range []bool{false, true} {
 		p := Policy{Native: native}

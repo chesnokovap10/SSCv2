@@ -3,17 +3,20 @@ package app
 
 import (
 	"os"
+	"path/filepath"
 	"sync"
 	"time"
 
 	"golang.org/x/sys/windows"
 
 	"sscv2/internal/audio"
+	"sscv2/internal/buds"
 	"sscv2/internal/config"
 	"sscv2/internal/driver"
 	"sscv2/internal/i18n"
 	"sscv2/internal/ipc"
 	"sscv2/internal/logx"
+	"sscv2/internal/profiles"
 	"sscv2/internal/tray"
 )
 
@@ -52,17 +55,22 @@ type App struct {
 	volSettled        chan struct{}
 	stopVolumeRestore func() // guarded by opMu
 	// carry: audio routing left by an engine stopped for a restart
-	carry             *ipc.AudioCarry
-	menuText          map[int]string
-	menuEnvironment   *menuEnvironment
-	windowsBuds       windowsBudsStatus
-	budsIOMu          sync.Mutex
-	pendingEqualizer  *equalizerRequest
-	equalizerDevice   string
-	lastEqualizer     *uint8
-	menuReading       bool
-	menuDeviceIDs     map[menuDeviceKey]int
-	menuDeviceTargets []menuDevice
+	carry               *ipc.AudioCarry
+	menuText            map[int]string
+	menuEnvironment     *menuEnvironment
+	windowsBuds         windowsBudsStatus
+	budsIOMu            sync.Mutex
+	pendingEqualizer    *budsSettingRequest
+	failedEqualizer     *budsSettingRequest
+	equalizerDevice     string
+	lastEqualizer       *uint8
+	noiseDevice         string
+	lastNoiseControl    *buds.NoiseControl
+	pendingNoiseControl *budsSettingRequest
+	menuReading         bool
+	menuDeviceIDs       map[menuDeviceKey]int
+	menuDeviceTargets   []menuDevice
+	deviceProfiles      *profiles.ProfileStore
 }
 
 func logf(f string, a ...any) { logx.Printf(f, a...) }
@@ -87,7 +95,11 @@ func Run() int {
 	defer windows.CloseHandle(h)
 	logf("tray start, version %s, %s", ipc.Version, selfPath())
 
-	a := &App{mode: config.ModeOff, s: s}
+	deviceProfiles, err := profiles.OpenProfiles(filepath.Join(config.UserDir(), profiles.ProfileFilename))
+	if err != nil {
+		logf("bitrate profiles: %v", err)
+	}
+	a := &App{mode: config.ModeOff, s: s, deviceProfiles: deviceProfiles}
 	defer a.flushVolumeSave()
 	if a.s.Debug {
 		logx.SetDebug(true)
@@ -125,7 +137,16 @@ func (a *App) startup() {
 	a.refresh()
 
 	go func() {
+		var lastProfileError string
 		for {
+			profileError := ""
+			if err := a.deviceProfiles.Refresh(); err != nil {
+				profileError = err.Error()
+				if profileError != lastProfileError {
+					logf("device profiles: %v", err)
+				}
+			}
+			lastProfileError = profileError
 			a.pollWindowsBattery()
 			a.t.RefreshMenu()
 			time.Sleep(10 * time.Second)

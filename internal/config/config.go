@@ -2,6 +2,7 @@
 package config
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -241,6 +242,28 @@ func Save(s *Settings) error {
 
 // WriteJSONAtomic marshals v and replaces path via a temp file.
 func WriteJSONAtomic(path string, v any) error {
+	return writeJSONAtomic(path, v, nil)
+}
+
+// ReplaceJSONAtomic protects entries edited since the caller read the file.
+// A nil expected slice means the file did not exist.
+func ReplaceJSONAtomic(path string, v any, expected []byte) error {
+	return writeJSONAtomic(path, v, func() error {
+		current, err := os.ReadFile(path)
+		if expected == nil && errors.Is(err, os.ErrNotExist) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		if expected == nil || !bytes.Equal(current, expected) {
+			return errors.New("file changed while saving")
+		}
+		return nil
+	})
+}
+
+func writeJSONAtomic(path string, v any, check func() error) error {
 	b, err := json.MarshalIndent(v, "", "  ")
 	if err != nil {
 		return err
@@ -253,6 +276,11 @@ func WriteJSONAtomic(path string, v any) error {
 	_, err = tmp.Write(b)
 	if err := errors.Join(err, tmp.Close()); err != nil {
 		return err
+	}
+	if check != nil {
+		if err := check(); err != nil {
+			return err
+		}
 	}
 	return os.Rename(tmp.Name(), path)
 }

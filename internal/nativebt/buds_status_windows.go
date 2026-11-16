@@ -64,27 +64,41 @@ import (
 
 // ReadBudsStatus takes one sample over Windows RFCOMM. Callers check that
 // the headphones are already connected before opening the socket.
-func ReadBudsStatus(address uint64, protocol buds.Protocol, preset *uint8) (buds.Status, bool) {
+func ReadBudsStatus(address uint64, protocol buds.Protocol, commands buds.ControlCommands, preset, mode *uint8) (buds.Status, bool) {
 	status := buds.Status{Level: buds.Level{Left: -1, Right: -1}}
-	var commands chan uint8
-	if preset != nil {
-		commands = make(chan uint8, 1)
-		commands <- *preset
-	}
 	ctx, cancel := context.WithTimeout(context.Background(), 6*time.Second)
 	defer cancel()
 	confirmed := false
-	readBudsStatus(ctx, address, protocol, commands, nil, nil, func(report buds.Status) bool {
+	readBudsStatus(ctx, address, protocol, commands, singleBudsCommand(preset), singleBudsCommand(mode), nil, nil, func(report buds.Status) bool {
 		if report.Level.Known() {
 			status.Level = report.Level
 		}
 		if report.Equalizer != nil {
 			status.Equalizer = report.Equalizer
 		}
-		confirmed = report.Equalizer != nil && (preset == nil || *report.Equalizer == *preset)
+		if report.NoiseControl != nil {
+			status.NoiseControl = report.NoiseControl
+		}
+		switch {
+		case preset != nil:
+			confirmed = report.Equalizer != nil && *report.Equalizer == *preset
+		case mode != nil:
+			confirmed = report.NoiseControl != nil && report.NoiseControl.Mode == *mode
+		default:
+			confirmed = report.Equalizer != nil || report.NoiseControl != nil
+		}
 		return confirmed
 	})
 	return status, confirmed
+}
+
+func singleBudsCommand(value *uint8) <-chan uint8 {
+	if value == nil {
+		return nil
+	}
+	command := make(chan uint8, 1)
+	command <- *value
+	return command
 }
 
 func sendBudsFrame(socket C.SOCKET, data []byte) bool {
@@ -98,7 +112,7 @@ func sendBudsFrame(socket C.SOCKET, data []byte) bool {
 	return true
 }
 
-func readBudsStatus(ctx context.Context, address uint64, protocol buds.Protocol, commands <-chan uint8, removal *buds.Removal, removed func(), report func(buds.Status) bool) {
+func readBudsStatus(ctx context.Context, address uint64, protocol buds.Protocol, commands buds.ControlCommands, equalizers, noiseModes <-chan uint8, removal *buds.Removal, removed func(), report func(buds.Status) bool) {
 	var wsa windows.WSAData
 	if err := windows.WSAStartup(0x0202, &wsa); err != nil {
 		return
@@ -116,8 +130,9 @@ func readBudsStatus(ctx context.Context, address uint64, protocol buds.Protocol,
 	if !sendBudsFrame(socket, protocol.ManagerInfo()) {
 		return
 	}
-	decoder := buds.Decoder{Protocol: protocol}
+	decoder := buds.Decoder{Protocol: protocol, Commands: commands}
 	var equalizer buds.EqualizerState
+	var noiseControl *buds.NoiseControl
 	var buf [512]byte
 	firstReport := time.Now().Add(3 * time.Second)
 	for ctx.Err() == nil {
@@ -125,14 +140,25 @@ func readBudsStatus(ctx context.Context, address uint64, protocol buds.Protocol,
 			return
 		}
 		wait := time.Second
-		if commands != nil && equalizer.Current() != nil {
+		var eqCommands, noiseCommands <-chan uint8
+		if equalizer.Current() != nil || noiseControl.UsesFallback() {
+			eqCommands = equalizers
+		}
+		if noiseControl != nil {
+			noiseCommands = noiseModes
+		}
+		if eqCommands != nil || noiseCommands != nil {
 			wait = 250 * time.Millisecond
+			var frame []byte
 			select {
-			case preset := <-commands:
-				if !sendBudsFrame(socket, protocol.EqualizerRequest(preset)) {
-					return
-				}
+			case preset := <-eqCommands:
+				frame = commands.EqualizerRequest(protocol, preset)
+			case mode := <-noiseCommands:
+				frame = noiseControl.RequestWithCommands(protocol, commands, mode)
 			default:
+			}
+			if len(frame) > 0 && !sendBudsFrame(socket, frame) {
+				return
 			}
 		}
 		if removal != nil && !removal.Deadline().IsZero() {
@@ -151,11 +177,14 @@ func readBudsStatus(ctx context.Context, address uint64, protocol buds.Protocol,
 		stop := false
 		decoder.FeedStatus(buf[:n], func(status buds.Status) {
 			if !stop && ctx.Err() == nil {
-				if !status.EqualizerAck {
+				if !status.ControlOnly {
 					firstReport = time.Time{}
 				}
 				status.Equalizer = equalizer.Observe(status, time.Now())
-				if removal != nil && !status.EqualizerAck {
+				if status.NoiseControl != nil {
+					noiseControl = status.NoiseControl
+				}
+				if removal != nil && !status.ControlOnly {
 					removal.Observe(status.Placement, time.Now())
 				}
 				stop = report(status)
@@ -170,20 +199,27 @@ func readBudsStatus(ctx context.Context, address uint64, protocol buds.Protocol,
 	}
 }
 
-func watchBudsStatus(ctx context.Context, address uint64, protocol buds.Protocol, commands <-chan uint8, report func(buds.Status), removed func()) {
+func watchBudsStatus(ctx context.Context, address uint64, protocol buds.Protocol, commands buds.ControlCommands, equalizers, noiseModes <-chan uint8, report func(buds.Status), removed func()) {
 	for ctx.Err() == nil {
 		removal := &buds.Removal{}
 		var last buds.Status
 		var reportedAt time.Time
 		received := false
-		readBudsStatus(ctx, address, protocol, commands, removal, removed, func(status buds.Status) bool {
+		readBudsStatus(ctx, address, protocol, commands, equalizers, noiseModes, removal, removed, func(status buds.Status) bool {
 			received = true
 			eqChanged := status.Equalizer != nil && (last.Equalizer == nil || *status.Equalizer != *last.Equalizer)
-			if status.Level.Known() && (status.Level != last.Level || time.Since(reportedAt) >= buds.PollInterval) || eqChanged {
+			noiseChanged := status.NoiseControl != nil && (last.NoiseControl == nil || *status.NoiseControl != *last.NoiseControl)
+			batteryChanged := status.Level.Known() && (status.Level != last.Level || time.Since(reportedAt) >= buds.PollInterval)
+			if batteryChanged || eqChanged || noiseChanged {
 				report(status)
-				last.Level, reportedAt = status.Level, time.Now()
+				if status.Level.Known() {
+					last.Level, reportedAt = status.Level, time.Now()
+				}
 				if status.Equalizer != nil {
 					last.Equalizer = status.Equalizer
+				}
+				if status.NoiseControl != nil {
+					last.NoiseControl = status.NoiseControl
 				}
 			}
 			return false

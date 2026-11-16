@@ -102,6 +102,8 @@ func (a *App) selectHeadphones(device *config.Device) {
 	switch {
 	case native:
 		a.switchModeLocked(mode)
+	case eng != nil && (previous == nil || !strings.EqualFold(previous.Addr, device.Addr)):
+		a.restartWinUSBLocked()
 	case eng != nil:
 		eng.send(ipc.Command{Cmd: "connect", Addr: device.Addr})
 	}

@@ -94,7 +94,7 @@ const (
 	EvMediaKey                        // a button on the headphones (Key: MediaPlayPause, MediaNext, ...)
 	EvStreamReleased                  // the peer closed the media channel
 	EvBudsRemoved                     // neither Buds earbud is still worn
-	EvBudsEqualizer                   // the headphone EQ has been reported
+	EvBudsControls                    // headphone settings have been reported
 )
 
 // Media keys the headphones send (AVRCP PASS_THROUGH, button pressed).

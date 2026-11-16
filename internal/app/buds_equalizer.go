@@ -14,12 +14,35 @@ import (
 
 const equalizerCount = buds.EqualizerCount
 
-type equalizerRequest struct {
-	preset, baseline uint8
-	address          string
-	protocol         buds.Protocol
-	engine           *workerProcess
-	native           *nativeProcess
+type budsSettingRequest struct {
+	value, baseline uint8
+	fallback        bool
+	address         string
+	protocol        buds.Protocol
+	commands        buds.ControlCommands
+	engine          *workerProcess
+	native          *nativeProcess
+}
+
+func (a *App) budsSettingRequestLocked(value, baseline uint8, fallback bool) *budsSettingRequest {
+	h := a.s.Headphones
+	return &budsSettingRequest{
+		value: value, baseline: baseline, fallback: fallback, address: h.Addr,
+		protocol: buds.ProtocolForName(h.Name), engine: a.eng, native: a.native,
+		commands: a.profileCommands(h),
+	}
+}
+
+func (r *budsSettingRequest) matchesLocked(a *App) bool {
+	return r != nil && a.s.Headphones != nil && strings.EqualFold(r.address, a.s.Headphones.Addr) &&
+		r.engine == a.eng && r.native == a.native
+}
+
+func (r *budsSettingRequest) timeout() time.Duration {
+	if r.engine == nil && r.native == nil {
+		return 8 * time.Second // Windows RFCOMM has to open the socket first.
+	}
+	return 4 * time.Second
 }
 
 func (a *App) equalizerLocked() *uint8 {
@@ -33,7 +56,7 @@ func (a *App) equalizerLocked() *uint8 {
 			return a.st.Equalizer
 		}
 	case a.native != nil:
-		if a.native.ready {
+		if a.native.ready && !a.native.linkLost {
 			return a.native.budsEqualizer
 		}
 	case a.adapter.Mode == driver.BthUSB && strings.EqualFold(a.windowsBuds.addr, h.Addr) &&
@@ -50,26 +73,26 @@ func (a *App) equalizerMenuLocked(busy bool) *tray.Item {
 	}
 	current := a.equalizerLocked()
 	a.rememberEqualizerLocked(current)
-	available := current != nil
-	if !available {
+	available := current != nil || a.noiseControlLocked().UsesFallback()
+	if current == nil {
 		current = a.lastEqualizer
 	}
-	if request := a.pendingEqualizer; a.equalizerRequestCurrentLocked(request) && a.equalizerLinkAvailableLocked() {
-		current = &request.preset
+	if request := a.pendingEqualizer; request.matchesLocked(a) && a.budsLinkAvailableLocked() {
+		current = &request.value
 		available = true
 	}
-	if current == nil || (*current >= equalizerCount && *current != buds.EqualizerCustom) {
-		return nil
-	}
-	label := T("Пользовательский", "Custom")
-	if *current < equalizerCount {
+	label := "—"
+	if current != nil && *current == buds.EqualizerCustom {
+		label = T("Пользовательский", "Custom")
+	} else if current != nil && *current < equalizerCount {
 		label = labels[*current]
 	}
-	item := &tray.Item{ID: idEqualizerMenu, Text: T("Эквалайзер: ", "Equalizer: ") + label, LiveLabel: true, Disabled: busy || !available}
+	item := &tray.Item{ID: idEqualizerMenu, Text: T("Эквалайзер: ", "Equalizer: ") + label, LiveLabel: true,
+		Disabled: busy || !available || a.failedEqualizer.matchesLocked(a)}
 	for i, label := range labels {
 		item.Sub = append(item.Sub, tray.Item{
 			ID: idEqualizerBase + i, Text: label, Radio: true,
-			Checked: int(*current) == i, Disabled: item.Disabled,
+			Checked: current != nil && int(*current) == i, Disabled: item.Disabled,
 		})
 	}
 	return item
@@ -90,39 +113,39 @@ func (a *App) rememberEqualizerLocked(preset *uint8) {
 	}
 }
 
-func (a *App) equalizerLinkAvailableLocked() bool {
+func (a *App) budsLinkAvailableLocked() bool {
+	if a.s.Headphones == nil {
+		return false
+	}
 	switch {
 	case a.eng != nil:
 		return a.st.Connected && strings.EqualFold(a.st.Headphones, a.s.Headphones.Addr)
 	case a.native != nil:
-		return a.native.ready
+		return a.native.ready && !a.native.linkLost
 	default:
-		return a.adapter.Mode == driver.BthUSB
+		return a.adapter.Mode == driver.BthUSB && strings.EqualFold(a.windowsBuds.addr, a.s.Headphones.Addr)
 	}
 }
 
-func (a *App) equalizerRequestCurrentLocked(request *equalizerRequest) bool {
-	return request != nil && a.pendingEqualizer == request && a.s.Headphones != nil &&
-		strings.EqualFold(request.address, a.s.Headphones.Addr) && request.engine == a.eng && request.native == a.native
-}
-
-func (a *App) stageEqualizerLocked(preset uint8) *equalizerRequest {
+func (a *App) stageEqualizerLocked(preset uint8) *budsSettingRequest {
 	current := a.equalizerLocked()
-	if current == nil || preset >= equalizerCount || a.quitting || a.busy != "" {
+	fallback := a.noiseControlLocked().UsesFallback()
+	if (current == nil && !fallback) || preset >= equalizerCount || a.quitting || a.busy != "" ||
+		a.pendingUHQ || a.failedEqualizer.matchesLocked(a) {
 		return nil
 	}
-	shown := *current
-	if request := a.pendingEqualizer; a.equalizerRequestCurrentLocked(request) {
-		shown = request.preset
+	baseline := uint8(0xff)
+	if current != nil {
+		baseline = *current
+	}
+	shown := baseline
+	if request := a.pendingEqualizer; request.matchesLocked(a) {
+		shown = request.value
 	}
 	if shown == preset {
 		return nil
 	}
-	request := &equalizerRequest{
-		preset: preset, baseline: *current, address: a.s.Headphones.Addr,
-		protocol: buds.ProtocolForName(a.s.Headphones.Name),
-		engine:   a.eng, native: a.native,
-	}
+	request := a.budsSettingRequestLocked(preset, baseline, fallback)
 	a.pendingEqualizer = request
 	return request
 }
@@ -130,19 +153,28 @@ func (a *App) stageEqualizerLocked(preset uint8) *equalizerRequest {
 func (a *App) reconcileEqualizerLocked() {
 	current := a.equalizerLocked()
 	a.rememberEqualizerLocked(current)
+	if failed := a.failedEqualizer; failed != nil && (!failed.matchesLocked(a) || !a.budsLinkAvailableLocked() ||
+		(current != nil && *current == failed.value && *current != failed.baseline)) {
+		a.failedEqualizer = nil
+	}
 	if request := a.pendingEqualizer; request != nil {
-		if !a.equalizerRequestCurrentLocked(request) || !a.equalizerLinkAvailableLocked() ||
-			(current != nil && *current == request.preset && *current != request.baseline) {
+		if !request.matchesLocked(a) || !a.budsLinkAvailableLocked() ||
+			(current != nil && *current == request.value && *current != request.baseline) {
 			a.pendingEqualizer = nil
 		}
 	}
 }
 
-func (a *App) clearPendingEqualizer(request *equalizerRequest) {
+func (a *App) finishEqualizer(request *budsSettingRequest, unconfirmed bool) {
 	a.mu.Lock()
 	changed := a.pendingEqualizer == request
 	if changed {
 		a.pendingEqualizer = nil
+		current := a.equalizerLocked()
+		if unconfirmed && request.fallback && request.matchesLocked(a) && a.budsLinkAvailableLocked() &&
+			(current == nil || *current != request.value) {
+			a.failedEqualizer = request
+		}
 	}
 	a.mu.Unlock()
 	if changed {
@@ -158,48 +190,44 @@ func (a *App) setEqualizer(preset uint8) {
 		return
 	}
 	a.t.RefreshMenu()
-	timeout := 4 * time.Second
-	if request.engine == nil && request.native == nil {
-		timeout = 8 * time.Second // one-shot Windows RFCOMM has to open the socket first
-	}
-	time.AfterFunc(timeout, func() { a.clearPendingEqualizer(request) })
 	go a.sendEqualizer(request)
 }
 
-func (a *App) sendEqualizer(request *equalizerRequest) {
+func (a *App) sendEqualizer(request *budsSettingRequest) {
 	a.opMu.Lock()
 	defer a.opMu.Unlock()
 	a.mu.Lock()
-	current := a.equalizerRequestCurrentLocked(request) && !a.quitting
+	current := a.pendingEqualizer == request && request.matchesLocked(a) && a.budsLinkAvailableLocked() && !a.quitting
 	a.mu.Unlock()
 	if !current {
-		a.clearPendingEqualizer(request)
+		a.finishEqualizer(request, false)
 		return
 	}
-	address, preset, eng, native := request.address, request.preset, request.engine, request.native
+	time.AfterFunc(request.timeout(), func() { a.finishEqualizer(request, true) })
+	address, preset, eng, native := request.address, request.value, request.engine, request.native
 	command := ipc.Command{Cmd: ipc.CommandEqualizer, Addr: address, Equalizer: &preset}
 	if eng != nil {
 		if err := eng.in.Write(command); err != nil {
 			logf("Buds equalizer: %v", err)
-			a.clearPendingEqualizer(request)
+			a.finishEqualizer(request, true)
 		}
 		return
 	}
 	if native != nil {
 		if err := native.in.Write(command); err != nil {
 			logf("Buds equalizer: %v", err)
-			a.clearPendingEqualizer(request)
+			a.finishEqualizer(request, true)
 		}
 		return
 	}
 	addr, err := strconv.ParseUint(strings.ReplaceAll(address, ":", ""), 16, 48)
 	if err != nil || !driver.WindowsHeadphonesConnected(addr) {
-		a.clearPendingEqualizer(request)
+		a.finishEqualizer(request, false)
 		return
 	}
 	a.budsIOMu.Lock()
 	defer a.budsIOMu.Unlock()
-	status, confirmed := nativebt.ReadBudsStatus(addr, request.protocol, &preset)
+	status, confirmed := nativebt.ReadBudsStatus(addr, request.protocol, request.commands, &preset, nil)
 	a.mu.Lock()
 	if status.Equalizer != nil && strings.EqualFold(a.windowsBuds.addr, address) {
 		a.windowsBuds.equalizer, a.windowsBuds.read = status.Equalizer, time.Now()
@@ -208,5 +236,5 @@ func (a *App) sendEqualizer(request *equalizerRequest) {
 	if !confirmed {
 		logf("Buds equalizer: headphones did not confirm preset %d", preset)
 	}
-	a.clearPendingEqualizer(request)
+	a.finishEqualizer(request, !confirmed)
 }
