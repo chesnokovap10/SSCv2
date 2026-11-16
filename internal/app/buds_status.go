@@ -60,6 +60,7 @@ func (a *App) pollWindowsBattery() {
 	defer a.mu.Unlock()
 	if a.eng == nil && a.native == nil && a.s.Headphones == h && a.adapter.Mode == driver.BthUSB {
 		a.windowsBuds = next
+		a.reconcileEqualizerLocked()
 	}
 }
 

@@ -52,4 +52,13 @@ func TestEqualizerShowsLatestChoiceAndRollsBackOnFailure(t *testing.T) {
 	}
 	a.clearPendingEqualizer(third)
 	check(4)
+
+	a.eng = nil
+	if row := a.equalizerMenuLocked(false); row == nil || !row.Disabled || !row.Sub[4].Disabled || !row.Sub[4].Checked {
+		t.Fatal("known EQ should stay visible and disabled when the transport stops")
+	}
+	a.s.Headphones = &config.Device{Addr: "00:11:22:33:44:66"}
+	if a.equalizerMenuLocked(false) != nil {
+		t.Fatal("EQ support leaked to another device")
+	}
 }

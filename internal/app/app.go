@@ -58,6 +58,8 @@ type App struct {
 	windowsBuds       windowsBudsStatus
 	budsIOMu          sync.Mutex
 	pendingEqualizer  *equalizerRequest
+	equalizerDevice   string
+	lastEqualizer     *uint8
 	menuReading       bool
 	menuDeviceIDs     map[menuDeviceKey]int
 	menuDeviceTargets []menuDevice

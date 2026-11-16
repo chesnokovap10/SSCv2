@@ -49,8 +49,14 @@ func (a *App) equalizerMenuLocked(busy bool) *tray.Item {
 		T("Динамичный", "Dynamic"), T("Чёткий", "Clear"), T("Усиление высоких", "Treble boost"),
 	}
 	current := a.equalizerLocked()
+	a.rememberEqualizerLocked(current)
+	available := current != nil
+	if !available {
+		current = a.lastEqualizer
+	}
 	if request := a.pendingEqualizer; a.equalizerRequestCurrentLocked(request) && a.equalizerLinkAvailableLocked() {
 		current = &request.preset
+		available = true
 	}
 	if current == nil || (*current >= equalizerCount && *current != buds.EqualizerCustom) {
 		return nil
@@ -59,7 +65,7 @@ func (a *App) equalizerMenuLocked(busy bool) *tray.Item {
 	if *current < equalizerCount {
 		label = labels[*current]
 	}
-	item := &tray.Item{ID: idEqualizerMenu, Text: T("Эквалайзер: ", "Equalizer: ") + label, LiveLabel: true, Disabled: busy}
+	item := &tray.Item{ID: idEqualizerMenu, Text: T("Эквалайзер: ", "Equalizer: ") + label, LiveLabel: true, Disabled: busy || !available}
 	for i, label := range labels {
 		item.Sub = append(item.Sub, tray.Item{
 			ID: idEqualizerBase + i, Text: label, Radio: true,
@@ -67,6 +73,21 @@ func (a *App) equalizerMenuLocked(busy bool) *tray.Item {
 		})
 	}
 	return item
+}
+
+// Remember support across a transport change for the selected headphones.
+// The remembered value is only used to draw a disabled menu row.
+func (a *App) rememberEqualizerLocked(preset *uint8) {
+	address := ""
+	if h := a.s.Headphones; h != nil {
+		address = h.Addr
+	}
+	if !strings.EqualFold(address, a.equalizerDevice) {
+		a.equalizerDevice, a.lastEqualizer = address, nil
+	}
+	if address != "" && preset != nil {
+		a.lastEqualizer = preset
+	}
 }
 
 func (a *App) equalizerLinkAvailableLocked() bool {
@@ -107,8 +128,9 @@ func (a *App) stageEqualizerLocked(preset uint8) *equalizerRequest {
 }
 
 func (a *App) reconcileEqualizerLocked() {
+	current := a.equalizerLocked()
+	a.rememberEqualizerLocked(current)
 	if request := a.pendingEqualizer; request != nil {
-		current := a.equalizerLocked()
 		if !a.equalizerRequestCurrentLocked(request) || !a.equalizerLinkAvailableLocked() ||
 			(current != nil && *current == request.preset && *current != request.baseline) {
 			a.pendingEqualizer = nil
