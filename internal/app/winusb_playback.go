@@ -16,7 +16,7 @@ import (
 )
 
 // startWinUSBPlaybackLocked applies a codec change or starts the WinUSB engine.
-func (a *App) startWinUSBPlaybackLocked(m config.Mode, eng *workerProcess, streaming bool) {
+func (a *App) startWinUSBPlaybackLocked(m config.Mode, eng *workerProcess) {
 	a.mu.Lock()
 	blocked := a.noBitrate(m)
 	if m == config.ModeSSCUHQ && a.uhqUnavailable() {
@@ -27,7 +27,7 @@ func (a *App) startWinUSBPlaybackLocked(m config.Mode, eng *workerProcess, strea
 	codec := a.codecChange(m)
 	a.mu.Unlock()
 	a.setMode(m)
-	if !blocked && eng != nil && eng.running() && streaming {
+	if !blocked && eng != nil && eng.running() {
 		a.mu.Lock()
 		a.pendingUHQ = m == config.ModeSSCUHQ
 		a.mu.Unlock()

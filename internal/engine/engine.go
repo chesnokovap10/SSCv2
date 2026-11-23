@@ -451,6 +451,13 @@ func (e *engine) session(addrStr string) (result error) {
 		return err
 	}
 	defer bt.Disconnect()
+	var startupChange *ipc.CodecChange
+	select {
+	case change := <-e.changeCodec:
+		e.selectCodec(change)
+		startupChange = &change
+	default:
+	}
 	startingSelectedStream := e.cfg.SSCUHQ || e.cfg.SSCBitrate > 0 || e.cfg.AACBitrate > 0 && e.cfg.Codec == "aac"
 	defer func() {
 		if startingSelectedStream && result != nil && !errors.Is(result, errReconnect) {
@@ -555,6 +562,9 @@ func (e *engine) session(addrStr string) (result error) {
 		return err
 	}
 	e.installEncoder(enc, mtu, codec)
+	if startupChange != nil {
+		_ = e.out.Write(ipc.Event{Ev: "codec", Codec: startupChange})
+	}
 	startingSelectedStream = false
 	defer e.pipe.set(nil, 0, false)
 	outputCheck := time.NewTicker(time.Second)
@@ -587,6 +597,7 @@ func (e *engine) session(addrStr string) (result error) {
 			sameMode := e.cfg.Codec == change.Codec && e.cfg.SSCUHQ == change.SSCUHQ
 			if sameMode && e.cfg.AACBitrate == change.AACBitrate && e.cfg.AACMaxKbps == change.AACMaxKbps && e.cfg.SSCBitrate == change.SSCBitrate &&
 				e.cfg.SSCMaxKbps == change.SSCMaxKbps && (!change.SSCUHQ || sscUHQ()) {
+				_ = e.out.Write(ipc.Event{Ev: "codec", Codec: &change})
 				continue
 			}
 			aacForced = change.AACBitrate * 1000
@@ -598,9 +609,7 @@ func (e *engine) session(addrStr string) (result error) {
 				target = bt.CodecSSC
 			}
 			next, nextMTU, err := e.switchCodec(ctx, caps, target, &enc)
-			e.cfg.Codec, e.cfg.SSCUHQ, e.cfg.TryUHQ = change.Codec, change.SSCUHQ, change.TryUHQ
-			e.cfg.AACBitrate, e.cfg.SSCBitrate, e.cfg.SSCMaxKbps = change.AACBitrate, change.SSCBitrate, change.SSCMaxKbps
-			e.cfg.AACMaxKbps = change.AACMaxKbps
+			e.selectCodec(change)
 			if err != nil {
 				logf("codec switch to %s: %v", target, err)
 				if change.SSCUHQ || change.SSCBitrate > 0 || change.AACBitrate > 0 {
@@ -906,4 +915,12 @@ func nz(a, b string) string {
 		return a
 	}
 	return b
+}
+
+func (e *engine) selectCodec(change ipc.CodecChange) {
+	e.cfg.Codec, e.cfg.SSCUHQ, e.cfg.TryUHQ = change.Codec, change.SSCUHQ, change.TryUHQ
+	e.cfg.AACBitrate, e.cfg.SSCBitrate, e.cfg.SSCMaxKbps = change.AACBitrate, change.SSCBitrate, change.SSCMaxKbps
+	e.cfg.AACMaxKbps = change.AACMaxKbps
+	aacForced, aacWorking = change.AACBitrate*1000, change.AACMaxKbps
+	sscUHQMode, sscForced, sscWorking = change.SSCUHQ, change.SSCBitrate, change.SSCMaxKbps
 }

@@ -50,9 +50,9 @@ func (a *App) setBitrate(kbps int) {
 		a.changeNativeCodecLocked(p, m)
 		return
 	}
-	codec, eng, streaming := a.codecChange(m), a.eng, a.st.Streaming
+	codec, eng := a.codecChange(m), a.eng
 	a.mu.Unlock()
-	if eng != nil && eng.running() && streaming {
+	if eng != nil && eng.running() {
 		if err := eng.in.Write(ipc.Command{Cmd: ipc.CommandCodec, Codec: &codec}); err == nil {
 			return
 		}
