@@ -175,42 +175,40 @@ releaseWait:
 		_ = events.Write(ipc.Event{Ev: ipc.EventNativeCaps, Status: &ipc.EngineStatus{SSCUHQSupported: &caps.SSCUHQ, Capabilities: &caps}})
 	}
 
+	var pcm io.ReadCloser
+	defer func() {
+		if pcm != nil {
+			pcm.Close()
+		}
+	}()
+	readPCM := func(ctx context.Context, buffer []byte) (int, error) {
+		if pcm == nil {
+			opened, err := helper.OpenBudsPCM()
+			if err != nil {
+				return 0, err
+			}
+			pcm = opened
+		}
+		n, err := pcm.Read(buffer)
+		if err == nil || ctx.Err() != nil {
+			return n, err
+		}
+		pcm.Close()
+		pcm = nil
+		// A peer may suspend media longer than the helper idle timeout.
+		opened, err := helper.OpenBudsPCM()
+		if err != nil {
+			return 0, err
+		}
+		pcm = opened
+		return pcm.Read(buffer)
+	}
 	var session avdtpSession
 	defer session.close()
 	for {
 		ctx, cancel := context.WithCancel(context.Background())
 		done := make(chan error, 1)
 		go func(stream ipc.NativeStream) {
-			// Open lazily after Bluetooth negotiation, and use a new connection
-			// for each codec. The helper expires idle PCM connections.
-			var pcm io.ReadCloser
-			defer func() {
-				if pcm != nil {
-					pcm.Close()
-				}
-			}()
-			readPCM := func(buffer []byte) (int, error) {
-				if pcm == nil {
-					opened, err := helper.OpenBudsPCM()
-					if err != nil {
-						return 0, err
-					}
-					pcm = opened
-				}
-				n, err := pcm.Read(buffer)
-				if err == nil || ctx.Err() != nil {
-					return n, err
-				}
-				pcm.Close()
-				pcm = nil
-				// A peer may suspend media longer than the helper idle timeout.
-				opened, err := helper.OpenBudsPCM()
-				if err != nil {
-					return 0, err
-				}
-				pcm = opened
-				return pcm.Read(buffer)
-			}
 			ready := func(kbps int) error {
 				playingStream.Store(true)
 				if address != 0 {
@@ -233,7 +231,7 @@ releaseWait:
 				}
 				return events.Write(ipc.Event{Ev: ipc.EventNativeReady, Native: &stream, BitrateKbps: kbps})
 			}
-			render := renderPCM{session: &session, out: out, read: readPCM, activity: activity, gain: func() float32 {
+			render := renderPCM{session: &session, out: out, read: func(b []byte) (int, error) { return readPCM(ctx, b) }, activity: activity, gain: func() float32 {
 				return volume.gain(readGain)
 			}}
 			err := render.stream(ctx, cfg.Path, stream, ready, linkLost, capabilities)
