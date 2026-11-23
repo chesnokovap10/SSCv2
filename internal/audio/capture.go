@@ -191,6 +191,7 @@ func (c *Capture) loop(cb Callback) error {
 
 	ch := c.Format.Channels
 	var lastPacket time.Time
+	var timeline captureTimeline
 	for c.running.Load() {
 		// Check device health at low frequency even if an invalidated endpoint
 		// stopped signaling altogether.
@@ -244,11 +245,10 @@ func (c *Capture) loop(cb Callback) error {
 				return fmt.Errorf("capture: ReleaseBuffer: %w", err)
 			}
 			now := time.Now()
-			discontinuity := flags&bufferDiscontinuity != 0
+			discontinuity := timeline.observe(devPos, frames, flags)
 			if !lastPacket.IsZero() {
 				gap := now.Sub(lastPacket)
-				discontinuity = discontinuity || gap >= 80*time.Millisecond
-				if discontinuity {
+				if discontinuity || gap >= 80*time.Millisecond {
 					logx.Dbgf("audio", "capture: packet gap=%v flags=0x%x device frame=%d", gap.Round(time.Millisecond), flags, devPos)
 				}
 			}
@@ -284,4 +284,17 @@ func (c *Capture) Close() {
 		_ = windows.CloseHandle(c.event)
 		c.event = 0
 	}
+}
+
+type captureTimeline struct {
+	next  uint64
+	valid bool
+}
+
+func (t *captureTimeline) observe(pos uint64, frames, flags uint32) bool {
+	valid := flags&4 == 0 // AUDCLNT_BUFFERFLAGS_TIMESTAMP_ERROR
+	gap := flags&bufferDiscontinuity != 0 || valid && t.valid && pos != t.next
+	t.next = pos + uint64(frames)
+	t.valid = valid
+	return gap
 }

@@ -106,3 +106,16 @@ func TestListAndCapture(t *testing.T) {
 	// log the count (the open/start/stop path is what is under test).
 	t.Logf("captured %d frames in 0.5 s", frames)
 }
+
+func TestCaptureContinuityUsesDeviceFrames(t *testing.T) {
+	var clock captureTimeline
+	for _, p := range []struct {
+		pos   uint64
+		flags uint32
+		gap   bool
+	}{{0, 0, false}, {480, 0, false}, {1440, 0, true}, {0, 4, false}, {2400, 0, false}, {2880, 1, true}} {
+		if got := clock.observe(p.pos, 480, p.flags); got != p.gap {
+			t.Fatal(p, got)
+		}
+	}
+}
