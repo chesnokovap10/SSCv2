@@ -156,3 +156,21 @@ func TestCancellationUnblocksMediaWrite(t *testing.T) {
 		t.Fatal("media write blocked")
 	}
 }
+
+func TestDiscoveryCacheBelongsToSignalingSession(t *testing.T) {
+	link := &avdtpTestLink{replies: [][]byte{{0x02, discover, 4, 8}, {0x12, getAllCapabilities, 7, 8, 0, 2, 0x80, 0, 0x84, 0, 0, 0}}}
+	p := avdtpSession{ctx: context.Background(), link: link}
+	for range 2 {
+		var caps ipc.CodecCapabilities
+		if err := p.inspect(io.Discard, nil, nil, ipc.NativeStream{}, func(c ipc.CodecCapabilities) { caps = c }); err != nil || !caps.AAC {
+			t.Fatal(caps, err)
+		}
+	}
+	if len(link.writes) != 2 {
+		t.Fatal("repeated discovery")
+	}
+	p.close()
+	if p.caps != nil || p.endpoints != nil {
+		t.Fatal("cache survived connection loss")
+	}
+}

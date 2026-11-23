@@ -30,10 +30,12 @@ const (
 
 // The transport presents one L2CAP SDU per read or write.
 type avdtpSession struct {
-	released bool
-	link     io.ReadWriter
-	label    byte
-	ctx      context.Context
+	endpoints []byte
+	caps      map[byte][]byte
+	released  bool
+	link      io.ReadWriter
+	label     byte
+	ctx       context.Context
 }
 
 type rejection struct {
@@ -155,7 +157,11 @@ func inspect(ctx context.Context, link io.ReadWriter, out io.Writer, openMedia f
 }
 
 func (p *avdtpSession) inspect(out io.Writer, openMedia func() (io.WriteCloser, error), send func(io.Writer, int) error, stream ipc.NativeStream, capabilities func(ipc.CodecCapabilities)) error {
-	endpoints, err := p.command(discover)
+	endpoints := p.endpoints
+	var err error
+	if endpoints == nil {
+		endpoints, err = p.command(discover)
+	}
 	if err != nil {
 		return fmt.Errorf("discover: %w", err)
 	}
@@ -175,10 +181,21 @@ func (p *avdtpSession) inspect(out io.Writer, openMedia func() (io.WriteCloser, 
 			continue // Audio sink only.
 		}
 		fmt.Fprintf(out, "SEID %d (in use: %t)\n", seid, endpoints[i]&2 != 0)
-		caps, err := p.command(getAllCapabilities, seid<<2)
-		if reject, ok := err.(*rejection); ok &&
-			(reject.messageType == 1 || len(reject.payload) == 1 && reject.payload[0] == 0x19) {
-			caps, err = p.command(getCapabilities, seid<<2)
+		caps, cached := p.caps[seid]
+		if !cached {
+			caps, err = p.command(getAllCapabilities, seid<<2)
+			if reject, ok := err.(*rejection); ok &&
+				(reject.messageType == 1 || len(reject.payload) == 1 && reject.payload[0] == 0x19) {
+				caps, err = p.command(getCapabilities, seid<<2)
+			}
+			if err == nil {
+				if p.caps == nil {
+					p.caps = make(map[byte][]byte)
+				}
+				p.caps[seid] = caps
+			}
+		} else {
+			err = nil
 		}
 		if err != nil {
 			err = fmt.Errorf("SEID %d capabilities: %w", seid, err)
@@ -231,6 +248,9 @@ func (p *avdtpSession) inspect(out io.Writer, openMedia func() (io.WriteCloser, 
 		if selectedSEID != 0 && selectedRate == stream.BitrateKbps && capabilities == nil {
 			break
 		}
+	}
+	if rejected == nil {
+		p.endpoints = endpoints
 	}
 	if capabilities != nil {
 		advertised.Partial = rejected != nil
