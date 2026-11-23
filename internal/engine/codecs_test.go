@@ -1,6 +1,9 @@
 package engine
 
-import "testing"
+import (
+	"sscv2/internal/codec/ssc"
+	"testing"
+)
 
 func TestAACManualBitrateIsNotClamped(t *testing.T) {
 	defer func() { aacForced = 0 }()
@@ -117,5 +120,21 @@ func TestSSCWorkingMax(t *testing.T) {
 	sscWorking = 229
 	if got, _ := sscBitrate(48000, 1005, 0x0C); got != 229000 {
 		t.Errorf("Auto on Buds2 Pro: %d, want 229000", got)
+	}
+}
+
+func TestSSCBitrateChangesBetweenFrames(t *testing.T) {
+	s, err := ssc.New(48000, 192000)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	pcm := make([]float32, ssc.FrameLen*2)
+	for _, br := range []int{192000, 229000, 192000} {
+		s.Bitrate = br
+		frame, err := s.Encode(pcm)
+		if err != nil || len(frame) != ssc.FrameBytes(48000, br) {
+			t.Fatalf("%d: frame=%d err=%v", br, len(frame), err)
+		}
 	}
 }

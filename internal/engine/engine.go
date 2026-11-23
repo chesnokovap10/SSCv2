@@ -608,7 +608,23 @@ func (e *engine) session(addrStr string) (result error) {
 			if change.Codec == "ssc" {
 				target = bt.CodecSSC
 			}
-			next, nextMTU, err := e.switchCodec(ctx, caps, target, &enc)
+			next, nextMTU := enc, mtu
+			var err error
+			if s, ok := enc.(*sscEnc); ok && target == bt.CodecSSC && s.e.SampleRate == sscEncodeRate(e.srate) {
+				var br int
+				br, err = sscBitrate(s.e.SampleRate, mtu, bt.SSCConfig())
+				if err == nil {
+					e.pipe.mu.Lock()
+					s.e.Bitrate = br
+					e.pipe.mu.Unlock()
+					e.selectCodec(change)
+					e.reportEncoder(enc, mtu, target)
+					_ = e.out.Write(ipc.Event{Ev: "codec", Codec: &change})
+					continue
+				}
+			} else {
+				next, nextMTU, err = e.switchCodec(ctx, caps, target, &enc)
+			}
 			e.selectCodec(change)
 			if err != nil {
 				logf("codec switch to %s: %v", target, err)
@@ -617,7 +633,7 @@ func (e *engine) session(addrStr string) (result error) {
 				}
 				return errReconnect
 			}
-			enc = next
+			enc, mtu = next, nextMTU
 			e.installEncoder(enc, nextMTU, target)
 			_ = e.out.Write(ipc.Event{Ev: "codec", Codec: &change})
 		}
@@ -627,6 +643,11 @@ func (e *engine) session(addrStr string) (result error) {
 func (e *engine) installEncoder(enc Encoder, mtu int, codec bt.Codec) {
 	frag := aacMode == "frag" && codec == bt.CodecAAC
 	e.pipe.set(enc, mtu, frag)
+	e.reportEncoder(enc, mtu, codec)
+}
+
+func (e *engine) reportEncoder(enc Encoder, mtu int, codec bt.Codec) {
+	frag := aacMode == "frag" && codec == bt.CodecAAC
 	bw := ""
 	if b, ok := enc.(interface{ Bandwidth() int }); ok {
 		bw = fmt.Sprintf(", band %d Hz", b.Bandwidth())
