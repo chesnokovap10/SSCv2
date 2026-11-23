@@ -353,7 +353,7 @@ func runAVDTP(ctx context.Context, path string, out io.Writer, retry bool, strea
 			if err != nil {
 				return nil, err
 			}
-			return &avdtpMedia{File: media, ctx: ctx}, nil
+			return newAVDTPMedia(ctx, media), nil
 		}
 	}
 	err = inspect(ctx, link, out, openMedia, send, stream, capabilities)
@@ -364,18 +364,33 @@ func runAVDTP(ctx context.Context, path string, out io.Writer, retry bool, strea
 }
 
 type avdtpMedia struct {
-	*os.File
-	ctx context.Context
+	io.WriteCloser
+	ctx      context.Context
+	stop     func() bool
+	deadline func(time.Time) error
+}
+
+func newAVDTPMedia(ctx context.Context, ch interface {
+	io.WriteCloser
+	SetWriteDeadline(time.Time) error
+}) *avdtpMedia {
+	m := &avdtpMedia{WriteCloser: ch, ctx: ctx, deadline: ch.SetWriteDeadline}
+	m.stop = context.AfterFunc(ctx, func() { _ = ch.Close() })
+	return m
+}
+func (m *avdtpMedia) Close() error {
+	m.stop()
+	return m.WriteCloser.Close()
 }
 
 func (m *avdtpMedia) Write(packet []byte) (int, error) {
 	if err := m.ctx.Err(); err != nil {
 		return 0, err
 	}
-	if err := m.SetWriteDeadline(time.Now().Add(time.Second)); err != nil {
+	if err := m.deadline(time.Now().Add(time.Second)); err != nil {
 		return 0, err
 	}
-	return m.File.Write(packet)
+	return m.WriteCloser.Write(packet)
 }
 
 func requireTestSigning() error {

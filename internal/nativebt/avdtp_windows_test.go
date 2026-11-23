@@ -133,3 +133,26 @@ func TestAVDTPReadHonorsCancellation(t *testing.T) {
 		t.Fatal("AVDTP read did not stop")
 	}
 }
+
+func TestCancellationUnblocksMediaWrite(t *testing.T) {
+	local, peer := net.Pipe()
+	defer peer.Close()
+	ctx, cancel := context.WithCancel(context.Background())
+	m := newAVDTPMedia(ctx, local)
+	defer m.Close()
+	done := make(chan error, 1)
+	go func() { _, err := m.Write([]byte{1, 2}); done <- err }()
+	var first [1]byte
+	if _, err := peer.Read(first[:]); err != nil {
+		t.Fatal(err)
+	}
+	cancel()
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Fatal("write completed after cancellation")
+		}
+	case <-time.After(300 * time.Millisecond):
+		t.Fatal("media write blocked")
+	}
+}
