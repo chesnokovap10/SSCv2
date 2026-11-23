@@ -1,7 +1,9 @@
 package app
 
 import (
+	"bytes"
 	"io"
+	"os"
 	"testing"
 
 	"sscv2/internal/config"
@@ -66,4 +68,58 @@ func TestQueuedModeKeepsLastSelection(t *testing.T) {
 	a.quitting = true
 	a.mu.Unlock()
 	a.opMu.Unlock()
+}
+
+func TestRequestNativeCodecWhileAnotherStartIsPending(t *testing.T) {
+	var output bytes.Buffer
+	p := &nativeProcess{workerProcess: &workerProcess{in: ipc.NewWriter(&output), done: make(chan struct{}), process: &os.Process{}}, started: make(chan struct{})}
+	defer close(p.done)
+	a := &App{t: &tray.Tray{}, s: &config.Settings{AllBitrates: true}, native: p}
+	old := p.started
+	for _, m := range []config.Mode{config.ModeSSC, config.ModeAAC, config.ModeSSC} {
+		changed, err := a.requestNativeCodec(p, m)
+		if err != nil || !changed {
+			t.Fatal(m, changed, err)
+		}
+	}
+	select {
+	case <-old:
+	default:
+		t.Fatal("superseded watchdog still running")
+	}
+	rd := ipc.NewReader(&output)
+	var first, last ipc.NativeStream
+	for i := 1; i <= 3; i++ {
+		var command ipc.Command
+		if err := rd.Read(&command); err != nil || command.Native.Generation != uint64(i) {
+			t.Fatal(i, command, err)
+		}
+		if i == 1 {
+			first = *command.Native
+		}
+		last = *command.Native
+	}
+	a.onNativeEvent(p, ipc.Event{Ev: ipc.EventNativeReady, Native: &first})
+	if p.ready {
+		t.Fatal("obsolete SSC event acknowledged later SSC request")
+	}
+	a.onNativeEvent(p, ipc.Event{Ev: ipc.EventNativeReady, Native: &last})
+	if !p.ready {
+		t.Fatal("current request did not become ready")
+	}
+	a.mode = config.ModeSSC
+	a.invalidateNativeAfterResumeLocked()
+	if changed, err := a.requestNativeCodec(p, config.ModeAAC); err != nil || !changed || p.Generation != 3 {
+		t.Fatal("resume sent a command to the retiring worker")
+	}
+}
+
+func TestRejectUnsupportedNativeUHQKeepsPlaying(t *testing.T) {
+	supported := false
+	p := &nativeProcess{workerProcess: &workerProcess{done: make(chan struct{})}, ready: true, uhqSupported: &supported, NativeStream: ipc.NativeStream{Mode: config.ModeAAC}}
+	a := &App{t: &tray.Tray{}, s: &config.Settings{}, native: p}
+	changed, err := a.requestNativeCodec(p, config.ModeSSCUHQ)
+	if err != nil || changed || !p.ready || p.Mode != config.ModeAAC {
+		t.Fatal("preflight disturbed active playback", err)
+	}
 }

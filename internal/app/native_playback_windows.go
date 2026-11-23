@@ -78,6 +78,16 @@ func (a *App) requestNativeCodec(p *nativeProcess, mode config.Mode) (bool, erro
 		a.t.Balloon("SSCv2", message, 1)
 		return false, nil
 	}
+	if mode == config.ModeSSCUHQ && a.uhqUnavailable() {
+		a.mu.Unlock()
+		a.t.Balloon("SSCv2", T("Наушники не поддерживают SSC UHQ", "SSC UHQ is unavailable on these headphones"), 1)
+		return false, nil
+	}
+	if a.resumeNative == p {
+		// Recovery reads the selected mode after it acquires opMu.
+		a.mu.Unlock()
+		return true, nil
+	}
 	stream := a.nativeStreamLocked(mode)
 	stream.Generation = p.Generation
 	if p.NativeStream == stream {
@@ -85,9 +95,10 @@ func (a *App) requestNativeCodec(p *nativeProcess, mode config.Mode) (bool, erro
 		return false, nil
 	}
 	stream.Generation++
+	// Retire the superseded watchdog.
 	if !p.ready {
 		close(p.started)
-	} // Retire the superseded watchdog.
+	}
 	p.sourcePCM = false
 	p.NativeStream, p.ready, p.started = stream, false, started
 	a.mu.Unlock()
