@@ -167,6 +167,7 @@ type EventKind string
 
 const (
 	EventStatus         EventKind = "status"
+	EventNativePCM      EventKind = "nativePCM"
 	EventNativeReady    EventKind = "nativeReady"
 	EventNativeLog      EventKind = "nativeLog"
 	EventNativeError    EventKind = "nativeError"

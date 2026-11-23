@@ -16,6 +16,7 @@ type nativeProcess struct {
 	*workerProcess
 	ipc.NativeStream
 	started          chan struct{}
+	sourcePCM        bool
 	ready            bool
 	activeKbps       int
 	volume           ipc.NativeVolume
@@ -87,6 +88,7 @@ func (a *App) requestNativeCodec(p *nativeProcess, mode config.Mode) (bool, erro
 	if !p.ready {
 		close(p.started)
 	} // Retire the superseded watchdog.
+	p.sourcePCM = false
 	p.NativeStream, p.ready, p.started = stream, false, started
 	a.mu.Unlock()
 	go a.watchNativeStartup(p, started)
@@ -132,6 +134,15 @@ func (a *App) onNativeEvent(p *nativeProcess, event ipc.Event) {
 		if event.Status != nil {
 			a.recordBitrateProfile(headphones, true, event.Status.Capabilities, config.ModeOff, profiles.StreamInfo{})
 		}
+		a.refresh()
+	case ipc.EventNativePCM:
+		if event.Native == nil || *event.Native != stream {
+			a.mu.Unlock()
+			return
+		}
+		p.sourcePCM = true
+		a.mu.Unlock()
+		logf("native %s: first media write after source PCM", stream.Mode)
 		a.refresh()
 	case ipc.EventNativeReady:
 		if p.ready || event.Native == nil || *event.Native != stream {

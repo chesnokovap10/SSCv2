@@ -56,6 +56,9 @@ func (a *App) stateWithBitratesLocked(workingMax func(config.Mode) (int, string)
 		return tray.Red, T("адаптер не найден", "adapter not found")
 	}
 	if a.native != nil {
+		if a.native.ready && !a.native.sourcePCM {
+			return tray.Blue, modeName(a.native.Mode) + T(" — ожидание звука", " — waiting for audio")
+		}
 		if a.native.ready {
 			return tray.Green, modeName(a.native.Mode) + " (Windows Bluetooth)"
 		}

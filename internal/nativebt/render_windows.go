@@ -16,6 +16,8 @@ import (
 )
 
 type renderPCM struct {
+	consumedPCM  bool
+	onPCM        func()
 	trimSource   func(int) int
 	lastFill     time.Time
 	session      *avdtpSession
@@ -51,8 +53,9 @@ func (r *renderPCM) stream(ctx context.Context, path string, stream ipc.NativeSt
 		run = r.session.run
 	}
 	return run(ctx, path, r.out, true, stream, func(media io.Writer, kbps int) error {
-		link := &renderMedia{Writer: media, onExpired: func() {
+		link := &renderMedia{Writer: media, sourcePCM: &r.consumedPCM, onPCM: r.onPCM, onExpired: func() {
 			r.queued = 0
+			r.consumedPCM = false
 			r.playing = false
 			r.previousPCM = false
 			r.primingSince = time.Time{}
@@ -84,6 +87,8 @@ func (r *renderPCM) stream(ctx context.Context, path string, stream ipc.NativeSt
 }
 
 type renderMedia struct {
+	sourcePCM *bool
+	onPCM     func()
 	onExpired func()
 	io.Writer
 	sent bool
@@ -96,7 +101,13 @@ func (m *renderMedia) Write(packet []byte) (int, error) {
 		m.onExpired()
 	}
 	m.lost = m.sent && (errors.Is(err, windows.ERROR_NETNAME_DELETED) || errors.Is(err, windows.ERROR_DEVICE_NOT_CONNECTED))
-	m.sent = m.sent || err == nil && n == len(packet)
+	if err == nil && n == len(packet) {
+		m.sent = true
+		if m.onPCM != nil && m.sourcePCM != nil && *m.sourcePCM {
+			m.onPCM()
+			m.onPCM = nil
+		}
+	}
 	return n, err
 }
 
@@ -181,6 +192,7 @@ func (r *renderPCM) fillBlock(ctx context.Context, pcm []float32, raw []int16) e
 		}
 	}
 	// Bound the wait for short sounds and for the tail of a stopped stream.
+	r.consumedPCM = true
 	size := min(r.queued, frameBytes)
 	r.playing = r.playing || size == frameBytes
 	r.primingSince = time.Time{}

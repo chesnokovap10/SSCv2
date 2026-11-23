@@ -184,3 +184,19 @@ func TestAACUnityPreservesS16(t *testing.T) {
 		}
 	}
 }
+
+func TestPCMNotificationRequiresSourceAndSuccessfulWrite(t *testing.T) {
+	source := false
+	calls := 0
+	m := renderMedia{Writer: &testMedia{}, sourcePCM: &source, onPCM: func() { calls++ }}
+	m.Write([]byte{1})
+	if calls != 0 {
+		t.Fatal("priming silence marked as source")
+	}
+	source = true
+	m.Write([]byte{2})
+	m.Write([]byte{3})
+	if calls != 1 {
+		t.Fatal(calls)
+	}
+}
