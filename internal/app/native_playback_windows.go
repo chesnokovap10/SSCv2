@@ -66,12 +66,6 @@ func (a *App) startNativeWorker(mode config.Mode, path, endpoint, address, stere
 
 // requestNativeCodec runs with opMu held, so it cannot race a stop or another command.
 func (a *App) requestNativeCodec(p *nativeProcess, mode config.Mode) (bool, error) {
-	// Wait for the previous command's acknowledgment before replacing it.
-	select {
-	case <-p.done:
-		return false, nil
-	case <-p.started:
-	}
 	if !p.running() {
 		return false, nil
 	}
@@ -84,10 +78,15 @@ func (a *App) requestNativeCodec(p *nativeProcess, mode config.Mode) (bool, erro
 		return false, nil
 	}
 	stream := a.nativeStreamLocked(mode)
+	stream.Generation = p.Generation
 	if p.NativeStream == stream {
 		a.mu.Unlock()
 		return false, nil
 	}
+	stream.Generation++
+	if !p.ready {
+		close(p.started)
+	} // Retire the superseded watchdog.
 	p.NativeStream, p.ready, p.started = stream, false, started
 	a.mu.Unlock()
 	go a.watchNativeStartup(p, started)

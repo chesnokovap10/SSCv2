@@ -54,6 +54,7 @@ type NativeConfig struct {
 }
 
 type NativeStream struct {
+	Generation  uint64      `json:"generation,omitempty"`
 	Mode        config.Mode `json:"mode"`
 	BitrateKbps int         `json:"bitrateKbps"`
 	TryUHQ      bool        `json:"tryUhq,omitempty"`
