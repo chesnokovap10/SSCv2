@@ -21,6 +21,7 @@ type renderPCM struct {
 	out          io.Writer
 	buffer       []byte
 	queued       int
+	reserveBytes int
 	playing      bool
 	primingSince time.Time
 	lastSample   [2]float32
@@ -30,6 +31,7 @@ type renderPCM struct {
 }
 
 const (
+	renderReserveStep  = 48000 * 4 * 4 / 1000  // 4 ms of stereo PCM
 	renderReserve      = 48000 * 4 * 30 / 1000 // 30 ms of stereo S16LE
 	renderPrimeTimeout = 50 * time.Millisecond
 	renderFadeFrames   = 96 // 2 ms at 48 kHz
@@ -76,6 +78,7 @@ func (r *renderPCM) fill(ctx context.Context, pcm []float32) error {
 	frameBytes := 2 * len(pcm)
 	if r.buffer == nil {
 		r.buffer = make([]byte, frameBytes+renderReserve)
+		r.reserveBytes = renderReserveStep
 	}
 	queuedBeforeRead := r.queued
 	for r.queued < len(r.buffer) {
@@ -93,6 +96,9 @@ func (r *renderPCM) fill(ctx context.Context, pcm []float32) error {
 		r.queued += size
 	}
 	if r.queued < frameBytes {
+		if r.playing && r.queued > 0 {
+			r.reserveBytes = min(renderReserve, r.reserveBytes+renderReserveStep)
+		}
 		if r.playing && r.out != nil && time.Since(r.lastShortLog) >= time.Second {
 			r.lastShortLog = time.Now()
 			fmt.Fprintf(r.out, "WaveRT PCM buffer ran short: %d/%d samples per channel\n", r.queued/4, frameBytes/4)
@@ -104,7 +110,7 @@ func (r *renderPCM) fill(ctx context.Context, pcm []float32) error {
 		r.silence(pcm)
 		return nil
 	}
-	if !r.playing && r.queued < len(r.buffer) {
+	if !r.playing && r.queued < frameBytes+r.reserveBytes {
 		now := time.Now()
 		// Keep building the reserve while PCM arrives. If nothing arrived
 		// since the previous fill, emit the short sound on this codec tick.

@@ -116,3 +116,11 @@ func TestPacketPacerRebasesAfterStall(t *testing.T) {
 		t.Fatal("next packet still scheduled on the clock from before the stall")
 	}
 }
+
+func TestContinuousPCMStartsWithSmallReserve(t *testing.T) {
+	input := make([]byte, 480*4+renderReserveStep)
+	r := renderPCM{read: func(b []byte) (int, error) { n := copy(b, input); input = input[n:]; return n, nil }}
+	if err := r.fill(context.Background(), make([]float32, 960)); err != nil || !r.playing || r.queued != renderReserveStep {
+		t.Fatal(r.queued, err)
+	}
+}
