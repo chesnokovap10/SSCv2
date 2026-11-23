@@ -2,11 +2,14 @@ package nativebt
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"sync"
 	"time"
 )
+
+var errExpiredMedia = errors.New("media packet expired during suspend")
 
 type signaledMedia struct {
 	io.WriteCloser
@@ -33,6 +36,7 @@ func (m *signaledMedia) state(paused bool, err error) {
 }
 
 func (m *signaledMedia) Write(packet []byte) (int, error) {
+	var waiting time.Time
 	for {
 		m.mu.Lock()
 		paused, err, wake := m.paused, m.err, m.wake
@@ -44,11 +48,17 @@ func (m *signaledMedia) Write(packet []byte) (int, error) {
 			return 0, err
 		}
 		if !paused {
+			if !waiting.IsZero() && time.Since(waiting) > 30*time.Millisecond {
+				return 0, errExpiredMedia
+			}
 			n, err := m.WriteCloser.Write(packet)
 			if m.ctx.Err() != nil {
 				return n, m.ctx.Err()
 			}
 			return n, err
+		}
+		if waiting.IsZero() {
+			waiting = time.Now()
 		}
 		select {
 		case <-wake:

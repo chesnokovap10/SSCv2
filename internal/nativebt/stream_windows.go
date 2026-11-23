@@ -2,6 +2,7 @@ package nativebt
 
 import (
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"io"
 	"time"
@@ -85,16 +86,20 @@ func sendSSCLive(media io.Writer, mode config.Mode, kbps int, fill func([]float3
 		packet = append(packet[:12], frame...)
 		pacer.wait(frameDuration)
 		n, err := media.Write(packet)
+		if errors.Is(err, errExpiredMedia) {
+			continue
+		}
 		if err != nil {
 			return fmt.Errorf("write SSC packet %d: %w", count, err)
 		}
 		if n != len(packet) {
 			return io.ErrShortWrite
 		}
-		if count == 0 && ready != nil {
+		if ready != nil {
 			if err := ready(); err != nil {
 				return err
 			}
+			ready = nil
 		}
 	}
 }
@@ -142,16 +147,21 @@ func sendAAC(media io.Writer, out io.Writer, kbps, samples int, source string, p
 		}
 		size := 12 + len(payload)
 		n, err := media.Write(packet[:size])
+		if errors.Is(err, errExpiredMedia) {
+			timestamp += uint64(encoder.FrameLen)
+			continue
+		}
 		if err != nil {
 			return fmt.Errorf("write AAC packet %d (%d bytes): %w", sequence, size, err)
 		}
 		if n != size {
 			return io.ErrShortWrite
 		}
-		if timestamp == 0 && ready != nil {
+		if ready != nil {
 			if err := ready(); err != nil {
 				return err
 			}
+			ready = nil
 		}
 		sequence++
 		timestamp += uint64(encoder.FrameLen)

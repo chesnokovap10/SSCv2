@@ -50,7 +50,15 @@ func (r *renderPCM) stream(ctx context.Context, path string, stream ipc.NativeSt
 		run = r.session.run
 	}
 	return run(ctx, path, r.out, true, stream, func(media io.Writer, kbps int) error {
-		link := &renderMedia{Writer: media}
+		link := &renderMedia{Writer: media, onExpired: func() {
+			r.queued = 0
+			r.playing = false
+			r.previousPCM = false
+			r.primingSince = time.Time{}
+			if r.trimSource != nil {
+				r.trimSource(0)
+			}
+		}}
 		var onReady func() error
 		if ready != nil {
 			onReady = func() error { return ready(kbps) }
@@ -66,6 +74,7 @@ func (r *renderPCM) stream(ctx context.Context, path string, stream ipc.NativeSt
 }
 
 type renderMedia struct {
+	onExpired func()
 	io.Writer
 	sent bool
 	lost bool
@@ -73,6 +82,9 @@ type renderMedia struct {
 
 func (m *renderMedia) Write(packet []byte) (int, error) {
 	n, err := m.Writer.Write(packet)
+	if errors.Is(err, errExpiredMedia) && m.onExpired != nil {
+		m.onExpired()
+	}
 	m.lost = m.sent && (errors.Is(err, windows.ERROR_NETNAME_DELETED) || errors.Is(err, windows.ERROR_DEVICE_NOT_CONNECTED))
 	m.sent = m.sent || err == nil && n == len(packet)
 	return n, err

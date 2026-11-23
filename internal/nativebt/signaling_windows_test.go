@@ -2,6 +2,7 @@ package nativebt
 
 import (
 	"context"
+	"errors"
 	"io"
 	"net"
 	"testing"
@@ -103,5 +104,21 @@ func TestStopIdleSignalingBeforeAbort(t *testing.T) {
 	}()
 	if _, err := p.command(abort, 4); err != nil {
 		t.Fatalf("abort after stopping reader: %v", err)
+	}
+}
+
+func TestExpiredSuspendedPacketIsNotWritten(t *testing.T) {
+	sink := &testMedia{}
+	m := newSignaledMedia(context.Background(), sink)
+	m.state(true, nil)
+	done := make(chan error, 1)
+	go func() { _, err := m.Write([]byte{1}); done <- err }()
+	time.Sleep(60 * time.Millisecond)
+	m.state(false, nil)
+	if err := <-done; !errors.Is(err, errExpiredMedia) || sink.Len() != 0 {
+		t.Fatal(err, sink.Len())
+	}
+	if _, err := m.Write([]byte{2}); err != nil || sink.Len() != 1 {
+		t.Fatal(err)
 	}
 }
