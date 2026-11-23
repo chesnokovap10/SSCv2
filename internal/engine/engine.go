@@ -554,9 +554,6 @@ func (e *engine) session(addrStr string) (result error) {
 	if err := e.startAudio(); err != nil {
 		return err
 	}
-	// Give AVRCP time to settle the selected level before playing. If it
-	// remains unavailable, the encoder can safely use software attenuation.
-	e.pipe.volumeStartedAt.Store(time.Now().UnixMilli())
 	e.installEncoder(enc, mtu, codec)
 	startingSelectedStream = false
 	defer e.pipe.set(nil, 0, false)

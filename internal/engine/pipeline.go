@@ -5,7 +5,6 @@ import (
 	"math/bits"
 	"sync"
 	"sync/atomic"
-	"time"
 
 	"sscv2/internal/audio"
 	"sscv2/internal/bt"
@@ -24,16 +23,17 @@ type Encoder interface {
 // pipeline: captured float32 -> stereo downmix (clipped to -1..1) -> encoder ->
 // MTU-sized RTP payloads -> bt.SendMedia. Called on the capture thread.
 type pipeline struct {
-	mu              sync.Mutex
-	enc             Encoder
-	maxRaw          int
-	ts              uint32
-	pcm             []float32 // pending stereo samples (residual between callbacks)
-	stereo          []float32
-	accum           []byte
-	active          atomic.Bool
-	errors          chan error   // first failure of the current encoder
-	volumeStartedAt atomic.Int64 // Unix milliseconds at A2DP stream startup
+	mu             sync.Mutex
+	enc            Encoder
+	maxRaw         int
+	ts             uint32
+	pcm            []float32 // pending stereo samples (residual between callbacks)
+	stereo         []float32
+	accum          []byte
+	active         atomic.Bool
+	errors         chan error // first failure of the current encoder
+	softwareGain   float32    // previous block's gain during software attenuation
+	softwareVolume bool
 	// volume holds the PCM level in bits 0..6 and mute in bit 7.
 	volume atomic.Uint32
 	// frag: split frames larger than one packet (RFC 3016)
@@ -56,6 +56,7 @@ func (p *pipeline) set(enc Encoder, mtu int, frag bool) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.enc = enc
+	p.softwareVolume = false
 	if p.errors == nil {
 		p.errors = make(chan error, 1)
 	}
@@ -268,35 +269,40 @@ func (p *pipeline) setVolume(level uint8, muted bool) {
 	p.volume.Store(state)
 }
 
-func (p *pipeline) pcmGain(hardware bool, now int64) float32 {
-	// Allow one AVRCP response timeout plus the 250 ms hardware settling
-	// period before falling back to software volume.
-	const softwareVolumeDelay = 1250
-	elapsed := now - p.volumeStartedAt.Load()
-	if elapsed < 250 {
-		return 0
-	}
-	if hardware {
-		return 1
-	}
+// applyVolume runs under p.mu on interleaved stereo PCM.
+func (p *pipeline) applyVolume(pcm []float32, hardware bool) {
 	level := p.volume.Load()
-	if elapsed < softwareVolumeDelay || level >= 128 {
-		return 0
-	}
-	gain := float32(level) / 127
-	return gain * gain
-}
-
-func (p *pipeline) encode(pcm []float32) ([]byte, error) {
-	switch gain := p.pcmGain(bt.HardwareVolumeActive(), time.Now().UnixMilli()); gain {
-	case 0:
+	if level == 0 || level >= 128 {
 		clear(pcm)
-	case 1:
-	default:
+		p.softwareVolume, p.softwareGain = true, 0
+		return
+	}
+	if !hardware {
+		gain := float32(level) / 127
+		gain *= gain
+		p.softwareVolume, p.softwareGain = true, gain
+		if gain == 1 {
+			return
+		}
 		for i := range pcm {
 			pcm[i] *= gain
 		}
+		return
 	}
+	if p.softwareVolume {
+		// AVRCP has settled. Release PCM attenuation over about 2 ms.
+		frames := min(len(pcm)/2, 96)
+		for frame := range frames {
+			gain := 1 - (1-p.softwareGain)*float32(frames-frame-1)/float32(frames)
+			pcm[frame*2] *= gain
+			pcm[frame*2+1] *= gain
+		}
+		p.softwareVolume = false
+	}
+}
+
+func (p *pipeline) encode(pcm []float32) ([]byte, error) {
+	p.applyVolume(pcm, bt.HardwareVolumeActive())
 	return p.enc.Encode(pcm)
 }
 
