@@ -96,11 +96,32 @@ func (a *App) setMode(m config.Mode) {
 	a.refresh()
 }
 
-// switchMode serializes changes requested by the tray and the control pipe.
+// switchMode records the user's selection before scheduling asynchronous work.
 func (a *App) switchMode(mode config.Mode) {
+	a.mu.Lock()
+	a.queuedMode = mode
+	if !a.modeDispatch {
+		a.modeDispatch = true
+		go a.dispatchModes()
+	}
+	a.mu.Unlock()
+}
+
+func (a *App) dispatchModes() {
 	a.opMu.Lock()
 	defer a.opMu.Unlock()
-	a.switchModeLocked(mode)
+	for {
+		a.mu.Lock()
+		mode := a.queuedMode
+		a.queuedMode = ""
+		if mode == "" || a.quitting {
+			a.modeDispatch = false
+			a.mu.Unlock()
+			return
+		}
+		a.mu.Unlock()
+		a.switchModeLocked(mode)
+	}
 }
 
 func (a *App) switchModeLocked(mode config.Mode) {

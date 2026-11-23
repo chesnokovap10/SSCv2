@@ -329,13 +329,13 @@ func (a *App) command(id int) {
 	case id == idVolMute:
 		a.adjustVolume(id)
 	case id == idModeOff:
-		go a.switchMode(config.ModeOff)
+		a.switchMode(config.ModeOff)
 	case id == idModeAAC:
-		go a.switchMode(config.ModeAAC)
+		a.switchMode(config.ModeAAC)
 	case id == idModeSSC:
-		go a.switchMode(config.ModeSSC)
+		a.switchMode(config.ModeSSC)
 	case id == idModeUHQ:
-		go a.switchMode(config.ModeSSCUHQ)
+		a.switchMode(config.ModeSSCUHQ)
 	case id >= idEqualizerBase && id < idEqualizerBase+equalizerCount:
 		a.setEqualizer(uint8(id - idEqualizerBase))
 	case id >= idNoiseControlBase && id <= idNoiseControlBase+int(buds.NoiseAdaptive):

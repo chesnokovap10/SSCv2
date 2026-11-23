@@ -286,13 +286,13 @@ func (a *App) ctl(args []string) string {
 	case "mode":
 		switch arg(1) {
 		case "off":
-			go a.switchMode(config.ModeOff)
+			a.switchMode(config.ModeOff)
 		case "aac":
-			go a.switchMode(config.ModeAAC)
+			a.switchMode(config.ModeAAC)
 		case "ssc":
-			go a.switchMode(config.ModeSSC)
+			a.switchMode(config.ModeSSC)
 		case "ssc_uhq", "uhq":
-			go a.switchMode(config.ModeSSCUHQ)
+			a.switchMode(config.ModeSSCUHQ)
 		default:
 			return "error: mode off|aac|ssc|ssc_uhq"
 		}

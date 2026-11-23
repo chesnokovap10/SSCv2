@@ -4,6 +4,7 @@ import (
 	"io"
 	"testing"
 
+	"sscv2/internal/config"
 	"sscv2/internal/ipc"
 	"sscv2/internal/tray"
 )
@@ -51,4 +52,18 @@ func TestStopWinUSBEngineTransfersMutedOutputOnlyForRestart(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestQueuedModeKeepsLastSelection(t *testing.T) {
+	a := &App{}
+	a.opMu.Lock()
+	a.switchMode(config.ModeSSC)
+	a.switchMode(config.ModeAAC)
+	a.mu.Lock()
+	if a.queuedMode != config.ModeAAC || !a.modeDispatch {
+		t.Error("latest request lost")
+	}
+	a.quitting = true
+	a.mu.Unlock()
+	a.opMu.Unlock()
 }

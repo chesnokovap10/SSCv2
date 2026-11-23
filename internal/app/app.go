@@ -27,7 +27,9 @@ var T = i18n.T
 type App struct {
 	t *tray.Tray
 
-	opMu sync.Mutex // one mode switch / privileged op at a time
+	queuedMode   config.Mode
+	modeDispatch bool
+	opMu         sync.Mutex // one mode switch / privileged op at a time
 
 	mu            sync.Mutex
 	s             *config.Settings
