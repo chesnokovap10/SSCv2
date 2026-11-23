@@ -70,3 +70,17 @@ func (s *pcmSource) pump(ctx context.Context, read func(context.Context, []byte)
 		}
 	}
 }
+
+// trim returns how much fresh PCM remains after dropping excess backlog.
+func (s *pcmSource) trim(limit int) int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if time.Since(s.latest) > 50*time.Millisecond {
+		s.queued = 0
+	}
+	if excess := s.queued - limit; excess > 0 {
+		s.head = (s.head + excess) % len(s.buffer)
+		s.queued = limit
+	}
+	return s.queued
+}

@@ -240,7 +240,7 @@ releaseWait:
 				}
 				return events.Write(ipc.Event{Ev: ipc.EventNativeReady, Native: &stream, BitrateKbps: kbps})
 			}
-			render := renderPCM{session: &session, out: out, read: bufferedPCM, activity: activity, gain: func() float32 {
+			render := renderPCM{session: &session, out: out, read: bufferedPCM, trimSource: source.trim, activity: activity, gain: func() float32 {
 				return volume.gain(readGain)
 			}}
 			err := render.stream(ctx, cfg.Path, stream, ready, linkLost, capabilities)

@@ -15,6 +15,8 @@ import (
 )
 
 type renderPCM struct {
+	trimSource   func(int) int
+	lastFill     time.Time
 	session      *avdtpSession
 	gain         func() float32
 	read         func([]byte) (int, error)
@@ -81,6 +83,20 @@ func (r *renderPCM) fill(ctx context.Context, pcm []float32) error {
 	if r.buffer == nil {
 		r.buffer = make([]byte, frameBytes+renderReserve)
 		r.reserveBytes = renderReserveStep
+	}
+	if r.trimSource != nil {
+		now := time.Now()
+		period := time.Second * time.Duration(frameBytes) / (48000 * 4)
+		if !r.lastFill.IsZero() && now.Sub(r.lastFill) >= period+period/2 {
+			target := frameBytes + r.reserveBytes
+			fresh := r.trimSource(target)
+			if excess := fresh + r.queued - target; excess > 0 {
+				r.head = (r.head + excess) % len(r.buffer)
+				r.queued -= excess
+				r.previousPCM = false
+			}
+		}
+		r.lastFill = now
 	}
 	queuedBeforeRead := r.queued
 	for r.queued < len(r.buffer) {

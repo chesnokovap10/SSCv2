@@ -159,3 +159,11 @@ func TestPCMSourceDropsOldestFramesWhenSenderStalls(t *testing.T) {
 		}
 	}
 }
+
+func TestLateRenderDropsOldestLocalPCM(t *testing.T) {
+	const size = 480 * 4
+	r := renderPCM{lastFill: time.Now().Add(-time.Second), buffer: make([]byte, size+renderReserve), queued: size, playing: true, read: func([]byte) (int, error) { return 0, nil }, trimSource: func(limit int) int { return limit }}
+	if err := r.fill(context.Background(), make([]float32, 960)); err != nil || r.head != size || r.queued != 0 {
+		t.Fatal(r.head, r.queued, err)
+	}
+}
