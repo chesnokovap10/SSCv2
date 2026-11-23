@@ -177,6 +177,26 @@ func (a *App) onEngineEvent(p *workerProcess, ev ipc.Event) {
 		logx.Dbgf("ipc", "engine -> tray: %s %s %s", ev.Ev, ev.Addr, ev.Msg)
 	}
 	switch ev.Ev {
+	case "codecRejected":
+		a.mu.Lock()
+		if ev.RejectedCodec == nil || ev.Codec == nil || a.eng != p || a.codecChange(a.mode) != *ev.RejectedCodec {
+			a.mu.Unlock()
+			return
+		}
+		old := ev.Codec
+		mode, br := config.ModeAAC, old.AACBitrate
+		if old.Codec == "ssc" {
+			mode, br = config.ModeSSC, old.SSCBitrate
+			if old.SSCUHQ {
+				mode = config.ModeSSCUHQ
+			}
+		}
+		a.mode, a.s.Mode, a.pendingUHQ = mode, mode, false
+		a.s.SetBitrate(mode, br)
+		_ = config.Save(a.s)
+		a.mu.Unlock()
+		a.t.Balloon("SSCv2", ev.Msg, 1)
+		a.refresh()
 	case "codec":
 		a.mu.Lock()
 		current := a.eng == p && a.pendingUHQ && ev.Codec != nil && ev.Codec.SSCUHQ

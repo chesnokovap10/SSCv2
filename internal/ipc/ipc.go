@@ -184,22 +184,23 @@ type NativeVolume struct {
 }
 
 type Event struct {
-	Equalizer    *uint8             `json:"equalizer,omitempty"`
-	NoiseControl *buds.NoiseControl `json:"noise_control,omitempty"`
-	Battery      *buds.Level        `json:"battery,omitempty"`
-	NativeVolume *NativeVolume      `json:"nativeVolume,omitempty"`
-	BitrateKbps  int                `json:"bitrateKbps,omitempty"`
-	Codec        *CodecChange       `json:"codec,omitempty"`
-	Volume       *uint8             `json:"volume,omitempty"`
-	Ev           EventKind          `json:"ev"`
-	Status       *EngineStatus      `json:"status,omitempty"`
-	Devices      []Found            `json:"devices,omitempty"`
-	Addr         string             `json:"addr,omitempty"`
-	Key          string             `json:"key,omitempty"`
-	KeyType      int                `json:"keyType,omitempty"`
-	Name         string             `json:"name,omitempty"`
-	Msg          string             `json:"msg,omitempty"`
-	Native       *NativeStream      `json:"native,omitempty"`
+	RejectedCodec *CodecChange       `json:"rejectedCodec,omitempty"`
+	Equalizer     *uint8             `json:"equalizer,omitempty"`
+	NoiseControl  *buds.NoiseControl `json:"noise_control,omitempty"`
+	Battery       *buds.Level        `json:"battery,omitempty"`
+	NativeVolume  *NativeVolume      `json:"nativeVolume,omitempty"`
+	BitrateKbps   int                `json:"bitrateKbps,omitempty"`
+	Codec         *CodecChange       `json:"codec,omitempty"`
+	Volume        *uint8             `json:"volume,omitempty"`
+	Ev            EventKind          `json:"ev"`
+	Status        *EngineStatus      `json:"status,omitempty"`
+	Devices       []Found            `json:"devices,omitempty"`
+	Addr          string             `json:"addr,omitempty"`
+	Key           string             `json:"key,omitempty"`
+	KeyType       int                `json:"keyType,omitempty"`
+	Name          string             `json:"name,omitempty"`
+	Msg           string             `json:"msg,omitempty"`
+	Native        *NativeStream      `json:"native,omitempty"`
 }
 
 // ---- tray -> helper ------------------------------------------------------------

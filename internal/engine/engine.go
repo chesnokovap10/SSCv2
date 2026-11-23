@@ -591,8 +591,13 @@ func (e *engine) session(addrStr string) (result error) {
 			e.target = a
 			return errSessionChanged
 		case change := <-e.changeCodec:
+			previous := e.currentCodec()
+			reject := func(err error) {
+				_ = e.out.Write(ipc.Event{Ev: "codecRejected", Codec: &previous, RejectedCodec: &change, Msg: err.Error()})
+			}
 			if change.SSCUHQ && !uhqSupported && !change.TryUHQ {
-				return fmt.Errorf("%w: %v", errStreamStart, bt.ErrNoCodec)
+				reject(bt.ErrNoCodec)
+				continue
 			}
 			sameMode := e.cfg.Codec == change.Codec && e.cfg.SSCUHQ == change.SSCUHQ
 			if sameMode && e.cfg.AACBitrate == change.AACBitrate && e.cfg.AACMaxKbps == change.AACMaxKbps && e.cfg.SSCBitrate == change.SSCBitrate &&
@@ -625,15 +630,38 @@ func (e *engine) session(addrStr string) (result error) {
 			} else {
 				next, nextMTU, err = e.switchCodec(ctx, caps, target, &enc)
 			}
-			e.selectCodec(change)
 			if err != nil {
-				logf("codec switch to %s: %v", target, err)
-				if change.SSCUHQ || change.SSCBitrate > 0 || change.AACBitrate > 0 {
-					return fmt.Errorf("%w: %v", errStreamStart, err)
+				e.selectCodec(previous)
+				reject(err)
+				if enc != nil && bt.Streaming() {
+					continue
 				}
-				return errReconnect
+				if enc != nil {
+					return errReconnect
+				}
+				// CLOSE succeeded but the new configuration failed. Restore
+				// the last negotiated codec on the existing signaling link.
+				rate := e.srate
+				maker := newSSC
+				br := 0
+				if codec == bt.CodecSSC {
+					rate = sscEncodeRate(rate)
+				} else {
+					br, err = aacTarget(caps.AACBitrate)
+					if err != nil {
+						return errReconnect
+					}
+					maker = func(rate, mtu int) (Encoder, error) { return newAAC(rate, mtu, br) }
+				}
+				enc, mtu, err = e.openCodec(ctx, codec, rate, br, maker)
+				if err != nil {
+					return errReconnect
+				}
+				e.installEncoder(enc, mtu, codec)
+				continue
 			}
-			enc, mtu = next, nextMTU
+			e.selectCodec(change)
+			enc, mtu, codec = next, nextMTU, target
 			e.installEncoder(enc, nextMTU, target)
 			_ = e.out.Write(ipc.Event{Ev: "codec", Codec: &change})
 		}
@@ -944,4 +972,9 @@ func (e *engine) selectCodec(change ipc.CodecChange) {
 	e.cfg.AACMaxKbps = change.AACMaxKbps
 	aacForced, aacWorking = change.AACBitrate*1000, change.AACMaxKbps
 	sscUHQMode, sscForced, sscWorking = change.SSCUHQ, change.SSCBitrate, change.SSCMaxKbps
+}
+
+func (e *engine) currentCodec() ipc.CodecChange {
+	c := e.cfg
+	return ipc.CodecChange{Codec: c.Codec, SSCUHQ: c.SSCUHQ, TryUHQ: c.TryUHQ, AACBitrate: c.AACBitrate, AACMaxKbps: c.AACMaxKbps, SSCBitrate: c.SSCBitrate, SSCMaxKbps: c.SSCMaxKbps}
 }

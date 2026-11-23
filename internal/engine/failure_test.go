@@ -2,6 +2,7 @@ package engine
 
 import (
 	"errors"
+	"sscv2/internal/ipc"
 	"testing"
 )
 
@@ -48,4 +49,17 @@ func TestPeakIncludesMonoAndSurroundCapture(t *testing.T) {
 			t.Fatalf("channels=%d peak=%f", ch, peak)
 		}
 	}
+}
+
+func TestRestoreCodecSelection(t *testing.T) {
+	e := engine{}
+	old := ipc.CodecChange{Codec: "aac", AACBitrate: 224, AACMaxKbps: 250}
+	e.selectCodec(old)
+	saved := e.currentCodec()
+	e.selectCodec(ipc.CodecChange{Codec: "ssc", SSCUHQ: true, SSCBitrate: 886})
+	e.selectCodec(saved)
+	if e.currentCodec() != old || sscUHQ() || aacForced != 224000 {
+		t.Fatal("failed to restore encoder settings")
+	}
+	defer e.selectCodec(ipc.CodecChange{})
 }
