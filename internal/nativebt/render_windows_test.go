@@ -7,7 +7,7 @@ import (
 	"time"
 )
 
-func TestRenderPCMRebuffersWithoutConsumingPartialFrame(t *testing.T) {
+func TestRenderPCMPrimesThenConcealsAnIsolatedShortFrame(t *testing.T) {
 	const frames = 480 // 10 ms
 	var input []byte
 	appendFrames := func(n int) {
@@ -56,13 +56,12 @@ func TestRenderPCMRebuffersWithoutConsumingPartialFrame(t *testing.T) {
 		checkFrame(frames)
 	}
 	appendFrames(frames / 2)
-	checkFrame(0)
-	appendFrames(frames*4 - frames/2)
+	checkFrame(frames / 2)
+	appendFrames(frames * 4)
 	for range 4 {
 		checkFrame(frames)
 	}
 	appendFrames(frames / 2)
-	checkFrame(0)
 	checkFrame(frames / 2)
 	checkFrame(0)
 }

@@ -21,6 +21,7 @@ type renderPCM struct {
 	out          io.Writer
 	buffer       []byte
 	queued       int
+	shortRun     int
 	reserveBytes int
 	playing      bool
 	primingSince time.Time
@@ -96,6 +97,7 @@ func (r *renderPCM) fill(ctx context.Context, pcm []float32) error {
 		r.queued += size
 	}
 	if r.queued < frameBytes {
+		r.shortRun++
 		if r.playing && r.queued > 0 {
 			r.reserveBytes = min(renderReserve, r.reserveBytes+renderReserveStep)
 		}
@@ -103,7 +105,11 @@ func (r *renderPCM) fill(ctx context.Context, pcm []float32) error {
 			r.lastShortLog = time.Now()
 			fmt.Fprintf(r.out, "WaveRT PCM buffer ran short: %d/%d samples per channel\n", r.queued/4, frameBytes/4)
 		}
-		r.playing = false
+		if r.queued == 0 || r.shortRun > 1 {
+			r.playing = false
+		}
+	} else {
+		r.shortRun = 0
 	}
 	if r.queued == 0 {
 		r.primingSince = time.Time{}
@@ -125,7 +131,7 @@ func (r *renderPCM) fill(ctx context.Context, pcm []float32) error {
 	}
 	// Bound the wait for short sounds and for the tail of a stopped stream.
 	size := min(r.queued, frameBytes)
-	r.playing = size == frameBytes
+	r.playing = r.playing || size == frameBytes
 	r.primingSince = time.Time{}
 	gain := float32(1)
 	if r.gain != nil {
