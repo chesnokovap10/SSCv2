@@ -123,3 +123,21 @@ func TestContinuousPCMStartsWithSmallReserve(t *testing.T) {
 		t.Fatal(r.queued, err)
 	}
 }
+
+func TestWaveRTFrameAcrossRingBoundary(t *testing.T) {
+	const frames = 480
+	r := renderPCM{playing: true, previousPCM: true, buffer: make([]byte, frames*4+renderReserve), queued: frames * 4, read: func([]byte) (int, error) { return 0, nil }}
+	r.head = len(r.buffer) - 4
+	for i := range frames * 2 {
+		binary.LittleEndian.PutUint16(r.buffer[(r.head+2*i)%len(r.buffer):], uint16(i))
+	}
+	pcm := make([]float32, frames*2)
+	if err := r.fill(context.Background(), pcm); err != nil {
+		t.Fatal(err)
+	}
+	for i, v := range pcm {
+		if v != float32(i)/32768 {
+			t.Fatal(i, v)
+		}
+	}
+}

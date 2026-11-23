@@ -20,6 +20,7 @@ type renderPCM struct {
 	read         func([]byte) (int, error)
 	out          io.Writer
 	buffer       []byte
+	head         int
 	queued       int
 	shortRun     int
 	reserveBytes int
@@ -86,8 +87,9 @@ func (r *renderPCM) fill(ctx context.Context, pcm []float32) error {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		end := min(len(r.buffer), r.queued+4096)
-		size, err := r.read(r.buffer[r.queued:end])
+		tail := (r.head + r.queued) % len(r.buffer)
+		n := min(len(r.buffer)-r.queued, len(r.buffer)-tail, 4096)
+		size, err := r.read(r.buffer[tail : tail+n])
 		if err != nil {
 			return err
 		}
@@ -138,8 +140,13 @@ func (r *renderPCM) fill(ctx context.Context, pcm []float32) error {
 		gain = r.gain()
 	}
 	samples := pcm[:size/2]
+	offset := r.head
 	for i := range samples {
-		samples[i] = float32(int16(binary.LittleEndian.Uint16(r.buffer[2*i:]))) / 32768
+		samples[i] = float32(int16(binary.LittleEndian.Uint16(r.buffer[offset:]))) / 32768
+		offset += 2
+		if offset == len(r.buffer) {
+			offset = 0
+		}
 	}
 	if r.activity != nil {
 		r.activity.Observe(samples)
@@ -169,7 +176,8 @@ func (r *renderPCM) fill(ctx context.Context, pcm []float32) error {
 	r.previousPCM = size == frameBytes
 	copy(r.lastSample[:], samples[len(samples)-2:])
 	clear(pcm[size/2:])
-	r.queued = copy(r.buffer, r.buffer[size:r.queued])
+	r.head = offset
+	r.queued -= size
 	return nil
 }
 
