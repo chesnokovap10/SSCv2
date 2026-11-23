@@ -24,6 +24,7 @@ type Encoder interface {
 // pipeline: captured float32 -> stereo downmix (clipped to -1..1) -> encoder ->
 // MTU-sized RTP payloads -> bt.SendMedia. Called on the capture thread.
 type pipeline struct {
+	generation     atomic.Uint64
 	pcmAt          time.Time
 	mu             sync.Mutex
 	enc            Encoder
@@ -57,6 +58,7 @@ type pipeline struct {
 func (p *pipeline) set(enc Encoder, mtu int, frag bool) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	p.generation.Add(1)
 	p.enc = enc
 	p.softwareVolume = false
 	if p.errors == nil {
@@ -91,7 +93,7 @@ func clip(v float32) float32 {
 func clamp16(v float32) int16 { return int16(clip(v) * 32767) }
 
 // onCapture receives `frames` interleaved frames of `ch` channels.
-func (p *pipeline) onCapture(s []float32, frames, ch, rate int, discontinuity bool, mix [][2]float32, captured time.Time) {
+func (p *pipeline) onCapture(s []float32, frames, ch, rate int, discontinuity bool, mix [][2]float32, captured time.Time, generation uint64) {
 	p.frames.Add(uint64(frames))
 	p.activity.Observe(s[:frames*ch])
 	if !p.active.Load() {
@@ -99,7 +101,7 @@ func (p *pipeline) onCapture(s []float32, frames, ch, rate int, discontinuity bo
 	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	if p.enc == nil {
+	if p.enc == nil || p.generation.Load() != generation {
 		return
 	}
 	if discontinuity {

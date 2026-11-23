@@ -32,9 +32,10 @@ import (
 )
 
 type engine struct {
-	cfg   ipc.EngineConfig
-	out   *ipc.Writer
-	store *keys.Store
+	encodeQueue *captureQueue
+	cfg         ipc.EngineConfig
+	out         *ipc.Writer
+	store       *keys.Store
 
 	mu     sync.Mutex
 	st     ipc.EngineStatus
@@ -747,15 +748,20 @@ func (e *engine) startAudio() error {
 		return err
 	}
 	mix := stereoMix(cp.Format.Channels, cp.Format.ChannelMask)
+	q := newCaptureQueue(func(b *captureBlock) {
+		e.pipe.onCapture(b.samples, b.frames, cp.Format.Channels, cp.Format.SampleRate, b.gap, mix, b.at, b.generation)
+	})
 	if err := cp.StartTimed(func(samples []float32, frames int, discontinuity bool, captured time.Time) {
-		e.pipe.onCapture(samples, frames, cp.Format.Channels, cp.Format.SampleRate, discontinuity, mix, captured)
+		q.push(samples, frames, discontinuity, captured, e.pipe.generation.Load())
 	}); err != nil {
+		q.close()
 		stopMuteGuard()
 		if !muted {
 			_ = audio.SetMute(id, false)
 		}
 		return err
 	}
+	e.encodeQueue = q
 	e.stopMuteGuard = stopMuteGuard
 	e.carried = false
 	logf("capture: %s [%s]", cp.Device.Name, cp.Format)
@@ -878,6 +884,10 @@ func (e *engine) closeCapture() {
 	if e.cap != nil {
 		e.cap.Close()
 		e.cap = nil
+	}
+	if e.encodeQueue != nil {
+		e.encodeQueue.close()
+		e.encodeQueue = nil
 	}
 }
 
