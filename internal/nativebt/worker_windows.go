@@ -80,31 +80,7 @@ func runWorker(cfg ipc.NativeConfig, reader *ipc.Reader, events *ipc.Writer, han
 		}
 		handleMediaKey(key)
 	}, volume, activity)
-	started := time.Now()
-	released := make(chan error, 1)
-	go func(completed chan<- error) {
-		_, err := helper.Call(ipc.Request{Op: "native-a2dp-release", Device: cfg.Device})
-		completed <- err
-		close(completed)
-	}(released)
-	defer func(completed <-chan error) { <-completed }(released)
-	for {
-		select {
-		case err := <-released:
-			if err != nil {
-				return err
-			}
-			released = nil
-		default:
-			if cfg.StereoEndpoint == "" || slices.ContainsFunc(audio.List(false, audio.StateActive), func(e audio.Endpoint) bool { return e.ID == cfg.StereoEndpoint }) {
-				time.Sleep(20 * time.Millisecond)
-				continue
-			}
-		}
-		break
-	}
-	fmt.Fprintf(out, "A2DP endpoint released in %v\n", time.Since(started).Round(time.Millisecond))
-	commands := make(chan ipc.NativeStream)
+	commands := make(chan ipc.NativeStream, 1)
 	stop := make(chan struct{})
 	defer close(stop)
 	var readErr error
@@ -146,6 +122,10 @@ func runWorker(cfg ipc.NativeConfig, reader *ipc.Reader, events *ipc.Writer, han
 				return
 			}
 			select {
+			case <-commands:
+			default:
+			}
+			select {
 			case commands <- *command.Native:
 			case <-stop:
 				return
@@ -153,6 +133,37 @@ func runWorker(cfg ipc.NativeConfig, reader *ipc.Reader, events *ipc.Writer, han
 		}
 	}()
 	stream := cfg.Stream
+	started := time.Now()
+	released := make(chan error, 1)
+	go func(completed chan<- error) {
+		_, err := helper.Call(ipc.Request{Op: "native-a2dp-release", Device: cfg.Device})
+		completed <- err
+		close(completed)
+	}(released)
+	defer func(completed <-chan error) { <-completed }(released)
+releaseWait:
+	for {
+		select {
+		case next, open := <-commands:
+			if !open {
+				return readErr
+			}
+			stream = next
+			continue releaseWait
+		case err := <-released:
+			if err != nil {
+				return err
+			}
+			released = nil
+		default:
+			if cfg.StereoEndpoint == "" || slices.ContainsFunc(audio.List(false, audio.StateActive), func(e audio.Endpoint) bool { return e.ID == cfg.StereoEndpoint }) {
+				time.Sleep(20 * time.Millisecond)
+				continue
+			}
+		}
+		break
+	}
+	fmt.Fprintf(out, "A2DP endpoint released in %v\n", time.Since(started).Round(time.Millisecond))
 	linkLost := func(playing bool) {
 		_ = events.Write(ipc.Event{Ev: ipc.EventNativeLinkLost})
 		if time.Since(time.UnixMilli(lastPause.Load())) < 2*time.Second {
