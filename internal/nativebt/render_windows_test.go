@@ -63,9 +63,48 @@ func TestRenderPCMRebuffersWithoutConsumingPartialFrame(t *testing.T) {
 	}
 	appendFrames(frames / 2)
 	checkFrame(0)
-	render.primingSince = time.Now().Add(-renderPrimeTimeout)
 	checkFrame(frames / 2)
 	checkFrame(0)
+}
+
+func TestShortNotificationEmittedOnSecondCodecTick(t *testing.T) {
+	for _, codec := range []struct {
+		name   string
+		frames int
+	}{{"AAC", 1024}, {"SSC", 864}, {"SSC UHQ", 432}} {
+		t.Run(codec.name, func(t *testing.T) {
+			input := make([]byte, 480*4) // 10 ms stereo at 48 kHz
+			for i := 0; i < len(input); i += 2 {
+				binary.LittleEndian.PutUint16(input[i:], 16384)
+			}
+			r := renderPCM{read: func(dst []byte) (int, error) {
+				n := copy(dst, input)
+				input = input[n:]
+				return n, nil
+			}}
+			pcm := make([]float32, 2*codec.frames)
+			for tick := 1; tick <= 2; tick++ {
+				if err := r.fill(context.Background(), pcm); err != nil {
+					t.Fatal(err)
+				}
+				audible := pcm[2*renderFadeFrames] > 0
+				if audible != (tick == 2) {
+					t.Fatalf("tick %d: audible=%t", tick, audible)
+				}
+			}
+			if want := max(480-codec.frames, 0) * 4; r.queued != want {
+				t.Fatalf("queued %d bytes, want %d", r.queued, want)
+			}
+			if r.queued > 0 {
+				if err := r.fill(context.Background(), pcm); err != nil {
+					t.Fatal(err)
+				}
+				if pcm[0] == 0 || r.queued != 0 {
+					t.Fatal("lost or delayed the notification tail")
+				}
+			}
+		})
+	}
 }
 
 func TestPacketPacerRebasesAfterStall(t *testing.T) {

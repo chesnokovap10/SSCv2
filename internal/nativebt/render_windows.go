@@ -72,6 +72,7 @@ func (r *renderPCM) fill(ctx context.Context, pcm []float32) error {
 	if r.buffer == nil {
 		r.buffer = make([]byte, frameBytes+renderReserve)
 	}
+	queuedBeforeRead := r.queued
 	for r.queued < len(r.buffer) {
 		if err := ctx.Err(); err != nil {
 			return err
@@ -100,10 +101,13 @@ func (r *renderPCM) fill(ctx context.Context, pcm []float32) error {
 	}
 	if !r.playing && r.queued < len(r.buffer) {
 		now := time.Now()
+		// Keep building the reserve while PCM arrives. If nothing arrived
+		// since the previous fill, emit the short sound on this codec tick.
+		waitForInput := r.queued > queuedBeforeRead || (r.primingSince.IsZero() && !r.previousPCM)
 		if r.primingSince.IsZero() {
 			r.primingSince = now
 		}
-		if now.Sub(r.primingSince) < renderPrimeTimeout {
+		if waitForInput && now.Sub(r.primingSince) < renderPrimeTimeout {
 			r.silence(pcm)
 			return nil
 		}
@@ -111,9 +115,7 @@ func (r *renderPCM) fill(ctx context.Context, pcm []float32) error {
 	// Bound the wait for short sounds and for the tail of a stopped stream.
 	size := min(r.queued, frameBytes)
 	r.playing = size == frameBytes
-	if r.playing {
-		r.primingSince = time.Time{}
-	}
+	r.primingSince = time.Time{}
 	gain := float32(1)
 	if r.gain != nil {
 		gain = r.gain()
