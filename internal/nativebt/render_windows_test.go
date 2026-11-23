@@ -141,3 +141,21 @@ func TestWaveRTFrameAcrossRingBoundary(t *testing.T) {
 		}
 	}
 }
+
+func TestPCMSourceDropsOldestFramesWhenSenderStalls(t *testing.T) {
+	var s pcmSource
+	for i := byte(1); i <= 3; i++ {
+		b := make([]byte, 4096)
+		for j := range b {
+			b[j] = i
+		}
+		s.store(b, time.Now())
+	}
+	for _, want := range []byte{2, 3} {
+		b := make([]byte, 4096)
+		n, err := s.read(b)
+		if err != nil || n != 4096 || b[0] != want || b[n-1] != want {
+			t.Fatal(n, err, b[0])
+		}
+	}
+}

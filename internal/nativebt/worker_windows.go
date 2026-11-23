@@ -203,6 +203,15 @@ releaseWait:
 		pcm = opened
 		return pcm.Read(buffer)
 	}
+	var source pcmSource
+	var startPCM sync.Once
+	var pumping sync.WaitGroup
+	pumpCtx, stopPump := context.WithCancel(controlCtx)
+	defer func() { stopPump(); pumping.Wait() }()
+	bufferedPCM := func(b []byte) (int, error) {
+		startPCM.Do(func() { pumping.Add(1); go func() { defer pumping.Done(); source.pump(pumpCtx, readPCM) }() })
+		return source.read(b)
+	}
 	var session avdtpSession
 	defer session.close()
 	for {
@@ -231,7 +240,7 @@ releaseWait:
 				}
 				return events.Write(ipc.Event{Ev: ipc.EventNativeReady, Native: &stream, BitrateKbps: kbps})
 			}
-			render := renderPCM{session: &session, out: out, read: func(b []byte) (int, error) { return readPCM(ctx, b) }, activity: activity, gain: func() float32 {
+			render := renderPCM{session: &session, out: out, read: bufferedPCM, activity: activity, gain: func() float32 {
 				return volume.gain(readGain)
 			}}
 			err := render.stream(ctx, cfg.Path, stream, ready, linkLost, capabilities)
