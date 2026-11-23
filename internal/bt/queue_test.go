@@ -33,3 +33,16 @@ func TestVolumeRetryIsBoundedAndRearmsSameValue(t *testing.T) {
 		t.Fatal("unbounded retry")
 	}
 }
+
+func TestFragmentedFrameAdmissionIsAtomic(t *testing.T) {
+	s := &stackT{}
+	s.mqCount = len(s.mq) - 1
+	s.mqHead = len(s.mq) - 1
+	if s.enqueueMediaFrame([]byte{1, 2, 3}, 7, 2, time.Now()) || s.mqHead != len(s.mq)-1 || s.mqCount != len(s.mq)-1 {
+		t.Fatal("partial frame admitted")
+	}
+	s.mqCount--
+	if !s.enqueueMediaFrame([]byte{1, 2, 3}, 7, 2, time.Now()) || s.mq[len(s.mq)-1].marker || !s.mq[0].marker || s.mq[0].ts != 7 {
+		t.Fatal("fragment wrap or marker")
+	}
+}

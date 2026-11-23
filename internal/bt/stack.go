@@ -712,37 +712,26 @@ func (s *stackT) resetMedia() {
 // SendMedia queues one RTP payload (codec frames; AAC/SSC raw, SBC with its
 // 1-byte header already prepended). Safe from any goroutine.
 func SendMedia(payload []byte, timestamp uint32) bool {
-	return SendMediaMarker(payload, timestamp, false)
+	return SendMediaFrame(payload, timestamp, 0)
 }
 
-// SendMediaMarker is SendMedia with the RTP marker bit (RFC 3016: set on
-// the packet that completes an AAC frame split over several packets).
-func SendMediaMarker(payload []byte, timestamp uint32, marker bool) bool {
+// SendMediaFrame enqueues a whole access unit, optionally fragmented to fit
+// the transport. Only the last fragment carries the RTP marker.
+func SendMediaFrame(payload []byte, timestamp uint32, fragmentSize int) bool {
 	s := stack
-	if !s.streaming.Load() {
-		return false
-	}
 	s.mqmu.Lock()
-	if len(payload) > len(s.mq[0].data) {
+	if !s.streaming.Load() {
 		s.mqmu.Unlock()
-		s.sendFails.Add(1)
 		return false
 	}
 	now := time.Now()
 	s.discardStaleMedia(now.Add(-maxMediaAge))
-	if s.mqCount == len(s.mq) {
-		s.mqmu.Unlock()
+	ok := s.enqueueMediaFrame(payload, timestamp, fragmentSize, now)
+	s.mqmu.Unlock()
+	if !ok {
 		s.sendFails.Add(1)
 		return false
 	}
-	slot := &s.mq[s.mqHead]
-	slot.n = copy(slot.data[:], payload)
-	slot.ts = timestamp
-	slot.marker = marker
-	slot.queued = now
-	s.mqHead = (s.mqHead + 1) % len(s.mq)
-	s.mqCount++
-	s.mqmu.Unlock()
 
 	if !s.mqReq.Swap(true) {
 		s.call(func() {
@@ -751,6 +740,32 @@ func SendMediaMarker(payload []byte, timestamp uint32, marker bool) bool {
 				C.a2dp_source_stream_endpoint_request_can_send_now(C.uint16_t(s.a2dpCid), C.uint8_t(s.localSeid))
 			}
 		})
+	}
+	return true
+}
+
+// enqueueMediaFrame requires mqmu. Reserve all slots before publishing any.
+func (s *stackT) enqueueMediaFrame(payload []byte, ts uint32, fragmentSize int, captured time.Time) bool {
+	if len(payload) == 0 || fragmentSize < 0 {
+		return false
+	}
+	marker := fragmentSize > 0
+	if fragmentSize == 0 {
+		fragmentSize = len(payload)
+	}
+	if min(fragmentSize, len(payload)) > len(s.mq[0].data) || 1+(len(payload)-1)/fragmentSize > len(s.mq)-s.mqCount {
+		return false
+	}
+	for len(payload) > 0 {
+		n := min(fragmentSize, len(payload))
+		slot := &s.mq[s.mqHead]
+		slot.n = copy(slot.data[:], payload[:n])
+		slot.ts = ts
+		slot.queued = captured
+		payload = payload[n:]
+		slot.marker = marker && len(payload) == 0
+		s.mqHead = (s.mqHead + 1) % len(s.mq)
+		s.mqCount++
 	}
 	return true
 }

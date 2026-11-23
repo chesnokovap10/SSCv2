@@ -185,10 +185,7 @@ func (p *pipeline) onCapture(s []float32, frames, ch, rate int, discontinuity bo
 				}
 				if p.frag {
 					// RFC 3016: same timestamp, marker on the last fragment.
-					for o := 0; o < len(out); o += p.maxRaw {
-						end := min(o+p.maxRaw, len(out))
-						bt.SendMediaMarker(out[o:end], p.ts, end == len(out))
-					}
+					bt.SendMediaFrame(out, p.ts, p.maxRaw)
 				} else {
 					bt.SendMedia(out, p.ts) // too big: counted as a send failure
 				}
