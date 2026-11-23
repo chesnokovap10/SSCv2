@@ -28,11 +28,9 @@ func (a *App) startWinUSBPlaybackLocked(m config.Mode, eng *workerProcess, strea
 	a.mu.Unlock()
 	a.setMode(m)
 	if !blocked && eng != nil && eng.running() && streaming {
-		if m == config.ModeSSCUHQ {
-			a.mu.Lock()
-			a.pendingUHQ = true
-			a.mu.Unlock()
-		}
+		a.mu.Lock()
+		a.pendingUHQ = m == config.ModeSSCUHQ
+		a.mu.Unlock()
 		if err := eng.in.Write(ipc.Command{Cmd: ipc.CommandCodec, Codec: &codec}); err == nil {
 			return
 		}

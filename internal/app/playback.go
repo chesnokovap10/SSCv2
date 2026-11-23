@@ -136,7 +136,7 @@ func (a *App) switchModeLocked(mode config.Mode) {
 	current, eng, streaming, pendingUHQ := a.mode, a.eng, a.st.Streaming, a.pendingUHQ
 	native, preferNative, quitting := a.native, a.s.WindowsTestSigning, a.quitting
 	a.mu.Unlock()
-	if quitting || pendingUHQ {
+	if quitting {
 		return
 	}
 	if preferNative && native != nil {
@@ -154,7 +154,7 @@ func (a *App) switchModeLocked(mode config.Mode) {
 		return
 	}
 	if !preferNative {
-		a.startWinUSBPlaybackLocked(mode, eng, streaming)
+		a.startWinUSBPlaybackLocked(mode, eng, streaming || pendingUHQ)
 		return
 	}
 	if eng != nil {
