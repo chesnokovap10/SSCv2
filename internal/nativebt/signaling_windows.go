@@ -2,10 +2,8 @@ package nativebt
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"io"
-	"os"
 	"sync"
 	"time"
 )
@@ -61,22 +59,25 @@ func (p *avdtpSession) watchStreamingCommands(media *signaledMedia) func() {
 	if !ok {
 		return func() {}
 	} // in-memory negotiation transports have no asynchronous reader
+	// The previous START command left its transaction deadline on this link.
+	if err := link.SetReadDeadline(time.Time{}); err != nil {
+		media.state(false, err)
+		return func() {}
+	}
 	ctx, cancel := context.WithCancel(p.ctx)
+	interrupted := make(chan struct{})
+	context.AfterFunc(ctx, func() {
+		_ = link.SetReadDeadline(time.Now())
+		close(interrupted)
+	})
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
 		packet := make([]byte, 65535)
 		for ctx.Err() == nil {
-			if err := link.SetReadDeadline(time.Now().Add(250 * time.Millisecond)); err != nil {
-				media.state(false, err)
-				return
-			}
 			n, err := p.link.Read(packet)
 			if ctx.Err() != nil {
 				return
-			}
-			if errors.Is(err, os.ErrDeadlineExceeded) {
-				continue
 			}
 			if err == nil && n == 0 {
 				err = io.ErrUnexpectedEOF
@@ -90,7 +91,11 @@ func (p *avdtpSession) watchStreamingCommands(media *signaledMedia) func() {
 			}
 		}
 	}()
-	return func() { cancel(); <-done }
+	return func() {
+		cancel()
+		<-interrupted // Finish the deadline update before Abort reuses the link.
+		<-done
+	}
 }
 
 func (p *avdtpSession) streamingCommand(media *signaledMedia, packet []byte) error {

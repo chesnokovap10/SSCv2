@@ -63,3 +63,45 @@ func TestStreamingSignalingReaderRepliesAndStops(t *testing.T) {
 		t.Fatalf("reply %x", reply)
 	}
 }
+
+type idleSignalingLink struct {
+	net.Conn
+	reading chan struct{}
+}
+
+func (l *idleSignalingLink) Read(p []byte) (int, error) {
+	select {
+	case l.reading <- struct{}{}:
+	default:
+	}
+	return l.Conn.Read(p)
+}
+
+func TestStopIdleSignalingBeforeAbort(t *testing.T) {
+	local, peer := net.Pipe()
+	defer local.Close()
+	defer peer.Close()
+	link := &idleSignalingLink{Conn: local, reading: make(chan struct{}, 1)}
+	p := avdtpSession{link: link, ctx: context.Background()}
+	stop := p.watchStreamingCommands(newSignaledMedia(p.ctx, &testMedia{}))
+	<-link.reading
+	stopped := make(chan struct{})
+	go func() {
+		stop()
+		close(stopped)
+	}()
+	select {
+	case <-stopped:
+	case <-time.After(150 * time.Millisecond):
+		t.Fatal("idle signaling read delayed stream release")
+	}
+	go func() {
+		var cmd [3]byte
+		if _, err := io.ReadFull(peer, cmd[:]); err == nil {
+			_, _ = peer.Write([]byte{cmd[0] | 2, cmd[1]})
+		}
+	}()
+	if _, err := p.command(abort, 4); err != nil {
+		t.Fatalf("abort after stopping reader: %v", err)
+	}
+}
