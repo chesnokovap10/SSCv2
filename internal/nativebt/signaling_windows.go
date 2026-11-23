@@ -44,7 +44,11 @@ func (m *signaledMedia) Write(packet []byte) (int, error) {
 			return 0, err
 		}
 		if !paused {
-			return m.WriteCloser.Write(packet)
+			n, err := m.WriteCloser.Write(packet)
+			if m.ctx.Err() != nil {
+				return n, m.ctx.Err()
+			}
+			return n, err
 		}
 		select {
 		case <-wake:

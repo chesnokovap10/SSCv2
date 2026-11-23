@@ -15,6 +15,7 @@ import (
 )
 
 type renderPCM struct {
+	session      *avdtpSession
 	gain         func() float32
 	read         func([]byte) (int, error)
 	out          io.Writer
@@ -38,7 +39,11 @@ func (r *renderPCM) stream(ctx context.Context, path string, stream ipc.NativeSt
 	if err := requireTestSigning(); err != nil {
 		return err
 	}
-	return runAVDTP(ctx, path, r.out, true, stream, func(media io.Writer, kbps int) error {
+	run := runAVDTP
+	if r.session != nil {
+		run = r.session.run
+	}
+	return run(ctx, path, r.out, true, stream, func(media io.Writer, kbps int) error {
 		link := &renderMedia{Writer: media}
 		var onReady func() error
 		if ready != nil {

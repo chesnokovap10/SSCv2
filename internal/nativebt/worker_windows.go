@@ -175,6 +175,8 @@ releaseWait:
 		_ = events.Write(ipc.Event{Ev: ipc.EventNativeCaps, Status: &ipc.EngineStatus{SSCUHQSupported: &caps.SSCUHQ, Capabilities: &caps}})
 	}
 
+	var session avdtpSession
+	defer session.close()
 	for {
 		ctx, cancel := context.WithCancel(context.Background())
 		done := make(chan error, 1)
@@ -231,7 +233,7 @@ releaseWait:
 				}
 				return events.Write(ipc.Event{Ev: ipc.EventNativeReady, Native: &stream, BitrateKbps: kbps})
 			}
-			render := renderPCM{out: out, read: readPCM, activity: activity, gain: func() float32 {
+			render := renderPCM{session: &session, out: out, read: readPCM, activity: activity, gain: func() float32 {
 				return volume.gain(readGain)
 			}}
 			err := render.stream(ctx, cfg.Path, stream, ready, linkLost, capabilities)

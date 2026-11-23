@@ -30,9 +30,10 @@ const (
 
 // The transport presents one L2CAP SDU per read or write.
 type avdtpSession struct {
-	link  io.ReadWriter
-	label byte
-	ctx   context.Context
+	released bool
+	link     io.ReadWriter
+	label    byte
+	ctx      context.Context
 }
 
 type rejection struct {
@@ -150,6 +151,10 @@ func avdtpResponse(kind byte, payload []byte) ([]byte, error) {
 
 func inspect(ctx context.Context, link io.ReadWriter, out io.Writer, openMedia func() (io.WriteCloser, error), send func(io.Writer, int) error, stream ipc.NativeStream, capabilities func(ipc.CodecCapabilities)) error {
 	p := avdtpSession{link: link, ctx: ctx}
+	return p.inspect(out, openMedia, send, stream, capabilities)
+}
+
+func (p *avdtpSession) inspect(out io.Writer, openMedia func() (io.WriteCloser, error), send func(io.Writer, int) error, stream ipc.NativeStream, capabilities func(ipc.CodecCapabilities)) error {
 	endpoints, err := p.command(discover)
 	if err != nil {
 		return fmt.Errorf("discover: %w", err)
@@ -306,6 +311,8 @@ func (p *avdtpSession) stream(out io.Writer, seid byte, codec []byte, openMedia 
 	defer func() {
 		if _, err := p.command(abort, seid<<2); err != nil {
 			result = errors.Join(result, fmt.Errorf("release %s SEID %d: %w", mode, seid, err))
+		} else {
+			p.released = true
 		}
 	}()
 	if _, err := p.command(openStream, seid<<2); err != nil {
@@ -339,13 +346,30 @@ func (p *avdtpSession) stream(out io.Writer, seid byte, codec []byte, openMedia 
 // runAVDTP opens the signaling channel and discovers the remote endpoints.
 // If send is provided, it negotiates a media stream and hands it to the sender.
 func runAVDTP(ctx context.Context, path string, out io.Writer, retry bool, stream ipc.NativeStream, send func(io.Writer, int) error, capabilities func(ipc.CodecCapabilities)) error {
-	started := time.Now()
-	link, err := openChannel(ctx, path, retry)
-	if err != nil {
-		return err
+	var p avdtpSession
+	defer p.close()
+	return p.run(ctx, path, out, retry, stream, send, capabilities)
+}
+
+func (p *avdtpSession) close() {
+	if c, ok := p.link.(io.Closer); ok {
+		_ = c.Close()
 	}
-	defer link.Close()
-	fmt.Fprintf(out, "AVDTP signaling opened in %v\n", time.Since(started).Round(time.Millisecond))
+	*p = avdtpSession{}
+}
+
+func (p *avdtpSession) run(ctx context.Context, path string, out io.Writer, retry bool, stream ipc.NativeStream, send func(io.Writer, int) error, capabilities func(ipc.CodecCapabilities)) error {
+	reused := p.link != nil
+	if !reused {
+		started := time.Now()
+		link, err := openChannel(ctx, path, retry)
+		if err != nil {
+			return err
+		}
+		p.link = link
+		fmt.Fprintf(out, "AVDTP signaling opened in %v\n", time.Since(started).Round(time.Millisecond))
+	}
+	p.ctx, p.released = ctx, false
 	var openMedia func() (io.WriteCloser, error)
 	if send != nil {
 		openMedia = func() (io.WriteCloser, error) {
@@ -356,7 +380,18 @@ func runAVDTP(ctx context.Context, path string, out io.Writer, retry bool, strea
 			return newAVDTPMedia(ctx, media), nil
 		}
 	}
-	err = inspect(ctx, link, out, openMedia, send, stream, capabilities)
+	sent := false
+	originalSend := send
+	if send != nil {
+		send = func(w io.Writer, k int) error { sent = true; return originalSend(w, k) }
+	}
+	err := p.inspect(out, openMedia, send, stream, capabilities)
+	if err != nil || !p.released {
+		p.close()
+	}
+	if err != nil && reused && !sent && ctx.Err() == nil {
+		return p.run(ctx, path, out, retry, stream, originalSend, capabilities)
+	}
 	if ctx.Err() != nil {
 		return ctx.Err()
 	}
