@@ -78,9 +78,10 @@ func (a *App) requestNativeCodec(p *nativeProcess, mode config.Mode) (bool, erro
 	started := make(chan struct{})
 	a.mu.Lock()
 	if a.noBitrate(mode) {
-		err := errors.New(a.unsupportedText(mode))
+		message := a.unsupportedText(mode)
 		a.mu.Unlock()
-		return false, err
+		a.t.Balloon("SSCv2", message, 1)
+		return false, nil
 	}
 	stream := a.nativeStreamLocked(mode)
 	if p.NativeStream == stream {
