@@ -670,6 +670,7 @@ func (e *engine) session(addrStr string) (result error) {
 
 func (e *engine) installEncoder(enc Encoder, mtu int, codec bt.Codec) {
 	frag := aacMode == "frag" && codec == bt.CodecAAC
+	bt.SetMediaPeriod(enc.FrameLen(), e.srate)
 	e.pipe.set(enc, mtu, frag)
 	e.reportEncoder(enc, mtu, codec)
 }

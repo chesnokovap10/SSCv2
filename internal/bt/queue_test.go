@@ -46,3 +46,17 @@ func TestFragmentedFrameAdmissionIsAtomic(t *testing.T) {
 		t.Fatal("fragment wrap or marker")
 	}
 }
+
+func TestQueueAgeScalesWithCodecPeriod(t *testing.T) {
+	old := stack.mediaAge.Load()
+	defer stack.mediaAge.Store(old)
+	for _, v := range []struct {
+		frames int
+		want   time.Duration
+	}{{1024, 64 * time.Millisecond}, {864, 54 * time.Millisecond}, {432, 27 * time.Millisecond}} {
+		SetMediaPeriod(v.frames, 48000)
+		if stack.maxMediaAge() != v.want {
+			t.Fatal(v, stack.maxMediaAge())
+		}
+	}
+}

@@ -49,6 +49,8 @@ type mpkt struct {
 }
 
 type stackT struct {
+	mediaAge atomic.Int64 // maximum packet age in nanoseconds
+
 	logf   func(string, ...any)
 	keys   KeyStore
 	opts   Options
@@ -725,7 +727,7 @@ func SendMediaFrame(payload []byte, timestamp uint32, fragmentSize int) bool {
 		return false
 	}
 	now := time.Now()
-	s.discardStaleMedia(now.Add(-maxMediaAge))
+	s.discardStaleMedia(now.Add(-s.maxMediaAge()))
 	ok := s.enqueueMediaFrame(payload, timestamp, fragmentSize, now)
 	s.mqmu.Unlock()
 	if !ok {
@@ -770,7 +772,16 @@ func (s *stackT) enqueueMediaFrame(payload []byte, ts uint32, fragmentSize int, 
 	return true
 }
 
-const maxMediaAge = 150 * time.Millisecond
+// Allow three codec frames for capture, encoding and transport queueing.
+func SetMediaPeriod(frames, rate int) {
+	stack.mediaAge.Store(int64(3 * time.Second * time.Duration(frames) / time.Duration(rate)))
+}
+func (s *stackT) maxMediaAge() time.Duration {
+	if d := s.mediaAge.Load(); d > 0 {
+		return time.Duration(d)
+	}
+	return 70 * time.Millisecond
+}
 
 // discardStaleMedia requires mqmu. Discard every queued fragment sharing
 // an expired RTP timestamp so a receiver does not get the tail alone.
@@ -791,7 +802,7 @@ func (s *stackT) discardStaleMedia(cutoff time.Time) {
 // BTstack thread: send one queued packet.
 func (s *stackT) canSendNow() {
 	s.mqmu.Lock()
-	s.discardStaleMedia(time.Now().Add(-maxMediaAge))
+	s.discardStaleMedia(time.Now().Add(-s.maxMediaAge()))
 	have := s.mqCount > 0
 	if have {
 		s.txBuf = s.mq[s.mqTail]
