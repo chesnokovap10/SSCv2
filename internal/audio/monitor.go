@@ -18,8 +18,9 @@ import (
 var iidIMMNotificationClient = guid("{7991EEC9-7E89-4D85-8390-6C703CEC60C0}")
 
 type notifyClient struct {
-	vtbl *[8]uintptr
-	refs int32
+	vtbl     *[8]uintptr
+	refs     int32
+	defaults chan struct{}
 }
 
 var (
@@ -68,10 +69,13 @@ func (m *monitor) post(e monEvent) {
 }
 
 func initNcVtbl() {
-	get := func() *monitor {
+	get := func(this *notifyClient) *monitor {
 		monMu.Lock()
 		defer monMu.Unlock()
-		return curMon
+		if curMon != nil && curMon.nc == this {
+			return curMon
+		}
+		return nil
 	}
 	ncVtbl[0] = syscall.NewCallback(func(this *notifyClient, riid *windows.GUID, out **notifyClient) uintptr {
 		if *riid == iidIUnknown || *riid == iidIMMNotificationClient {
@@ -89,37 +93,38 @@ func initNcVtbl() {
 		return uintptr(atomic.AddInt32(&this.refs, -1))
 	})
 	// OnDeviceStateChanged(LPCWSTR, DWORD)
-	ncVtbl[3] = syscall.NewCallback(func(_ *notifyClient, id *uint16, state uint32) uintptr {
-		if m := get(); m != nil {
+	ncVtbl[3] = syscall.NewCallback(func(this *notifyClient, id *uint16, state uint32) uintptr {
+		if m := get(this); m != nil {
 			m.post(monEvent{kind: "state", id: windows.UTF16PtrToString(id), state: state})
 		}
 		return 0
 	})
 	// OnDeviceAdded(LPCWSTR)
-	ncVtbl[4] = syscall.NewCallback(func(_ *notifyClient, id *uint16) uintptr {
-		if m := get(); m != nil {
+	ncVtbl[4] = syscall.NewCallback(func(this *notifyClient, id *uint16) uintptr {
+		if m := get(this); m != nil {
 			m.post(monEvent{kind: "added", id: windows.UTF16PtrToString(id)})
 		}
 		return 0
 	})
 	// OnDeviceRemoved(LPCWSTR)
-	ncVtbl[5] = syscall.NewCallback(func(_ *notifyClient, id *uint16) uintptr {
-		if m := get(); m != nil {
+	ncVtbl[5] = syscall.NewCallback(func(this *notifyClient, id *uint16) uintptr {
+		if m := get(this); m != nil {
 			m.post(monEvent{kind: "removed", id: windows.UTF16PtrToString(id)})
 		}
 		return 0
 	})
 	// OnDefaultDeviceChanged(EDataFlow, ERole, LPCWSTR)
-	ncVtbl[6] = syscall.NewCallback(func(_ *notifyClient, flow, role uint32, id *uint16) uintptr {
-		if m := get(); m != nil {
+	ncVtbl[6] = syscall.NewCallback(func(this *notifyClient, flow, role uint32, id *uint16) uintptr {
+		this.defaultChanged(flow, role)
+		if m := get(this); m != nil {
 			m.post(monEvent{kind: "default", id: windows.UTF16PtrToString(id), flow: flow, role: role})
 		}
 		return 0
 	})
 	// OnPropertyValueChanged(LPCWSTR, PROPERTYKEY) - the key is passed by
 	// value (20 bytes > 8, so as a pointer on x64).
-	ncVtbl[7] = syscall.NewCallback(func(_ *notifyClient, id *uint16, key *propKey) uintptr {
-		if m := get(); m != nil && key != nil {
+	ncVtbl[7] = syscall.NewCallback(func(this *notifyClient, id *uint16, key *propKey) uintptr {
+		if m := get(this); m != nil && key != nil {
 			m.post(monEvent{kind: "prop", id: windows.UTF16PtrToString(id), key: *key})
 		}
 		return 0
@@ -337,4 +342,36 @@ func (m *monitor) handle(e monEvent) {
 			m.logf("dev: %s renamed -> %q", kind, m.name(e.id))
 		}
 	}
+}
+
+func (n *notifyClient) defaultChanged(flow, role uint32) {
+	if n.defaults != nil && flow == eRender && role == eConsole {
+		select {
+		case n.defaults <- struct{}{}:
+		default:
+		}
+	}
+}
+
+// WatchDefaultRender coalesces default-console changes for the capture session.
+func WatchDefaultRender() (<-chan struct{}, func(), error) {
+	en, err := enumerator()
+	if err != nil {
+		return nil, nil, err
+	}
+	ncVtblOnce.Do(initNcVtbl)
+	n := &notifyClient{vtbl: &ncVtbl, refs: 1, defaults: make(chan struct{}, 1)}
+	liveCbs.Store(n, true)
+	if err := hr(vcall(en, 6, uintptr(unsafe.Pointer(n)))); err != nil {
+		liveCbs.Delete(n)
+		release(en)
+		return nil, nil, err
+	}
+	n.defaultChanged(eRender, eConsole) // Recheck transitions during registration.
+	return n.defaults, func() {
+		if hr(vcall(en, 7, uintptr(unsafe.Pointer(n)))) == nil {
+			liveCbs.Delete(n)
+		}
+		release(en)
+	}, nil
 }

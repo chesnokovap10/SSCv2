@@ -130,3 +130,17 @@ func TestCaptureClockPreservesPacketAge(t *testing.T) {
 		t.Fatal("invalid timestamp used")
 	}
 }
+
+func TestDefaultRenderNotificationsFilterAndCoalesce(t *testing.T) {
+	n := notifyClient{defaults: make(chan struct{}, 1)}
+	n.defaultChanged(eCapture, eConsole)
+	n.defaultChanged(eRender, eMultimedia)
+	if len(n.defaults) != 0 {
+		t.Fatal("unrelated endpoint")
+	}
+	n.defaultChanged(eRender, eConsole)
+	n.defaultChanged(eRender, eConsole)
+	if len(n.defaults) != 1 {
+		t.Fatal("lost console notification")
+	}
+}

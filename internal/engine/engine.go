@@ -568,7 +568,13 @@ func (e *engine) session(addrStr string) (result error) {
 	}
 	startingSelectedStream = false
 	defer e.pipe.set(nil, 0, false)
-	outputCheck := time.NewTicker(time.Second)
+	changes, stopWatch, watchErr := audio.WatchDefaultRender()
+	checkInterval := time.Second
+	if watchErr == nil {
+		defer stopWatch()
+		checkInterval = 10 * time.Second
+	}
+	outputCheck := time.NewTicker(checkInterval)
 	defer outputCheck.Stop()
 
 	for {
@@ -584,6 +590,10 @@ func (e *engine) session(addrStr string) (result error) {
 			return err
 		case err := <-e.pipe.errors:
 			return fmt.Errorf("%w: encode: %v", errStreamStart, err)
+		case <-changes:
+			if output, err := audio.DefaultRender(); err == nil && output.ID != e.cap.Device.ID {
+				return errSessionChanged
+			}
 		case <-outputCheck.C:
 			if output, err := audio.DefaultRender(); err == nil && output.ID != e.cap.Device.ID {
 				return errSessionChanged
