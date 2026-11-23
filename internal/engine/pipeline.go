@@ -5,6 +5,7 @@ import (
 	"math/bits"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"sscv2/internal/audio"
 	"sscv2/internal/bt"
@@ -23,6 +24,7 @@ type Encoder interface {
 // pipeline: captured float32 -> stereo downmix (clipped to -1..1) -> encoder ->
 // MTU-sized RTP payloads -> bt.SendMedia. Called on the capture thread.
 type pipeline struct {
+	pcmAt          time.Time
 	mu             sync.Mutex
 	enc            Encoder
 	maxRaw         int
@@ -89,7 +91,7 @@ func clip(v float32) float32 {
 func clamp16(v float32) int16 { return int16(clip(v) * 32767) }
 
 // onCapture receives `frames` interleaved frames of `ch` channels.
-func (p *pipeline) onCapture(s []float32, frames, ch, rate int, discontinuity bool, mix [][2]float32) {
+func (p *pipeline) onCapture(s []float32, frames, ch, rate int, discontinuity bool, mix [][2]float32, captured time.Time) {
 	p.frames.Add(uint64(frames))
 	p.activity.Observe(s[:frames*ch])
 	if !p.active.Load() {
@@ -105,6 +107,9 @@ func (p *pipeline) onCapture(s []float32, frames, ch, rate int, discontinuity bo
 		p.pcm = p.pcm[:0]
 	}
 
+	if len(p.pcm) == 0 {
+		p.pcmAt = captured
+	}
 	// Downmix to stereo (ITU-R BS.775, LFE at -6 dB) so centre/surround are
 	// mixed in rather than dropped.
 	var peak float32
@@ -154,16 +159,18 @@ func (p *pipeline) onCapture(s []float32, frames, ch, rate int, discontinuity bo
 	block := p.enc.FrameLen() * 2
 	off := 0
 	if p.perPacket {
-		if err := p.encodePerPacket(block, &off); err != nil {
+		if err := p.encodePerPacket(block, rate, &off); err != nil {
 			p.fail(err)
 			return
 		}
+		p.pcmAt = p.sampleTime(off, rate)
 		n := copy(p.pcm, p.pcm[off:])
 		p.pcm = p.pcm[:n]
 		return
 	}
 	p.accum = p.accum[:0]
 	firstTS := p.ts
+	firstAt := p.pcmAt
 	nframes := 0
 	for off+block <= len(p.pcm) {
 		out, err := p.encode(p.pcm[off : off+block])
@@ -179,26 +186,28 @@ func (p *pipeline) onCapture(s []float32, frames, ch, rate int, discontinuity bo
 			if len(out) > p.maxRaw {
 				p.split.Add(1)
 				if nframes > 0 {
-					bt.SendMedia(p.accum, firstTS)
+					bt.SendMedia(p.accum, firstTS, firstAt)
 					p.accum = p.accum[:0]
 					nframes = 0
 				}
 				if p.frag {
 					// RFC 3016: same timestamp, marker on the last fragment.
-					bt.SendMediaFrame(out, p.ts, p.maxRaw)
+					bt.SendMediaFrame(out, p.ts, p.maxRaw, p.sampleTime(off, rate))
 				} else {
-					bt.SendMedia(out, p.ts) // too big: counted as a send failure
+					bt.SendMedia(out, p.ts, p.sampleTime(off, rate)) // too big: counted as a send failure
 				}
 				p.ts += uint32(p.enc.FrameLen())
 				off += block
 				firstTS = p.ts
+				firstAt = p.sampleTime(off, rate)
 				continue
 			}
 			if len(p.accum)+len(out) > p.maxRaw && nframes > 0 {
-				bt.SendMedia(p.accum, firstTS)
+				bt.SendMedia(p.accum, firstTS, firstAt)
 				p.accum = p.accum[:0]
 				nframes = 0
 				firstTS = p.ts
+				firstAt = p.sampleTime(off, rate)
 			}
 			p.accum = append(p.accum, out...)
 			nframes++
@@ -207,9 +216,10 @@ func (p *pipeline) onCapture(s []float32, frames, ch, rate int, discontinuity bo
 		off += block
 	}
 	if nframes > 0 {
-		bt.SendMedia(p.accum, firstTS)
+		bt.SendMedia(p.accum, firstTS, firstAt)
 	}
 	// keep the residual for the next callback
+	p.pcmAt = p.sampleTime(off, rate)
 	n := copy(p.pcm, p.pcm[off:])
 	p.pcm = p.pcm[:n]
 }
@@ -304,7 +314,7 @@ func (p *pipeline) encode(pcm []float32) ([]byte, error) {
 }
 
 // encodePerPacket: one frame per packet, the RTP timestamp counts packets.
-func (p *pipeline) encodePerPacket(block int, off *int) error {
+func (p *pipeline) encodePerPacket(block, rate int, off *int) error {
 	for *off+block <= len(p.pcm) {
 		out, err := p.encode(p.pcm[*off : *off+block])
 		*off += block
@@ -322,7 +332,7 @@ func (p *pipeline) encodePerPacket(block int, off *int) error {
 			p.split.Add(1) // too big: counted as a send failure
 		}
 		p.ts++
-		bt.SendMedia(out, p.ts)
+		bt.SendMedia(out, p.ts, p.sampleTime(*off-block, rate))
 	}
 	return nil
 }
@@ -346,4 +356,8 @@ func (p *pipeline) takeFrameStats() (int, int) {
 // takePeak returns and resets the peak level since the last call.
 func (p *pipeline) takePeak() float32 {
 	return math.Float32frombits(p.peak.Swap(0))
+}
+
+func (p *pipeline) sampleTime(offset, rate int) time.Time {
+	return p.pcmAt.Add(time.Second * time.Duration(offset/2) / time.Duration(rate))
 }

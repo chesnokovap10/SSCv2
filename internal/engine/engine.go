@@ -747,8 +747,8 @@ func (e *engine) startAudio() error {
 		return err
 	}
 	mix := stereoMix(cp.Format.Channels, cp.Format.ChannelMask)
-	if err := cp.Start(func(samples []float32, frames int, discontinuity bool) {
-		e.pipe.onCapture(samples, frames, cp.Format.Channels, cp.Format.SampleRate, discontinuity, mix)
+	if err := cp.StartTimed(func(samples []float32, frames int, discontinuity bool, captured time.Time) {
+		e.pipe.onCapture(samples, frames, cp.Format.Channels, cp.Format.SampleRate, discontinuity, mix, captured)
 	}); err != nil {
 		stopMuteGuard()
 		if !muted {

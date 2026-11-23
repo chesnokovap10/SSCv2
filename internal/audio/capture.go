@@ -155,6 +155,15 @@ func OpenCapture(id string) (*Capture, error) {
 
 // Start begins capturing on a dedicated, MMCSS-boosted OS thread.
 func (c *Capture) Start(cb Callback) error {
+	if cb == nil {
+		return c.StartTimed(nil)
+	}
+	return c.StartTimed(func(s []float32, n int, gap bool, _ time.Time) { cb(s, n, gap) })
+}
+
+type TimedCallback func([]float32, int, bool, time.Time)
+
+func (c *Capture) StartTimed(cb TimedCallback) error {
 	if c.client == nil {
 		return errors.New("capture not open")
 	}
@@ -179,7 +188,7 @@ func (c *Capture) Start(cb Callback) error {
 // Errors reports the terminal error, if any, from the current capture.
 func (c *Capture) Errors() <-chan error { return c.errors }
 
-func (c *Capture) loop(cb Callback) error {
+func (c *Capture) loop(cb TimedCallback) error {
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
 	task := uint32(0)
@@ -192,6 +201,7 @@ func (c *Capture) loop(cb Callback) error {
 	ch := c.Format.Channels
 	var lastPacket time.Time
 	var timeline captureTimeline
+	clock := newCaptureClock()
 	for c.running.Load() {
 		// Check device health at low frequency even if an invalidated endpoint
 		// stopped signaling altogether.
@@ -254,7 +264,7 @@ func (c *Capture) loop(cb Callback) error {
 			}
 			lastPacket = now
 			if out != nil {
-				cb(out, int(frames), discontinuity)
+				cb(out, int(frames), discontinuity, clock.packetTime(qpc, flags, now))
 			}
 		}
 	}
@@ -297,4 +307,33 @@ func (t *captureTimeline) observe(pos uint64, frames, flags uint32) bool {
 	t.next = pos + uint64(frames)
 	t.valid = valid
 	return gap
+}
+
+// WASAPI timestamps are QPC positions already converted to 100 ns units.
+type captureClock struct {
+	at  time.Time
+	hns int64
+}
+
+func newCaptureClock() captureClock {
+	kernel := windows.NewLazySystemDLL("kernel32.dll")
+	var freq, ticks int64
+	f, _, _ := kernel.NewProc("QueryPerformanceFrequency").Call(uintptr(unsafe.Pointer(&freq)))
+	counter := kernel.NewProc("QueryPerformanceCounter")
+	ok, _, _ := counter.Call(uintptr(unsafe.Pointer(&ticks)))
+	now := time.Now()
+	if f == 0 || ok == 0 || freq <= 0 {
+		return captureClock{}
+	}
+	return captureClock{now, ticks/freq*10000000 + (ticks%freq)*10000000/freq}
+}
+func (c captureClock) packetTime(qpc uint64, flags uint32, now time.Time) time.Time {
+	if c.at.IsZero() || qpc == 0 || flags&4 != 0 {
+		return now
+	}
+	stamp := c.at.Add(time.Duration(int64(qpc)-c.hns) * 100 * time.Nanosecond)
+	if stamp.After(now) {
+		return now
+	}
+	return stamp
 }

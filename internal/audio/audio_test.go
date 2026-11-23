@@ -119,3 +119,14 @@ func TestCaptureContinuityUsesDeviceFrames(t *testing.T) {
 		}
 	}
 }
+
+func TestCaptureClockPreservesPacketAge(t *testing.T) {
+	now := time.Now()
+	c := captureClock{at: now, hns: 2000000}
+	if got := c.packetTime(1500000, 0, now); now.Sub(got) != 50*time.Millisecond {
+		t.Fatal(got)
+	}
+	if got := c.packetTime(1500000, 4, now); got != now {
+		t.Fatal("invalid timestamp used")
+	}
+}

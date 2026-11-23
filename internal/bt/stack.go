@@ -713,13 +713,13 @@ func (s *stackT) resetMedia() {
 
 // SendMedia queues one RTP payload (codec frames; AAC/SSC raw, SBC with its
 // 1-byte header already prepended). Safe from any goroutine.
-func SendMedia(payload []byte, timestamp uint32) bool {
-	return SendMediaFrame(payload, timestamp, 0)
+func SendMedia(payload []byte, timestamp uint32, captured time.Time) bool {
+	return SendMediaFrame(payload, timestamp, 0, captured)
 }
 
 // SendMediaFrame enqueues a whole access unit, optionally fragmented to fit
 // the transport. Only the last fragment carries the RTP marker.
-func SendMediaFrame(payload []byte, timestamp uint32, fragmentSize int) bool {
+func SendMediaFrame(payload []byte, timestamp uint32, fragmentSize int, captured time.Time) bool {
 	s := stack
 	s.mqmu.Lock()
 	if !s.streaming.Load() {
@@ -728,7 +728,7 @@ func SendMediaFrame(payload []byte, timestamp uint32, fragmentSize int) bool {
 	}
 	now := time.Now()
 	s.discardStaleMedia(now.Add(-s.maxMediaAge()))
-	ok := s.enqueueMediaFrame(payload, timestamp, fragmentSize, now)
+	ok := !captured.Before(now.Add(-s.maxMediaAge())) && s.enqueueMediaFrame(payload, timestamp, fragmentSize, captured)
 	s.mqmu.Unlock()
 	if !ok {
 		s.sendFails.Add(1)

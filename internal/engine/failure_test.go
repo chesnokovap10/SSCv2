@@ -1,6 +1,8 @@
 package engine
 
 import (
+	"time"
+
 	"errors"
 	"sscv2/internal/ipc"
 	"testing"
@@ -22,8 +24,8 @@ func TestEncodingFailureStopsBothPacketModes(t *testing.T) {
 		enc := &failingEncoder{}
 		p.set(enc, 667, false)
 		p.perPacket = perPacket
-		p.onCapture(make([]float32, 80), 40, 2, 48000, false, nil)
-		p.onCapture(make([]float32, 80), 40, 2, 48000, false, nil)
+		p.onCapture(make([]float32, 80), 40, 2, 48000, false, nil, time.Now())
+		p.onCapture(make([]float32, 80), 40, 2, 48000, false, nil, time.Now())
 		if enc.calls != 1 || p.active.Load() {
 			t.Fatalf("perPacket=%v calls=%d active=%v", perPacket, enc.calls, p.active.Load())
 		}
@@ -44,7 +46,7 @@ func TestPeakIncludesMonoAndSurroundCapture(t *testing.T) {
 		p.set(captureGapEncoder{}, 667, false)
 		samples := make([]float32, ch)
 		samples[0] = 0.5
-		p.onCapture(samples, 1, ch, 48000, false, stereoMix(ch, 0))
+		p.onCapture(samples, 1, ch, 48000, false, stereoMix(ch, 0), time.Now())
 		if peak := p.takePeak(); peak != 0.5 {
 			t.Fatalf("channels=%d peak=%f", ch, peak)
 		}
