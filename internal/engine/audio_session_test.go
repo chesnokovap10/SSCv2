@@ -23,3 +23,15 @@ func TestReleaseSessionAudioClearsFailedSession(t *testing.T) {
 		t.Fatalf("capture still owned after cleanup: stop calls %d, status %+v", stopped, e.st)
 	}
 }
+
+func TestCaptureSourceChangeKeepsRTPSequenceAndEncoder(t *testing.T) {
+	var p pipeline
+	p.set(captureGapEncoder{}, 667, false)
+	p.ts = 81
+	p.pcm = []float32{1, 1}
+	prev := p.generation.Load()
+	p.resetCaptureSource()
+	if p.ts != 81 || p.enc == nil || !p.active.Load() || len(p.pcm) != 0 || p.generation.Load() == prev {
+		t.Fatal("incorrect capture handoff")
+	}
+}

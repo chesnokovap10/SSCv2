@@ -363,3 +363,10 @@ func (p *pipeline) takePeak() float32 {
 func (p *pipeline) sampleTime(offset, rate int) time.Time {
 	return p.pcmAt.Add(time.Second * time.Duration(offset/2) / time.Duration(rate))
 }
+
+func (p *pipeline) resetCaptureSource() {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.generation.Add(1)
+	p.pcm = p.pcm[:0]
+}

@@ -584,19 +584,18 @@ func (e *engine) session(addrStr string) (result error) {
 		case <-e.disc:
 			return errLinkLost
 		case err := <-e.cap.Errors():
-			if output, lookupErr := audio.DefaultRender(); lookupErr == nil && output.ID != e.cap.Device.ID {
-				return errSessionChanged
+			if err := e.followDefaultOutput(err); err != nil {
+				return err
 			}
-			return err
 		case err := <-e.pipe.errors:
 			return fmt.Errorf("%w: encode: %v", errStreamStart, err)
 		case <-changes:
-			if output, err := audio.DefaultRender(); err == nil && output.ID != e.cap.Device.ID {
-				return errSessionChanged
+			if err := e.followDefaultOutput(nil); err != nil {
+				return err
 			}
 		case <-outputCheck.C:
-			if output, err := audio.DefaultRender(); err == nil && output.ID != e.cap.Device.ID {
-				return errSessionChanged
+			if err := e.followDefaultOutput(nil); err != nil {
+				return err
 			}
 		case a := <-e.retarget:
 			e.target = a
@@ -885,8 +884,34 @@ func (e *engine) scan() {
 	_ = e.out.Write(ipc.Event{Ev: "scan", Devices: list})
 }
 
+func (e *engine) followDefaultOutput(captureErr error) error {
+	output, err := audio.DefaultRender()
+	if err != nil || output.ID == e.cap.Device.ID {
+		return captureErr
+	}
+	next, err := audio.OpenCapture(output.ID)
+	if err != nil {
+		return errSessionChanged
+	}
+	if next.Format.SampleRate != e.srate {
+		next.Close()
+		return errSessionChanged
+	}
+	// Keep the media session and encoder. startAudio transfers the mute owned
+	// by the old capture before taking ownership of the new default endpoint.
+	e.detachCapture()
+	e.pipe.resetCaptureSource()
+	bt.DiscardQueuedMedia()
+	e.cap = next
+	return e.startAudio()
+}
+
 func (e *engine) closeCapture() {
 	e.pipe.set(nil, 0, false)
+	e.detachCapture()
+}
+
+func (e *engine) detachCapture() {
 	if e.stopMuteGuard != nil {
 		e.stopMuteGuard()
 		e.stopMuteGuard = nil

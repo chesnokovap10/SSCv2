@@ -705,6 +705,8 @@ func Stats() (int, uint32, uint64) {
 	return q, s.sendFails.Swap(0), s.sentOK.Load()
 }
 
+func DiscardQueuedMedia() { stack.resetMedia() }
+
 func (s *stackT) resetMedia() {
 	s.mqmu.Lock()
 	s.mqHead, s.mqTail, s.mqCount = 0, 0, 0
