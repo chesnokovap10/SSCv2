@@ -11,6 +11,7 @@ import (
 	"golang.org/x/sys/windows"
 
 	"sscv2/internal/audio"
+	"sscv2/internal/config"
 	"sscv2/internal/ipc"
 )
 
@@ -63,9 +64,18 @@ func (r *renderPCM) stream(ctx context.Context, path string, stream ipc.NativeSt
 		if ready != nil {
 			onReady = func() error { return ready(kbps) }
 		}
-		err := sendPCM(link, r.out, stream.Mode, kbps, 0, "Buds WaveRT", true, func(pcm []float32) error {
-			return r.fill(ctx, pcm)
-		}, onReady)
+		var err error
+		if stream.Mode == config.ModeAAC {
+			var scratch []float32
+			err = sendAAC(link, r.out, kbps, 0, "Buds WaveRT", true, func(dst []int16, _ int) error {
+				if scratch == nil {
+					scratch = make([]float32, len(dst))
+				}
+				return r.fillBlock(ctx, scratch, dst)
+			}, onReady)
+		} else {
+			err = sendSSCLive(link, stream.Mode, kbps, func(pcm []float32) error { return r.fill(ctx, pcm) }, onReady)
+		}
 		if linkLost != nil && ctx.Err() == nil && link.lost {
 			linkLost(r.activity.PlayingOnLinkLoss())
 		}
@@ -91,6 +101,15 @@ func (m *renderMedia) Write(packet []byte) (int, error) {
 }
 
 func (r *renderPCM) fill(ctx context.Context, pcm []float32) error {
+	return r.fillBlock(ctx, pcm, nil)
+}
+
+func convertRenderS16(dst []int16, pcm []float32) {
+	for i := range dst {
+		dst[i] = int16(max(-1, min(1, pcm[i])) * 32767)
+	}
+}
+func (r *renderPCM) fillBlock(ctx context.Context, pcm []float32, raw []int16) error {
 	frameBytes := 2 * len(pcm)
 	if r.buffer == nil {
 		r.buffer = make([]byte, frameBytes+renderReserve)
@@ -144,6 +163,7 @@ func (r *renderPCM) fill(ctx context.Context, pcm []float32) error {
 	if r.queued == 0 {
 		r.primingSince = time.Time{}
 		r.silence(pcm)
+		convertRenderS16(raw, pcm)
 		return nil
 	}
 	if !r.playing && r.queued < frameBytes+r.reserveBytes {
@@ -156,6 +176,7 @@ func (r *renderPCM) fill(ctx context.Context, pcm []float32) error {
 		}
 		if waitForInput && now.Sub(r.primingSince) < renderPrimeTimeout {
 			r.silence(pcm)
+			convertRenderS16(raw, pcm)
 			return nil
 		}
 	}
@@ -166,6 +187,23 @@ func (r *renderPCM) fill(ctx context.Context, pcm []float32) error {
 	gain := float32(1)
 	if r.gain != nil {
 		gain = r.gain()
+	}
+	if raw != nil && gain == 1 && r.previousPCM && size == frameBytes {
+		offset := r.head
+		for i := range raw {
+			raw[i] = int16(binary.LittleEndian.Uint16(r.buffer[offset:]))
+			offset += 2
+			if offset == len(r.buffer) {
+				offset = 0
+			}
+		}
+		if r.activity != nil {
+			r.activity.ObserveS16(raw)
+		}
+		r.lastSample = [2]float32{float32(raw[len(raw)-2]) / 32768, float32(raw[len(raw)-1]) / 32768}
+		r.head = offset
+		r.queued -= size
+		return nil
 	}
 	samples := pcm[:size/2]
 	offset := r.head
@@ -204,6 +242,7 @@ func (r *renderPCM) fill(ctx context.Context, pcm []float32) error {
 	r.previousPCM = size == frameBytes
 	copy(r.lastSample[:], samples[len(samples)-2:])
 	clear(pcm[size/2:])
+	convertRenderS16(raw, pcm)
 	r.head = offset
 	r.queued -= size
 	return nil

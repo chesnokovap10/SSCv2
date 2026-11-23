@@ -26,3 +26,12 @@ func (a *Activity) LoudWithin(d time.Duration) bool {
 func (a *Activity) PlayingOnLinkLoss() bool {
 	return a.LoudWithin(2 * time.Second)
 }
+
+func (a *Activity) ObserveS16(samples []int16) {
+	for _, v := range samples {
+		if v > 98 || v < -98 {
+			a.lastLoud.Store(time.Now().UnixMilli())
+			return
+		}
+	}
+}

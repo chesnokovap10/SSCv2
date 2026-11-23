@@ -167,3 +167,20 @@ func TestLateRenderDropsOldestLocalPCM(t *testing.T) {
 		t.Fatal(r.head, r.queued, err)
 	}
 }
+
+func TestAACUnityPreservesS16(t *testing.T) {
+	raw := []int16{-32768, 32767, -1, 1}
+	r := renderPCM{playing: true, previousPCM: true, queued: 8, buffer: make([]byte, 8)}
+	for i, v := range raw {
+		binary.LittleEndian.PutUint16(r.buffer[2*i:], uint16(v))
+	}
+	dst := make([]int16, len(raw))
+	if err := r.fillBlock(context.Background(), make([]float32, len(raw)), dst); err != nil {
+		t.Fatal(err)
+	}
+	for i, v := range raw {
+		if dst[i] != v {
+			t.Fatal(i, dst[i], v)
+		}
+	}
+}
